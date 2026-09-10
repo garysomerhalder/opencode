@@ -43,6 +43,81 @@ export type FatalRendererError = {
   os?: string
 }
 
+export type LinearViewer = {
+  id: string
+  name: string
+  email: string
+}
+
+export type LinearIssueState = {
+  name: string
+  type: string
+}
+
+export type LinearIssueAssignee = {
+  id: string
+  name: string
+  email: string
+} | null
+
+export type LinearIssue = {
+  id: string
+  identifier: string
+  title: string
+  description: string | null
+  priority: number
+  estimate: number | null
+  state: LinearIssueState
+  labels: string[]
+  assignee: LinearIssueAssignee
+  team: { key: string }
+  updatedAt: string
+}
+
+export type LinearCommentUser = {
+  id: string
+  name: string
+  email: string
+} | null
+
+export type LinearComment = {
+  id: string
+  body: string
+  createdAt: string
+  user: LinearCommentUser
+}
+
+export type LinearIssueDetail = LinearIssue & {
+  comments: LinearComment[]
+}
+
+export type LinearAssignedArgs = {
+  teamKey?: string
+  first?: number
+}
+
+export type LinearTestResult = {
+  name: string
+  email: string
+}
+
+export type LinearTeam = {
+  id: string
+  key: string
+  name: string
+}
+
+export type LinearAPI = {
+  hasKey: () => Promise<boolean>
+  setKey: (key: string) => Promise<void>
+  clearKey: () => Promise<void>
+  test: () => Promise<LinearTestResult>
+  assigned: (args?: LinearAssignedArgs) => Promise<LinearIssue[]>
+  issue: (id: string) => Promise<LinearIssueDetail>
+  comment: (issueId: string, body: string) => Promise<{ id: string }>
+  teams: () => Promise<LinearTeam[]>
+}
+
 export type ElectronAPI = {
   killSidecar: () => Promise<void>
   installCli: () => Promise<string>
@@ -121,4 +196,5 @@ export type ElectronAPI = {
   setForceFocus: (enabled: boolean) => Promise<void>
   recordFatalRendererError: (error: FatalRendererError) => Promise<void>
   setNativeTranslations: (bundle: DesktopNativeBundle) => Promise<void>
+  linear: LinearAPI
 }

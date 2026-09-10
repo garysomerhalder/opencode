@@ -250,6 +250,29 @@ const createPlatform = (windowState: DesktopWindowState): Platform => {
       last: () => window.api.goalLoop.last(),
     },
 
+    linear: {
+      hasKey: () => window.api.linear.hasKey(),
+      setKey: (key) => window.api.linear.setKey(key),
+      clearKey: () => window.api.linear.clearKey(),
+      test: () => window.api.linear.test(),
+    },
+
+    linearTickets: {
+      assigned: (args) => window.api.linear.assigned(args),
+      issue: async (id) => {
+        const detail = await window.api.linear.issue(id)
+        return {
+          ...detail,
+          comments: detail.comments.map((comment) => ({
+            body: comment.body,
+            createdAt: comment.createdAt,
+            user: comment.user ? { name: comment.user.name } : undefined,
+          })),
+        }
+      },
+      teams: () => window.api.linear.teams(),
+    },
+
     setForceFocus: (enabled) => window.api.setForceFocus(enabled),
 
     recordFatalRendererError: (error) => window.api.recordFatalRendererError(error),

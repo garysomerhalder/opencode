@@ -339,6 +339,20 @@ function DesktopCommands() {
     })
   }
 
+  function openGoalTicket() {
+    if (!platform.goalLoop) return
+    void import("@/components/dialog-goal-ticket").then((x) => {
+      dialog.show(() => <x.DialogGoalTicket />)
+    })
+  }
+
+  function openGoalWizard() {
+    if (!platform.goalLoop) return
+    void import("@/components/dialog-goal-wizard").then((x) => {
+      dialog.show(() => <x.DialogGoalWizard />)
+    })
+  }
+
   function startGoalLoop() {
     const api = platform.goalLoop
     if (!api) return
@@ -387,6 +401,24 @@ function DesktopCommands() {
         slash: "goal-new",
         disabled: !platform.goalLoop,
         onSelect: () => openGoalLoop(),
+      },
+      {
+        id: "session.goalLoop.ticket",
+        title: language.t("command.session.goalLoop.ticket"),
+        description: language.t("command.session.goalLoop.ticket.description"),
+        category: language.t("command.category.session"),
+        slash: "goal-ticket",
+        disabled: !platform.goalLoop,
+        onSelect: () => openGoalTicket(),
+      },
+      {
+        id: "session.goalWizard",
+        title: language.t("command.session.goalWizard"),
+        description: language.t("command.session.goalWizard.description"),
+        category: language.t("command.category.session"),
+        slash: "goal-wizard",
+        disabled: !platform.goalLoop,
+        onSelect: () => openGoalWizard(),
       },
     ]
     if (platform.platform === "desktop" && platform.exportDebugLogs) {

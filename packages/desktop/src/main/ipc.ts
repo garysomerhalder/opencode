@@ -24,6 +24,7 @@ import {
 import type { UpdaterController } from "./updater-controller"
 import { createUpdaterSubscriptions } from "./updater-subscriptions"
 import { createDesktopDraftStore } from "./draft-store"
+import { clearLinearApiKey, createLinearClient, getLinearApiKey, setLinearApiKey } from "./linear"
 import { nativeT } from "./native-translations"
 
 const pickerFilters = (ext?: string[]) => {
@@ -121,6 +122,65 @@ export function registerIpcHandlers(deps: Deps) {
   ipcMain.handle("goal-loop-stop", () => deps.goalLoop.stop())
   ipcMain.handle("goal-loop-status", () => deps.goalLoop.status())
   ipcMain.handle("goal-loop-last", () => deps.getGoalLoopLast())
+  ipcMain.handle("linear-has-key", async () => (await getLinearApiKey()) !== null)
+  ipcMain.handle("linear-set-key", async (_event: IpcMainInvokeEvent, key: unknown) => {
+    if (typeof key !== "string" || key.trim().length === 0) throw new Error("linear-invalid-key")
+    await setLinearApiKey(key)
+  })
+  ipcMain.handle("linear-clear-key", () => clearLinearApiKey())
+  ipcMain.handle("linear-test", async () => {
+    const key = await getLinearApiKey()
+    if (!key) throw new Error("linear-not-configured")
+    try {
+      const viewer = await createLinearClient({ getKey: getLinearApiKey }).viewer()
+      return { name: viewer.name, email: viewer.email }
+    } catch (error) {
+      if (error instanceof Error && error.message === "linear-not-configured") throw error
+      const detail = error instanceof Error ? error.message : String(error)
+      throw new Error(`Linear authentication failed: ${detail.slice(0, 300)}`)
+    }
+  })
+  ipcMain.handle(
+    "linear-assigned",
+    async (_event: IpcMainInvokeEvent, args?: { teamKey?: unknown; first?: unknown }) => {
+      const key = await getLinearApiKey()
+      if (!key) throw new Error("linear-not-configured")
+      const teamKey =
+        typeof args?.teamKey === "string" && args.teamKey.trim().length > 0 ? args.teamKey.trim() : undefined
+      const first =
+        typeof args?.first === "number" && Number.isFinite(args.first) && args.first > 0
+          ? Math.floor(args.first)
+          : undefined
+      return createLinearClient({ getKey: getLinearApiKey }).assignedIssues({ teamKey, first })
+    },
+  )
+  ipcMain.handle("linear-issue", async (_event: IpcMainInvokeEvent, args?: { id?: unknown }) => {
+    const key = await getLinearApiKey()
+    if (!key) throw new Error("linear-not-configured")
+    if (!args || typeof args.id !== "string" || args.id.trim().length === 0) {
+      throw new Error("linear-invalid-issue-id")
+    }
+    return createLinearClient({ getKey: getLinearApiKey }).issue(args.id)
+  })
+  ipcMain.handle("linear-teams", async () => {
+    const key = await getLinearApiKey()
+    if (!key) throw new Error("linear-not-configured")
+    return createLinearClient({ getKey: getLinearApiKey }).teams()
+  })
+  ipcMain.handle(
+    "linear-comment",
+    async (_event: IpcMainInvokeEvent, args?: { issueId?: unknown; body?: unknown }) => {
+      const key = await getLinearApiKey()
+      if (!key) throw new Error("linear-not-configured")
+      if (!args || typeof args.issueId !== "string" || args.issueId.trim().length === 0) {
+        throw new Error("linear-invalid-issue-id")
+      }
+      if (typeof args.body !== "string" || args.body.trim().length === 0) {
+        throw new Error("linear-invalid-comment-body")
+      }
+      return createLinearClient({ getKey: getLinearApiKey }).comment(args.issueId, args.body)
+    },
+  )
   ipcMain.handle("store-get", (_event: IpcMainInvokeEvent, name: string, key: string) => {
     try {
       const store = getStore(name)

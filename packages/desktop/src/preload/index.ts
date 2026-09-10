@@ -145,6 +145,16 @@ const api: ElectronAPI = {
   setForceFocus: (enabled) => ipcRenderer.invoke("set-force-focus", enabled),
   recordFatalRendererError: (error) => ipcRenderer.invoke("record-fatal-renderer-error", error),
   setNativeTranslations: (bundle) => ipcRenderer.invoke("set-native-translations", bundle),
+  linear: {
+    hasKey: () => ipcRenderer.invoke("linear-has-key"),
+    setKey: (key) => ipcRenderer.invoke("linear-set-key", key),
+    clearKey: () => ipcRenderer.invoke("linear-clear-key"),
+    test: () => ipcRenderer.invoke("linear-test"),
+    assigned: (args) => ipcRenderer.invoke("linear-assigned", args),
+    issue: (id) => ipcRenderer.invoke("linear-issue", { id }),
+    comment: (issueId, body) => ipcRenderer.invoke("linear-comment", { issueId, body }),
+    teams: () => ipcRenderer.invoke("linear-teams"),
+  },
 }
 
 contextBridge.exposeInMainWorld("api", api)
