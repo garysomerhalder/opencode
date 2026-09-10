@@ -7,6 +7,7 @@ import type { DesktopMenuAction } from "@opencode-ai/app/desktop-menu"
 import { parseDesktopNativeBundle, type DesktopNativeBundle } from "@opencode-ai/app/i18n/desktop-native"
 
 import type { FatalRendererError, ServerReadyData, TitlebarTheme } from "../preload/types"
+import type { GoalLoop, GoalLoopStartInput } from "./goal-loop"
 import { runDesktopMenuAction } from "./desktop-menu-actions"
 import { setForceFocus } from "./debug"
 import { assertAttachmentBudget, createPickedFileAuthorizations } from "./attachment-picker"
@@ -49,6 +50,8 @@ type Deps = {
   updater: UpdaterController
   showUpdater: () => Promise<void> | void
   setBackgroundColor: (color: string) => void
+  goalLoop: GoalLoop
+  getGoalLoopLast: () => GoalLoopStartInput | null
   exportDebugLogs: () => Promise<string>
   recordFatalRendererError: (error: FatalRendererError) => Promise<void> | void
   setNativeTranslations: (bundle: DesktopNativeBundle) => void
@@ -111,6 +114,13 @@ export function registerIpcHandlers(deps: Deps) {
     if (!bundle) throw new Error("Invalid native translation bundle")
     deps.setNativeTranslations(bundle)
   })
+  ipcMain.handle("goal-loop-start", (_event: IpcMainInvokeEvent, input: GoalLoopStartInput) => {
+    if (!input || typeof input !== "object") throw new Error("Invalid goal loop input")
+    return deps.goalLoop.start(input)
+  })
+  ipcMain.handle("goal-loop-stop", () => deps.goalLoop.stop())
+  ipcMain.handle("goal-loop-status", () => deps.goalLoop.status())
+  ipcMain.handle("goal-loop-last", () => deps.getGoalLoopLast())
   ipcMain.handle("store-get", (_event: IpcMainInvokeEvent, name: string, key: string) => {
     try {
       const store = getStore(name)
@@ -151,12 +161,14 @@ export function registerIpcHandlers(deps: Deps) {
 
   ipcMain.handle(
     "open-directory-picker",
-    async (_event: IpcMainInvokeEvent, opts?: { multiple?: boolean; title?: string; defaultPath?: string }) => {
-      const result = await dialog.showOpenDialog({
+    async (event: IpcMainInvokeEvent, opts?: { multiple?: boolean; title?: string; defaultPath?: string }) => {
+      const picker: Electron.OpenDialogOptions = {
         properties: ["openDirectory", ...(opts?.multiple ? ["multiSelections" as const] : []), "createDirectory"],
         title: opts?.title ?? nativeT("desktop.dialog.chooseFolder"),
         defaultPath: opts?.defaultPath,
-      })
+      }
+      const win = BrowserWindow.fromWebContents(event.sender)
+      const result = win ? await dialog.showOpenDialog(win, picker) : await dialog.showOpenDialog(picker)
       if (result.canceled) return null
       return opts?.multiple ? result.filePaths : result.filePaths[0]
     },
@@ -168,12 +180,14 @@ export function registerIpcHandlers(deps: Deps) {
       event: IpcMainInvokeEvent,
       opts?: { multiple?: boolean; title?: string; defaultPath?: string; extensions?: string[] },
     ) => {
-      const result = await dialog.showOpenDialog({
+      const picker: Electron.OpenDialogOptions = {
         properties: ["openFile", ...(opts?.multiple ? ["multiSelections" as const] : [])],
         title: opts?.title ?? nativeT("desktop.dialog.chooseFile"),
         defaultPath: opts?.defaultPath,
         filters: pickerFilters(opts?.extensions),
-      })
+      }
+      const win = BrowserWindow.fromWebContents(event.sender)
+      const result = win ? await dialog.showOpenDialog(win, picker) : await dialog.showOpenDialog(picker)
       if (result.canceled) return null
       const files = await Promise.all(
         result.filePaths.map(async (filePath) => ({
@@ -198,11 +212,13 @@ export function registerIpcHandlers(deps: Deps) {
 
   ipcMain.handle(
     "save-file-picker",
-    async (_event: IpcMainInvokeEvent, opts?: { title?: string; defaultPath?: string }) => {
-      const result = await dialog.showSaveDialog({
+    async (event: IpcMainInvokeEvent, opts?: { title?: string; defaultPath?: string }) => {
+      const picker = {
         title: opts?.title ?? nativeT("desktop.dialog.saveFile"),
         defaultPath: opts?.defaultPath,
-      })
+      }
+      const win = BrowserWindow.fromWebContents(event.sender)
+      const result = win ? await dialog.showSaveDialog(win, picker) : await dialog.showSaveDialog(picker)
       if (result.canceled) return null
       return result.filePath ?? null
     },
@@ -301,6 +317,13 @@ export function registerIpcHandlers(deps: Deps) {
 
 export function sendMenuCommand(win: BrowserWindow, id: string) {
   win.webContents.send("menu-command", id)
+}
+
+export function sendToAllWindows(channel: string, payload: unknown) {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed()) continue
+    win.webContents.send(channel, payload)
+  }
 }
 
 export function sendDeepLinks(win: BrowserWindow, urls: string[]) {

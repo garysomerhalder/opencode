@@ -14,7 +14,7 @@ import contextMenu from "electron-context-menu"
 import type { ServerReadyData } from "../preload/types"
 import { checkAppExists, resolveAppPath } from "./apps"
 import { CHANNEL } from "./constants"
-import { registerIpcHandlers, sendDeepLinks, sendMenuCommand } from "./ipc"
+import { registerIpcHandlers, sendDeepLinks, sendMenuCommand, sendToAllWindows } from "./ipc"
 import { forwardInitializationFailure } from "./initialization"
 import { exportDebugLogs, initCrashReporter, initLogging, startNetLog, write as writeLog } from "./logging"
 import { createMenu } from "./menu"
@@ -43,6 +43,9 @@ import {
   restoreMainWindows,
 } from "./windows"
 import { createWslServersController } from "./wsl/servers"
+import { createGoalLoop, type GoalLoopStartInput, type GoalLoopState } from "./goal-loop"
+import { getStore } from "./store"
+import { GOAL_LOOP_LAST_KEY, GOAL_LOOP_STATE_KEY, GOAL_LOOP_STORE } from "./store-keys"
 import { registerWslIpcHandlers } from "./wsl/ipc"
 import { spawnWslSidecar } from "./wsl/sidecar"
 import { migrate } from "./migrate"
@@ -90,6 +93,24 @@ async function killSidecar() {
   const current = server
   server = null
   await current.stop()
+}
+
+function readGoalLoopRecord(store: { get: (key: string) => unknown }): GoalLoopState | null {
+  const record = store.get(GOAL_LOOP_STATE_KEY) as Partial<GoalLoopState> | null | undefined
+  if (!record || typeof record !== "object") return null
+  if (record.status !== "running" || typeof record.id !== "string") return null
+  return record as GoalLoopState
+}
+
+function readGoalLoopLast(store: { get: (key: string) => unknown }): GoalLoopStartInput | null {
+  const value = store.get(GOAL_LOOP_LAST_KEY) as unknown
+  if (!value || typeof value !== "object") return null
+  const record = value as Record<string, unknown>
+  const directory = record["directory"]
+  if (typeof directory !== "string" || directory.trim().length === 0) return null
+  const goal = record["goal"]
+  if (typeof goal !== "string" || goal.trim().length === 0) return null
+  return value as GoalLoopStartInput
 }
 
 function ensureLoopbackNoProxy() {
@@ -280,9 +301,32 @@ const main = Effect.gen(function* () {
     checkForUpdates: () => void showUpdaterDialog(updater, true),
     relaunch,
   }
+  const goalLoopStore = getStore(GOAL_LOOP_STORE)
+  const goalLoop = createGoalLoop({
+    getServer: () => Effect.runPromise(Deferred.await(serverReady)),
+    persist: (state) => {
+      if (!state) {
+        goalLoopStore.delete(GOAL_LOOP_STATE_KEY)
+        return
+      }
+      goalLoopStore.set(GOAL_LOOP_STATE_KEY, state as unknown as Record<string, unknown>)
+    },
+    persistLast: (input) => {
+      goalLoopStore.set(GOAL_LOOP_LAST_KEY, input as unknown as Record<string, unknown>)
+    },
+    onEvent: (event) => {
+      sendToAllWindows("goal-loop-event", event)
+      if (event.type !== "started" && event.type !== "iteration") {
+        logger.log("goal loop ended", { type: event.type, loopID: event.loopID, reason: event.state.reason })
+      }
+    },
+  })
+  goalLoop.adoptOrphan(readGoalLoopRecord(goalLoopStore))
   registerIpcHandlers({
     killSidecar: () => killSidecar(),
     relaunch,
+    goalLoop,
+    getGoalLoopLast: () => readGoalLoopLast(goalLoopStore),
     awaitInitialization: Effect.fnUntraced(
       function* () {
         logger.log("awaiting server ready")

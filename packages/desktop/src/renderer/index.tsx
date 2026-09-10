@@ -242,6 +242,14 @@ const createPlatform = (windowState: DesktopWindowState): Platform => {
 
     exportDebugLogs: () => window.api.exportDebugLogs(),
 
+    goalLoop: {
+      start: (input) => window.api.goalLoop.start(input),
+      stop: () => window.api.goalLoop.stop(),
+      status: () => window.api.goalLoop.status(),
+      subscribe: (cb) => window.api.goalLoop.onEvent(cb),
+      last: () => window.api.goalLoop.last(),
+    },
+
     setForceFocus: (enabled) => window.api.setForceFocus(enabled),
 
     recordFatalRendererError: (error) => window.api.recordFatalRendererError(error),

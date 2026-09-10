@@ -108,6 +108,16 @@ export const DESKTOP_MENU: DesktopMenu[] = [
       },
       {
         type: "item",
+        labelKey: "desktop.menu.startGoalLoop",
+        command: "session.goalLoop",
+      },
+      {
+        type: "item",
+        labelKey: "desktop.menu.newGoalLoop",
+        command: "session.goalLoop.new",
+      },
+      {
+        type: "item",
         labelKey: "desktop.menu.openProject",
         command: "project.open",
         accelerator: { macos: "Cmd+O" },

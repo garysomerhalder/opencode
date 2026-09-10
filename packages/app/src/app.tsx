@@ -39,6 +39,9 @@ import {
 import { Dynamic } from "solid-js/web"
 import { makeEventListener } from "@solid-primitives/event-listener"
 import { CommandProvider, useCommand, type CommandOption } from "@/context/command"
+import { showToast } from "@/utils/toast"
+import { useDialog } from "@opencode-ai/ui/context/dialog"
+import { useGoalLoopNotifications } from "@/goal-loop/notify"
 import { CommentsProvider } from "@/context/comments"
 import { FileProvider } from "@/context/file"
 import { ServerSDKProvider } from "@/context/server-sdk"
@@ -324,11 +327,68 @@ function SharedProviders(props: ParentProps) {
 
 function DesktopCommands() {
   const command = useCommand()
+  const dialog = useDialog()
   const language = useLanguage()
   const platform = usePlatform()
+  useGoalLoopNotifications()
+
+  function openGoalLoop() {
+    if (!platform.goalLoop) return
+    void import("@/components/dialog-goal-loop").then((x) => {
+      dialog.show(() => <x.DialogGoalLoop />)
+    })
+  }
+
+  function startGoalLoop() {
+    const api = platform.goalLoop
+    if (!api) return
+    void (async () => {
+      try {
+        const last = await api.last?.()
+        if (last && last.goal.trim().length > 0 && last.directory.trim().length > 0) {
+          await api.start(last)
+          showToast({ title: language.t("toast.goalLoop.started.title") })
+          return
+        }
+      } catch (err) {
+        // A running loop rejects the start. Show it instead of an error: the
+        // dialog displays the live loop with Open session + Stop controls.
+        if (err instanceof Error && err.message.includes("already running")) {
+          openGoalLoop()
+          return
+        }
+        showToast({
+          variant: "error",
+          title: language.t("common.requestFailed"),
+          description: err instanceof Error ? err.message : String(err),
+        })
+        return
+      }
+      openGoalLoop()
+    })()
+  }
 
   command.register("desktop", () => {
-    const commands: CommandOption[] = []
+    const commands: CommandOption[] = [
+      {
+        id: "session.goalLoop",
+        title: language.t("command.session.goalLoop"),
+        description: language.t("command.session.goalLoop.description"),
+        category: language.t("command.category.session"),
+        slash: "goal",
+        disabled: !platform.goalLoop,
+        onSelect: () => startGoalLoop(),
+      },
+      {
+        id: "session.goalLoop.new",
+        title: language.t("command.session.goalLoop.new"),
+        description: language.t("command.session.goalLoop.new.description"),
+        category: language.t("command.category.session"),
+        slash: "goal-new",
+        disabled: !platform.goalLoop,
+        onSelect: () => openGoalLoop(),
+      },
+    ]
     if (platform.platform === "desktop" && platform.exportDebugLogs) {
       commands.push({
         id: "logs.export",

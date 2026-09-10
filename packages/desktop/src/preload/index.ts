@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron"
 import type { ElectronAPI, WslServersEvent } from "./types"
+import type { GoalLoopEvent, GoalLoopStartInput } from "@opencode-ai/app/goal-loop/types"
 import type { UpdaterState } from "@opencode-ai/app/updater"
 
 const updaterCallbacks = new Set<(state: UpdaterState) => void>()
@@ -128,6 +129,17 @@ const api: ElectronAPI = {
   },
   setTitlebar: (theme) => ipcRenderer.invoke("set-titlebar", theme),
   runDesktopMenuAction: (action) => ipcRenderer.invoke("run-desktop-menu-action", action),
+  goalLoop: {
+    start: (input) => ipcRenderer.invoke("goal-loop-start", input),
+    stop: () => ipcRenderer.invoke("goal-loop-stop"),
+    status: () => ipcRenderer.invoke("goal-loop-status"),
+    last: (): Promise<GoalLoopStartInput | null> => ipcRenderer.invoke("goal-loop-last"),
+    onEvent: (cb) => {
+      const handler = (_: unknown, event: GoalLoopEvent) => cb(event)
+      ipcRenderer.on("goal-loop-event", handler)
+      return () => ipcRenderer.removeListener("goal-loop-event", handler)
+    },
+  },
   setBackgroundColor: (color: string) => ipcRenderer.invoke("set-background-color", color),
   exportDebugLogs: () => ipcRenderer.invoke("export-debug-logs"),
   setForceFocus: (enabled) => ipcRenderer.invoke("set-force-focus", enabled),

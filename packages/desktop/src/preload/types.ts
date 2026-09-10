@@ -1,4 +1,5 @@
 import type { DesktopMenuAction } from "@opencode-ai/app/desktop-menu"
+import type { GoalLoopEvent, GoalLoopStartInput, GoalLoopState } from "@opencode-ai/app/goal-loop/types"
 import type { WslServersPlatform } from "@opencode-ai/app/wsl/types"
 import type { UpdaterState } from "@opencode-ai/app/updater"
 import type { DesktopNativeBundle } from "@opencode-ai/app/i18n/desktop-native"
@@ -108,6 +109,13 @@ export type ElectronAPI = {
   onZoomFactorChanged: (cb: (factor: number) => void) => () => void
   setTitlebar: (theme: TitlebarTheme) => Promise<void>
   runDesktopMenuAction: (action: DesktopMenuAction) => Promise<void>
+  goalLoop: {
+    start: (input: GoalLoopStartInput) => Promise<GoalLoopState>
+    stop: () => Promise<GoalLoopState | null>
+    status: () => Promise<GoalLoopState | null>
+    last: () => Promise<GoalLoopStartInput | null>
+    onEvent: (cb: (event: GoalLoopEvent) => void) => () => void
+  }
   setBackgroundColor: (color: string) => Promise<void>
   exportDebugLogs: () => Promise<string>
   setForceFocus: (enabled: boolean) => Promise<void>
