@@ -14,6 +14,7 @@ const desktop = [
   "Újraindítás",
   "Naplók exportálása...",
   "Új munkamenet",
+  "Start Goal Loop...",
   "Projekt megnyitása...",
   "Új ablak",
   "Ablak bezárása",
@@ -91,6 +92,8 @@ const desktop = [
   "A port lekérése sikertelen",
   "A fájl nem lett kiválasztva a választóban",
   "A kiválasztott mellékletek meghaladják a(z) {{limit}} MB-os korlátot",
+  "New Goal Loop...",
+
 ]
 
 export const dict = {
@@ -184,6 +187,30 @@ export const dict = {
   "command.session.unshare.description": "Állítsa le a munkamenet megosztását",
   "command.session.export": "Exportálási munkamenet",
   "command.session.export.description": "Exportálja a teljes munkamenet-átiratot JSON formátumban",
+  "command.session.goalLoop": "Start goal loop",
+  "command.session.goalLoop.description": "Work toward a goal until it is done or the step limit is reached",
+  "command.session.goalLoop.new": "New goal loop",
+  "command.session.goalLoop.new.description": "Set a new goal and directory, then start working toward it",
+
+  "dialog.goalLoop.title": "Start goal loop",
+  "dialog.goalLoop.goal.label": "Goal",
+  "dialog.goalLoop.goal.placeholder": "Describe what done looks like...",
+  "dialog.goalLoop.directory.label": "Directory",
+  "dialog.goalLoop.directory.placeholder": "/path/to/project",
+  "dialog.goalLoop.action.start": "Start",
+  "dialog.goalLoop.action.stop": "Stop loop",
+  "dialog.goalLoop.action.openSession": "Open session",
+  "dialog.goalLoop.action.browse": "Browse...",
+  "dialog.goalLoop.running": "Step {{current}} of {{max}} in {{directory}}",
+  "dialog.goalLoop.running.unbounded": "Step {{current}} \u2014 working in {{directory}}...",
+
+  "toast.goalLoop.started.title": "Goal loop started",
+  "toast.goalLoop.completed.title": "Goal loop complete",
+  "toast.goalLoop.completed.description": "Goal reached in {{count}} steps.",
+  "toast.goalLoop.capped.title": "Goal loop stopped",
+  "toast.goalLoop.capped.description": "Step limit ({{count}}) reached without finishing.",
+  "toast.goalLoop.failed.title": "Goal loop failed",
+  "toast.goalLoop.stopped.title": "Goal loop stopped",
   "palette.search.placeholder": "Fájlok, parancsok és munkamenetek keresése",
   "palette.search.placeholder.home": "Parancsok és munkamenetek keresése",
   "palette.empty": "Nincs találat",
