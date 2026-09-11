@@ -1,5 +1,6 @@
 import { createEffect, createSignal, onCleanup, onMount, Show, type Component } from "solid-js"
 import { useNavigate } from "@solidjs/router"
+import { Icon } from "@opencode-ai/ui/icon"
 import { useCommand } from "@/context/command"
 import { useLanguage } from "@/context/language"
 import { usePlatform } from "@/context/platform"
@@ -124,8 +125,14 @@ export const SidebarGoalLoop: Component = () => {
   if (!platform.goalLoop) return null
 
   return (
-    <div data-component="sidebar-goal-loop" class="flex shrink-0 flex-col gap-1 px-1 py-2">
-      <div class="px-2 text-12-medium text-text-weak">{language.t("dialog.goalLoop.queue.header")}</div>
+    <div
+      data-component="sidebar-goal-loop"
+      class="flex w-full min-w-0 shrink-0 flex-col gap-1 overflow-hidden border-b border-border-weaker-base px-1 py-1.5"
+    >
+      <div class="flex min-w-0 items-center gap-1.5 px-2 text-12-medium text-text-weak">
+        <Icon name="status" size="small" class="shrink-0 text-icon-weak" />
+        <span class="min-w-0 flex-1 truncate">{language.t("dialog.goalLoop.queue.header")}</span>
+      </div>
       <Show
         when={active()}
         fallback={
@@ -133,38 +140,38 @@ export const SidebarGoalLoop: Component = () => {
             when={lastView()}
             fallback={
               <>
-                <p class="px-2 text-12-regular text-text-weak">
+                <p class="min-w-0 truncate px-2 text-12-regular text-text-weak">
                   {language.t("command.session.goalWizard.description")}
                 </p>
                 <button
                   type="button"
                   data-action="goal-loop-open-wizard"
                   onClick={openWizard}
-                  class="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-12-medium text-text-strong hover:bg-surface-raised-base-hover"
+                  class="flex w-full min-w-0 items-center gap-1.5 rounded-md px-2 py-1 text-left text-12-medium text-text-strong hover:bg-surface-raised-base-hover"
                 >
-                  {language.t("dialog.goalWizard.title")}
+                  <span class="min-w-0 flex-1 truncate">{language.t("dialog.goalWizard.title")}</span>
                 </button>
               </>
             }
           >
             {(view) => (
               <>
-                <p class="truncate px-2 text-14-regular text-text-weak">
+                <p class="min-w-0 truncate px-2 text-14-regular text-text-weak">
                   <Show when={view().strong} fallback={view().rest}>
                     <strong class="text-text-strong">{view().strong}</strong>
                     <Show when={view().rest}> {view().rest}</Show>
                   </Show>
                 </p>
                 <Show when={view().detail}>
-                  <p class="truncate px-2 text-12-regular text-text-weak">{view().detail}</p>
+                  <p class="min-w-0 truncate px-2 text-12-regular text-text-weak">{view().detail}</p>
                 </Show>
                 <button
                   type="button"
                   data-action="goal-loop-start"
                   onClick={start}
-                  class="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-12-medium text-text-strong hover:bg-surface-raised-base-hover"
+                  class="flex w-full min-w-0 items-center gap-1.5 rounded-md px-2 py-1 text-left text-12-medium text-text-strong hover:bg-surface-raised-base-hover"
                 >
-                  {language.t("dialog.goalLoop.action.start")}
+                  <span class="min-w-0 flex-1 truncate">{language.t("dialog.goalLoop.action.start")}</span>
                 </button>
               </>
             )}
@@ -177,30 +184,31 @@ export const SidebarGoalLoop: Component = () => {
               type="button"
               data-action="goal-loop-open-session"
               onClick={open}
-              class="flex w-full min-w-0 items-baseline gap-1.5 rounded-md px-2 py-1 text-left hover:bg-surface-raised-base-hover"
+              class="flex w-full min-w-0 items-center gap-1.5 rounded-md px-2 py-1 text-left hover:bg-surface-raised-base-hover"
             >
               <strong class="shrink-0 text-14-medium text-text-strong">{item().identifier}</strong>
               <span class="min-w-0 flex-1 truncate text-14-regular text-text-weak">{item().title}</span>
+              <Icon name="chevron-right" size="small" class="shrink-0 text-icon-weak" />
             </button>
           )}
         </Show>
         <Show when={position()}>
           {(pos) => (
-            <p class="px-2 text-12-regular text-text-weak">
+            <p class="min-w-0 truncate px-2 text-12-regular text-text-weak">
               {language.t("dialog.goalLoop.queue.position", { current: pos().current, total: pos().total })}
             </p>
           )}
         </Show>
         <Show when={nextIdentifier()}>
           {(next) => (
-            <p class="truncate px-2 text-12-regular text-text-weak">
+            <p class="min-w-0 truncate px-2 text-12-regular text-text-weak">
               {language.t("dialog.goalLoop.queue.next", { identifier: next() })}
             </p>
           )}
         </Show>
         <Show when={loop()}>
           {(running) => (
-            <p class="truncate px-2 text-12-regular text-text-weak">
+            <p class="min-w-0 truncate px-2 text-12-regular text-text-weak">
               <Show
                 when={running().maxIterations !== null}
                 fallback={language.t("dialog.goalLoop.running.unbounded", {
