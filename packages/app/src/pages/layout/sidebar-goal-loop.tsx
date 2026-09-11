@@ -7,6 +7,7 @@ import { usePlatform } from "@/context/platform"
 import { useTabs } from "@/context/tabs"
 import { describeLastInput } from "@/goal-loop/last-input"
 import { openLoopSession } from "@/goal-loop/open-session"
+import { showToast } from "@/utils/toast"
 import { get as getQueueStatus, subscribe as subscribeQueueStatus } from "@/goal-loop/queue-status"
 import type { QueueStatusSnapshot } from "@/goal-loop/queue-status"
 import type { GoalLoopStartInput, GoalLoopState } from "@/goal-loop/types"
@@ -114,6 +115,20 @@ export const SidebarGoalLoop: Component = () => {
     command.trigger("session.goalLoop")
   }
 
+  const stop = async () => {
+    const api = platform.goalLoop
+    if (!api) return
+    try {
+      await api.stop()
+    } catch (err) {
+      showToast({
+        variant: "error",
+        title: language.t("common.requestFailed"),
+        description: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
   // The wizard dialog is opened through its command (which dynamic-imports
   // the dialog like the other openers), so this file imports nothing from it.
   const openWizard = () => {
@@ -180,16 +195,28 @@ export const SidebarGoalLoop: Component = () => {
       >
         <Show when={ticket()}>
           {(item) => (
-            <button
-              type="button"
-              data-action="goal-loop-open-session"
-              onClick={open}
-              class="flex w-full min-w-0 items-center gap-1.5 rounded-md px-2 py-1 text-left hover:bg-surface-raised-base-hover"
-            >
-              <strong class="shrink-0 text-14-medium text-text-strong">{item().identifier}</strong>
-              <span class="min-w-0 flex-1 truncate text-14-regular text-text-weak">{item().title}</span>
-              <Icon name="chevron-right" size="small" class="shrink-0 text-icon-weak" />
-            </button>
+            <div class="flex min-w-0 items-center gap-1">
+              <button
+                type="button"
+                data-action="goal-loop-open-session"
+                onClick={open}
+                class="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1 text-left hover:bg-surface-raised-base-hover"
+              >
+                <strong class="shrink-0 text-14-medium text-text-strong">{item().identifier}</strong>
+                <span class="min-w-0 flex-1 truncate text-14-regular text-text-weak">{item().title}</span>
+                <Icon name="chevron-right" size="small" class="shrink-0 text-icon-weak" />
+              </button>
+              <Show when={loop()}>
+                <button
+                  type="button"
+                  data-action="goal-loop-stop"
+                  onClick={stop}
+                  class="shrink-0 rounded-md px-2 py-1 text-12-medium text-text-weak hover:bg-surface-raised-base-hover hover:text-text-strong"
+                >
+                  {language.t("prompt.action.stop")}
+                </button>
+              </Show>
+            </div>
           )}
         </Show>
         <Show when={position()}>
