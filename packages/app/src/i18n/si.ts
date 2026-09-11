@@ -237,6 +237,7 @@ export const dict: Record<string, string> = {
   "dialog.goalLoop.action.browse": "Browse...",
   "dialog.goalLoop.running": "Step {{current}} of {{max}} in {{directory}}",
   "dialog.goalLoop.running.unbounded": "Step {{current}} \u2014 working in {{directory}}...",
+  "dialog.goalLoop.queue.position": "Ticket {{current}} of {{total}}",
 
   "toast.goalLoop.started.title": "Goal loop started",
   "toast.goalLoop.completed.title": "Goal loop complete",
