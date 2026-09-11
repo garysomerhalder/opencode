@@ -3,6 +3,7 @@ import type { GoalLoopEvent, GoalLoopStartInput, GoalLoopState } from "@opencode
 import type { WslServersPlatform } from "@opencode-ai/app/wsl/types"
 import type { UpdaterState } from "@opencode-ai/app/updater"
 import type { DesktopNativeBundle } from "@opencode-ai/app/i18n/desktop-native"
+export type { GoalLoopEvent, GoalLoopStartInput, GoalLoopState, GoalTicket } from "@opencode-ai/app/goal-loop/types"
 export type {
   WslDistroProbe,
   WslInstalledDistro,

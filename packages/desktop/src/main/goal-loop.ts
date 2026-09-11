@@ -4,9 +4,10 @@ import type {
   GoalLoopStartInput,
   GoalLoopState,
   GoalLoopStatus,
+  GoalTicket,
 } from "@opencode-ai/app/goal-loop/types"
 
-export type { GoalLoopEvent, GoalLoopModel, GoalLoopStartInput, GoalLoopState, GoalLoopStatus }
+export type { GoalLoopEvent, GoalLoopModel, GoalLoopStartInput, GoalLoopState, GoalLoopStatus, GoalTicket }
 
 export type GoalLoopServer = {
   url: string
@@ -287,6 +288,15 @@ export function createGoalLoop(deps: GoalLoopDeps) {
       throw new Error("maxIterations must be a positive integer")
     }
     const marker = (input.completionMarker ?? DEFAULT_COMPLETION_MARKER).trim() || DEFAULT_COMPLETION_MARKER
+    const ticket: GoalTicket | null = input.ticket ?? null
+    if (ticket !== null) {
+      if (typeof ticket.identifier !== "string" || ticket.identifier.trim().length === 0) {
+        throw new Error("ticket must have identifier and title")
+      }
+      if (typeof ticket.title !== "string" || ticket.title.trim().length === 0) {
+        throw new Error("ticket must have identifier and title")
+      }
+    }
     stopped = false
     directory = input.directory
     const server = await deps.getServer()
@@ -296,6 +306,7 @@ export function createGoalLoop(deps: GoalLoopDeps) {
       status: "running",
       directory: input.directory,
       goal,
+      ticket,
       sessionID,
       serverURL: server.url,
       iteration: 1,

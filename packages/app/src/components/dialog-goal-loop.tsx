@@ -9,6 +9,8 @@ import { useLanguage } from "@/context/language"
 import { usePlatform } from "@/context/platform"
 import { ServerConnection } from "@/context/server"
 import { tabHref, useTabs } from "@/context/tabs"
+import { get as getQueueStatus, subscribe as subscribeQueueStatus } from "@/goal-loop/queue-status"
+import type { QueueStatusSnapshot } from "@/goal-loop/queue-status"
 import { showToast } from "@/utils/toast"
 import type { GoalLoopStartInput, GoalLoopState } from "@/goal-loop/types"
 
@@ -36,6 +38,7 @@ export const DialogGoalLoop: Component = () => {
   const [directory, setDirectory] = createSignal("")
   const [busy, setBusy] = createSignal(false)
   const [state, setState] = createSignal<GoalLoopState | null>(null)
+  const [queue, setQueue] = createSignal<QueueStatusSnapshot | null>(getQueueStatus())
 
   const goalLoop = () => platform.goalLoop
 
@@ -59,7 +62,9 @@ export const DialogGoalLoop: Component = () => {
         .catch(() => undefined)
     }
     const unsubscribe = api.subscribe((event) => setState(event.state.status === "running" ? event.state : null))
+    const unsubscribeQueue = subscribeQueueStatus((snapshot) => setQueue(snapshot))
     onCleanup(unsubscribe)
+    onCleanup(unsubscribeQueue)
   })
 
   const start = async () => {
@@ -173,6 +178,20 @@ export const DialogGoalLoop: Component = () => {
         >
           {(running) => (
             <>
+              <Show when={running().ticket?.identifier}>
+                <p class="text-sm truncate">
+                  <strong>{running().ticket?.identifier}</strong>
+                  <span class="text-text-weak"> {running().ticket?.title ?? ""}</span>
+                </p>
+              </Show>
+              <Show when={queue() && !queue()?.done && (queue()?.items.length ?? 0) > 0}>
+                <p class="text-xs text-text-weak">
+                  {language.t("dialog.goalLoop.queue.position", {
+                    current: (queue()?.index ?? 0) + 1,
+                    total: queue()?.items.length ?? 0,
+                  })}
+                </p>
+              </Show>
               <p class="text-sm">
                 <Show
                   when={running().maxIterations !== null}

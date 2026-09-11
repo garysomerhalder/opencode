@@ -6,6 +6,7 @@ import {
   type GoalLoopEvent,
   type GoalLoopServer,
   type GoalLoopStartInput,
+  type GoalTicket,
 } from "./goal-loop"
 
 const server: GoalLoopServer = { url: "http://127.0.0.1:4096", username: "opencode", password: "secret" }
@@ -311,6 +312,70 @@ describe("goal loop driver", () => {
     expect(loop.status()).toBe(null)
   })
 
+  test("carries the ticket onto state and the started event", async () => {
+    const polls = { n: 0 }
+    const events: GoalLoopEvent[] = []
+    const fetchImpl = stubFetch(
+      [
+        { method: "POST", path: "/session", respond: () => ({ id: "ses_11" }) },
+        { method: "POST", path: "/session/ses_11/prompt_async", respond: () => ({}) },
+        statusRoutes("ses_11", (call) => call === 1, polls),
+        {
+          method: "GET",
+          path: "/session/ses_11/message",
+          respond: () => assistantMessages(["all done\nGOAL_COMPLETE"]),
+        },
+      ],
+      [],
+    )
+    const loop = createGoalLoop({ getServer: async () => server, fetchImpl, onEvent: (e) => events.push(e), pollIntervalMs: 5 })
+    const ticket: GoalTicket = { identifier: "ABC-123", title: "Fix login" }
+    const state = await loop.start({ directory: "/repo", goal: "ship it", ticket })
+    expect(state.ticket).toEqual(ticket)
+    const started = events.at(0)
+    if (started?.type !== "started") throw new Error("expected started event")
+    expect(started.state.ticket).toEqual(ticket)
+    await Bun.sleep(50)
+    expect(loop.status()).toBe(null)
+  })
+
+  test("rejects a ticket missing its title", async () => {
+    const persisted: GoalLoopStartInput[] = []
+    const loop = createGoalLoop({
+      getServer: async () => server,
+      fetchImpl: stubFetch([], []),
+      persistLast: (input) => persisted.push(input),
+    })
+    const badTicket = { identifier: "ABC-123" } as unknown as GoalTicket
+    await expect(loop.start({ directory: "/repo", goal: "ship it", ticket: badTicket })).rejects.toThrow(
+      "ticket must have identifier and title",
+    )
+    expect(persisted).toEqual([])
+  })
+
+  test("defaults a missing ticket to null", async () => {
+    const polls = { n: 0 }
+    const events: GoalLoopEvent[] = []
+    const fetchImpl = stubFetch(
+      [
+        { method: "POST", path: "/session", respond: () => ({ id: "ses_12" }) },
+        { method: "POST", path: "/session/ses_12/prompt_async", respond: () => ({}) },
+        statusRoutes("ses_12", (call) => call === 1, polls),
+        {
+          method: "GET",
+          path: "/session/ses_12/message",
+          respond: () => assistantMessages(["all done\nGOAL_COMPLETE"]),
+        },
+      ],
+      [],
+    )
+    const loop = createGoalLoop({ getServer: async () => server, fetchImpl, onEvent: (e) => events.push(e), pollIntervalMs: 5 })
+    const state = await loop.start({ directory: "/repo", goal: "ship it" })
+    expect(state.ticket).toBe(null)
+    await Bun.sleep(50)
+    expect(loop.status()).toBe(null)
+  })
+
   test("runs unbounded without a cap until the marker appears", async () => {
     const events: GoalLoopEvent[] = []
     const polls = { n: 0 }
@@ -344,6 +409,7 @@ describe("goal loop driver", () => {
       status: "running" as const,
       directory: "/repo",
       goal: "unfinished",
+      ticket: null,
       sessionID: "ses_9",
       serverURL: "http://127.0.0.1:4096",
       iteration: 3,

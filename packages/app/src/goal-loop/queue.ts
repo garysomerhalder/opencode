@@ -25,7 +25,9 @@ export type QueueLoopEvent = {
 }
 
 export type QueueDeps = {
-  start(input: { directory: string; goal: string }): Promise<{ id: string }>
+  start(input: { directory: string; goal: string; ticket?: { identifier: string; title: string } | null }): Promise<{
+    id: string
+  }>
   subscribe(cb: (event: QueueLoopEvent) => void): () => void
   stop?: () => Promise<unknown> | unknown
 }
@@ -86,7 +88,11 @@ export function createQueueRunner(deps: QueueDeps): QueueRunner {
       goal += `\n\nRun instructions: ${item.instructions}`
     }
     try {
-      const result = await deps.start({ directory: item.directory, goal })
+      const result = await deps.start({
+        directory: item.directory,
+        goal,
+        ticket: { identifier: item.ticket.identifier, title: item.ticket.title },
+      })
       if (halted || done || gen !== generation) return
       currentLoopID = result.id
     } catch (err) {

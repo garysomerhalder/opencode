@@ -3,9 +3,15 @@ export type GoalLoopModel = {
   modelID: string
 }
 
+export interface GoalTicket {
+  identifier: string
+  title: string
+}
+
 export type GoalLoopStartInput = {
   directory: string
   goal: string
+  ticket?: GoalTicket | null
   maxIterations?: number
   completionMarker?: string
   sessionID?: string
@@ -20,6 +26,7 @@ export type GoalLoopState = {
   status: GoalLoopStatus
   directory: string
   goal: string
+  ticket: GoalTicket | null
   sessionID: string | null
   serverURL: string | null
   iteration: number

@@ -8,6 +8,7 @@ import { useLanguage } from "@/context/language"
 import { usePlatform } from "@/context/platform"
 import { showToast } from "@/utils/toast"
 import { createQueueRunner } from "@/goal-loop/queue"
+import { advance, clear as clearQueueStatus, halt, setQueue } from "@/goal-loop/queue-status"
 import type { TicketIssue } from "@/goal-loop/ticket"
 import type { GoalLoopStartInput } from "@/goal-loop/types"
 
@@ -169,6 +170,7 @@ export const DialogGoalWizard: Component = () => {
     }
     activeQueue = null
     setQueueActive(false)
+    clearQueueStatus()
   }
 
   const startQueue = () => {
@@ -196,7 +198,12 @@ export const DialogGoalWizard: Component = () => {
         },
       }
       unsubscribe = runner.onProgress((progress) => {
+        if (progress.phase === "completed" && !progress.done) {
+          advance(progress.ticketIdentifier)
+          return
+        }
         if (progress.phase === "completed" && progress.done) {
+          advance(progress.ticketIdentifier)
           showToast({
             title: language.t("toast.goalQueue.completed.title"),
             description: language.t("toast.goalQueue.completed.description", { count: total }),
@@ -207,6 +214,7 @@ export const DialogGoalWizard: Component = () => {
             setQueueActive(false)
           }
         } else if (progress.phase === "halted") {
+          halt(progress.reason ?? undefined)
           showToast({
             variant: "error",
             title: language.t("toast.goalQueue.halted.title"),
@@ -221,6 +229,7 @@ export const DialogGoalWizard: Component = () => {
       })
       activeQueue = handle
       setQueueActive(true)
+      setQueue(queueTickets.map((ticket) => ({ identifier: ticket.identifier, title: ticket.title })))
       runner.start(queueTickets.map((ticket) => ({ ticket, directory: dir, instructions: extra })))
       showToast({
         title: language.t("toast.goalQueue.started.title"),
