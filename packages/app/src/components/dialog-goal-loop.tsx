@@ -1,4 +1,4 @@
-import { Component, createSignal, onCleanup, onMount, Show } from "solid-js"
+import { Component, createSignal, For, onCleanup, onMount, Show } from "solid-js"
 import { useLocation, useNavigate } from "@solidjs/router"
 import { Button } from "@opencode-ai/ui/button"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
@@ -26,6 +26,95 @@ function loopServerKey(serverURL: string | null): ServerConnection.Key {
   }
 }
 
+const QUEUE_VISIBLE_MAX = 8
+
+type QueueItemStatus = "pending" | "active" | "done" | "failed"
+
+type QueueItemView = {
+  identifier: string
+  title: string
+  status: QueueItemStatus
+}
+
+type QueueView = {
+  items: QueueItemView[]
+  index: number
+  total: number
+  done: boolean
+  ok: boolean
+  reason?: string
+  nextIdentifier?: string
+}
+
+function isQueueItemStatus(value: unknown): value is QueueItemStatus {
+  return value === "pending" || value === "active" || value === "done" || value === "failed"
+}
+
+// The queue-status store is being enriched in parallel to
+// { items: [{ identifier, title, status }], index, total, done, ok, reason, nextIdentifier }.
+// Every new field is treated as optional so this view keeps working against the old shape.
+function toQueueView(snapshot: QueueStatusSnapshot | null): QueueView | null {
+  if (!snapshot) return null
+  const raw = snapshot as QueueStatusSnapshot & {
+    items?: Array<{ identifier?: unknown; title?: unknown; status?: unknown } | null>
+    total?: unknown
+    nextIdentifier?: unknown
+    reason?: unknown
+    index?: unknown
+    done?: unknown
+    ok?: unknown
+  }
+  if (!Array.isArray(raw.items) || raw.items.length === 0) return null
+  const count = raw.items.length
+  const total =
+    typeof raw.total === "number" && Number.isFinite(raw.total) && raw.total > 0 ? Math.floor(raw.total) : count
+  const requested = typeof raw.index === "number" && Number.isFinite(raw.index) ? Math.floor(raw.index) : 0
+  const index = Math.min(Math.max(requested, 0), Math.max(count - 1, 0))
+  const done = raw.done === true
+  const ok = raw.ok !== false
+  const reason = typeof raw.reason === "string" && raw.reason.trim().length > 0 ? raw.reason : undefined
+  const items: QueueItemView[] = raw.items.map((entry, position) => {
+    const record: Record<string, unknown> =
+      typeof entry === "object" && entry !== null
+        ? (entry as Record<string, unknown>)
+        : {}
+    const identifier =
+      typeof record.identifier === "string" && record.identifier.length > 0
+        ? record.identifier
+        : `#${position + 1}`
+    const title = typeof record.title === "string" ? record.title : ""
+    if (isQueueItemStatus(record.status)) return { identifier, title, status: record.status }
+    if (done) {
+      if (!ok && position === index) return { identifier, title, status: "failed" }
+      if (ok || position < index) return { identifier, title, status: "done" }
+      return { identifier, title, status: "pending" }
+    }
+    if (position < index) return { identifier, title, status: "done" }
+    if (position === index) return { identifier, title, status: "active" }
+    return { identifier, title, status: "pending" }
+  })
+  const providedNext =
+    typeof raw.nextIdentifier === "string" && raw.nextIdentifier.trim().length > 0
+      ? raw.nextIdentifier.trim()
+      : undefined
+  const nextIdentifier = providedNext ?? (!done && index + 1 < items.length ? items[index + 1].identifier : undefined)
+  return { items, index, total, done, ok, reason, nextIdentifier }
+}
+
+function queueStatusGlyph(status: QueueItemStatus): string {
+  switch (status) {
+    case "done":
+      return "✓"
+    case "active":
+      return "…"
+    case "failed":
+      return "✕"
+    case "pending":
+    default:
+      return "○"
+  }
+}
+
 export const DialogGoalLoop: Component = () => {
   const dialog = useDialog()
   const language = useLanguage()
@@ -39,6 +128,7 @@ export const DialogGoalLoop: Component = () => {
   const [busy, setBusy] = createSignal(false)
   const [state, setState] = createSignal<GoalLoopState | null>(null)
   const [queue, setQueue] = createSignal<QueueStatusSnapshot | null>(getQueueStatus())
+  const queueView = () => toQueueView(queue())
 
   const goalLoop = () => platform.goalLoop
 
@@ -207,6 +297,53 @@ export const DialogGoalLoop: Component = () => {
                   })}
                 </Show>
               </p>
+              <Show when={queueView()}>
+                {(view) => (
+                  <div class="flex flex-col gap-1">
+                    <p class="text-xs font-medium text-text-weak">{language.t("dialog.goalLoop.queue.header")}</p>
+                    <ul class="flex flex-col gap-0.5">
+                      <For each={view().items.slice(0, QUEUE_VISIBLE_MAX)}>
+                        {(item) => (
+                          <li
+                            class="flex items-baseline gap-1.5 text-xs truncate"
+                            classList={{ "opacity-60": item.status === "pending" }}
+                          >
+                            <span aria-hidden="true" class="text-text-weak">
+                              {queueStatusGlyph(item.status)}
+                            </span>
+                            <strong class="shrink-0">{item.identifier}</strong>
+                            <span class="truncate text-text-weak">{item.title}</span>
+                          </li>
+                        )}
+                      </For>
+                    </ul>
+                    <Show when={view().items.length > QUEUE_VISIBLE_MAX}>
+                      <p class="text-xs text-text-weak">
+                        {language.t("dialog.goalLoop.queue.more", {
+                          count: view().items.length - QUEUE_VISIBLE_MAX,
+                        })}
+                      </p>
+                    </Show>
+                    <Show when={view().nextIdentifier}>
+                      {(next) => (
+                        <p class="text-xs text-text-weak">
+                          {language.t("dialog.goalLoop.queue.next", { identifier: next() })}
+                        </p>
+                      )}
+                    </Show>
+                    <Show when={view().done}>
+                      <p class="text-xs text-text-weak">
+                        <Show
+                          when={view().ok}
+                          fallback={`${language.t("dialog.goalLoop.queue.halted")}${view().reason ? `: ${view().reason}` : ""}`}
+                        >
+                          {language.t("dialog.goalLoop.queue.doneAll")}
+                        </Show>
+                      </p>
+                    </Show>
+                  </div>
+                )}
+              </Show>
               <p class="text-sm text-text-weak truncate">{running().goal}</p>
               <div class="flex justify-end gap-2">
                 <Show when={running().sessionID}>

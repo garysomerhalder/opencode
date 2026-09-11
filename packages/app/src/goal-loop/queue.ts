@@ -1,3 +1,4 @@
+import { begin } from "./queue-status"
 import { buildTicketGoal, type TicketIssue } from "./ticket"
 
 export type QueueItem = {
@@ -82,6 +83,11 @@ export function createQueueRunner(deps: QueueDeps): QueueRunner {
     if (halted || done || gen !== generation) return
     const item = items[index]
     if (!item) return
+    try {
+      begin(item.ticket.identifier)
+    } catch {
+      // Status tracking must never break queue advancement.
+    }
     emit(progressFor(items, index, "started", false, true))
     let goal = buildTicketGoal(item.ticket, item.directory)
     if (item.instructions.trim().length > 0) {
