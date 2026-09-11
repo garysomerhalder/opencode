@@ -44,6 +44,7 @@ import { ErrorPage } from "@/pages/error"
 import { CommentsProvider, useComments } from "@/context/comments"
 import { useCommand } from "@/context/command"
 import { DirectoryDataProvider } from "@/pages/directory-layout"
+import { SidebarGoalLoop } from "@/pages/layout/sidebar-goal-loop"
 import { useServerSync } from "@/context/server-sync"
 import { useLanguage } from "@/context/language"
 import { useLayout } from "@/context/layout"
@@ -2287,6 +2288,7 @@ export default function Page() {
   return (
     <SessionRouteFrame>
       <SessionHeader />
+      <SidebarGoalLoop />
       <div
         ref={panelRow}
         class="flex-1 min-h-0 flex flex-col md:flex-row"
