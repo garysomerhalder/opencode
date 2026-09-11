@@ -12,9 +12,10 @@ function mockClient(config: { small_model?: string } = {}) {
   return {
     config: { get: async () => ({ data: config }) },
     session: {
-      create: async () => ({ data: { id: undefined } }),
-      prompt: async () => ({ data: { parts: [] } }),
+      create: async () => ({ data: { id: "ses_delegate" } }),
+      prompt: async () => ({ data: { parts: [{ type: "text", text: "SUMMARY" }] } }),
       delete: async () => ({}),
+      messages: async () => ({ data: [] }),
     },
   } as any
 }
@@ -66,5 +67,65 @@ describe("chat.message hook", () => {
     }
     await hooks["chat.message"]!({ sessionID: "ses_test", agent: "build", variant: "max" }, output as any)
     expect(output.message.model.variant).toBe("max")
+  })
+})
+
+describe("tool.execute.after read summarization", () => {
+  function largeContent(lines = 400): string {
+    return `<path>/repo/src/big.ts</path>\n<type>file</type>\n<content>\n` +
+      Array.from({ length: lines }, (_, i) => `${i + 1}: line ${i + 1}`).join("\n") +
+      `\n</content>`
+  }
+
+  async function runRead(args: any, content: string, options: any = {}) {
+    const hooks = await server({ client: mockClient({ small_model: "openai/gpt-5-nano" }) } as any, options)
+    const output = { title: "big.ts", output: content, metadata: {} }
+    await hooks["tool.execute.after"]!(
+      { tool: "read", sessionID: "ses_test", callID: "call_1", args },
+      output as any,
+    )
+    return output
+  }
+
+  test("replaces large file content with a summary", async () => {
+    const output = await runRead({ filePath: "/repo/src/big.ts" }, largeContent())
+    expect(output.output).toContain("SUMMARY")
+    expect(output.output).toContain("summarized")
+    expect(output.output).not.toContain("line 200")
+    expect(output.title).toContain("(summarized)")
+  })
+
+  test("leaves small reads untouched", async () => {
+    const content = largeContent(50)
+    const output = await runRead({ filePath: "/repo/src/small.ts" }, content)
+    expect(output.output).toBe(content)
+  })
+
+  test("leaves targeted reads with an explicit limit untouched", async () => {
+    const content = largeContent()
+    const output = await runRead({ filePath: "/repo/src/big.ts", limit: 50 }, content)
+    expect(output.output).toBe(content)
+  })
+
+  test("leaves targeted reads with an offset untouched", async () => {
+    const content = largeContent()
+    const output = await runRead({ filePath: "/repo/src/big.ts", offset: 400 }, content)
+    expect(output.output).toBe(content)
+  })
+
+  test("does nothing for non-read tools", async () => {
+    const hooks = await server({ client: mockClient({ small_model: "openai/gpt-5-nano" }) } as any, {})
+    const output = { title: "x", output: "hello", metadata: {} }
+    await hooks["tool.execute.after"]!(
+      { tool: "bash", sessionID: "ses_test", callID: "call_1", args: {} },
+      output as any,
+    )
+    expect(output.output).toBe("hello")
+  })
+
+  test("respects the read option when disabled", async () => {
+    const content = largeContent()
+    const output = await runRead({ filePath: "/repo/src/big.ts" }, content, { read: false })
+    expect(output.output).toBe(content)
   })
 })
