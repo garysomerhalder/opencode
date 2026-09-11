@@ -1,30 +1,17 @@
 import { Component, createSignal, For, onCleanup, onMount, Show } from "solid-js"
-import { useLocation, useNavigate } from "@solidjs/router"
+import { useNavigate } from "@solidjs/router"
 import { Button } from "@opencode-ai/ui/button"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { Dialog } from "@opencode-ai/ui/dialog"
 import { TextField } from "@opencode-ai/ui/text-field"
-import { base64Encode } from "@opencode-ai/core/util/encode"
 import { useLanguage } from "@/context/language"
 import { usePlatform } from "@/context/platform"
-import { ServerConnection } from "@/context/server"
-import { tabHref, useTabs } from "@/context/tabs"
+import { useTabs } from "@/context/tabs"
 import { get as getQueueStatus, subscribe as subscribeQueueStatus } from "@/goal-loop/queue-status"
 import type { QueueStatusSnapshot } from "@/goal-loop/queue-status"
+import { openLoopSession } from "@/goal-loop/open-session"
 import { showToast } from "@/utils/toast"
 import type { GoalLoopStartInput, GoalLoopState } from "@/goal-loop/types"
-
-function loopServerKey(serverURL: string | null): ServerConnection.Key {
-  try {
-    const host = new URL(serverURL ?? "").hostname
-    if (host === "127.0.0.1" || host === "localhost" || host === "::1") {
-      return ServerConnection.Key.make("sidecar")
-    }
-    return ServerConnection.Key.make(serverURL ?? "sidecar")
-  } catch {
-    return ServerConnection.Key.make("sidecar")
-  }
-}
 
 const QUEUE_VISIBLE_MAX = 8
 
@@ -120,7 +107,6 @@ export const DialogGoalLoop: Component = () => {
   const language = useLanguage()
   const platform = usePlatform()
   const navigate = useNavigate()
-  const location = useLocation()
   const tabs = useTabs()
 
   const [goal, setGoal] = createSignal("")
@@ -201,19 +187,11 @@ export const DialogGoalLoop: Component = () => {
     const current = state()
     if (!current?.sessionID) return
     dialog.close()
-    try {
-      // Goal-loop sessions run on the server the main controller dials,
-      // which in the desktop shell is always the local sidecar. Opening
-      // through tabs.select is the same path a tab-strip click uses: it
-      // marks the tab active AND navigates. A bare navigate leaves the
-      // recent tab active and the view on the draft composer.
-      const tab = tabs.addSessionTab({ server: loopServerKey(current.serverURL), sessionId: current.sessionID })
-      console.info("[goal-loop] opening session", tabHref(tab), "from", location.pathname)
-      tabs.select(tab)
-    } catch (err) {
-      console.error("[goal-loop] open session failed", err)
-      navigate(`/${base64Encode(current.directory)}/session/${current.sessionID}`)
-    }
+    openLoopSession({
+      tabs: tabs as unknown as Parameters<typeof openLoopSession>[0]["tabs"],
+      navigate,
+      state: { sessionID: current.sessionID, serverURL: current.serverURL, directory: current.directory },
+    })
   }
 
   const browse = async () => {

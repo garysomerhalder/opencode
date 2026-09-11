@@ -81,6 +81,7 @@ import {
   type WorkspaceSidebarContext,
 } from "./layout/sidebar-workspace"
 import { ProjectDragOverlay, SortableProject, type ProjectSidebarContext } from "./layout/sidebar-project"
+import { SidebarGoalLoop } from "./layout/sidebar-goal-loop"
 import { SidebarContent } from "./layout/sidebar-shell"
 
 export default function LegacyLayout(props: ParentProps) {
@@ -2095,6 +2096,8 @@ export default function LegacyLayout(props: ParentProps) {
                   </DropdownMenu>
                 </div>
               </div>
+
+              <SidebarGoalLoop />
 
               <div class="flex-1 min-h-0 flex flex-col">
                 <Show
