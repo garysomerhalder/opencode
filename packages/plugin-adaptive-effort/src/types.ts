@@ -18,5 +18,7 @@ export type AdaptiveEffortOptions = {
   enabled?: boolean
   classifier?: "rules" | "hybrid"
   smallModel?: string
+  read?: boolean
+  minLines?: number
   efforts?: Partial<Record<Difficulty, string | null>>
 }

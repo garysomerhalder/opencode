@@ -1,12 +1,13 @@
 # opencode-adaptive-effort
 
-Automatically picks the reasoning-effort tier for each message and routes
-I/O-heavy grunt work to the small model, so the frontier model only spends
-reasoning tokens where they actually matter.
+Automatically picks the reasoning-effort tier for each message, routes
+I/O-heavy grunt work to the small model, and shunts large file reads to the
+small model for summarization — so the frontier model never ingests content it
+doesn't need to reason about.
 
-Inspired by the routing pattern Spotify described for cutting agent token spend,
-but operating at the message level: classify every prompt, then either drop the
-effort tier (cheap tasks) or hand the whole turn to `small_model` (grunt work).
+Inspired by the routing pattern Spotify described for cutting agent token spend
+(Portal's `bulk-reader` / `code-writer`), operating at both the message level and
+the tool level.
 
 ## Install
 
@@ -32,6 +33,8 @@ or load from a local directory:
 
 ## How it works
 
+### 1. Message routing (`chat.message`)
+
 Every new user message runs through the `chat.message` hook:
 
 1. **Classify** the prompt into `trivial | easy | medium | hard` and decide
@@ -45,13 +48,31 @@ Every new user message runs through the `chat.message` hook:
 An explicitly selected variant (user picked one in the model picker) is always
 respected and never overridden.
 
+### 2. Read shunting (`tool.execute.after`)
+
+When the `read` tool returns a file over `minLines` lines, the plugin replaces
+the file content with a structured summary produced by the small model, so the
+raw file never enters the frontier model's context. This is the mechanism that
+produces the bulk of token savings — keeping I/O out of the expensive model.
+
+Targeted reads pass through untouched:
+
+- reads with an explicit `offset`
+- reads with an explicit `limit <= minLines`
+- small files (<= `minLines` lines)
+
+If the frontier model later needs exact lines to edit, it re-reads the specific
+section — the summary only replaces bulk reads.
+
 ## Options
 
 | Option       | Type                                     | Default | Description |
 | ------------ | ---------------------------------------- | ------- | ----------- |
 | `enabled`    | `boolean`                                | `true`  | Master switch. |
 | `classifier` | `"rules"` \| `"hybrid"`                  | `"rules"` | `"hybrid"` refines ambiguous `medium` prompts with a one-shot small-model classifier. |
-| `smallModel` | `string`                                 | config `small_model` | Explicit `provider/model` to route grunt work to. Falls back to the configured `small_model`. |
+| `smallModel` | `string`                                 | config `small_model` | Explicit `provider/model` to route grunt work and summaries to. Falls back to the configured `small_model`. |
+| `read`       | `boolean`                                | `true`  | Enable read shunting. |
+| `minLines`   | `number`                                 | `350`   | Files above this line count get summarized instead of loaded raw. |
 | `efforts`    | `Partial<Record<"trivial"\|"easy"\|"medium"\|"hard", string \| null>>` | — | Override the effort variant per difficulty. `null` means "leave the default variant". |
 
 ### Example
@@ -62,6 +83,7 @@ respected and never overridden.
     ["opencode-adaptive-effort", {
       "classifier": "hybrid",
       "smallModel": "openai/gpt-5-nano",
+      "minLines": 500,
       "efforts": { "hard": "max", "easy": null }
     }]
   ]
@@ -72,7 +94,10 @@ respected and never overridden.
 
 - Effort switching relies on the model's reasoning-effort `variants`
   (`low` / `medium` / `high`). Models without those variants are unaffected.
-- Routing requires a resolvable `small_model`. If none is configured, grunt
-  work falls back to the main model at `low` effort.
-- The hybrid classifier runs in a throwaway session and is skipped for its own
-  messages, so it cannot recurse.
+- Routing and read shunting require a resolvable `small_model`. If none is
+  configured, grunt work falls back to the main model at `low` effort, and
+  large reads are left raw.
+- The hybrid classifier and the read summarizer run in throwaway sessions and
+  are skipped for their own messages, so they cannot recurse.
+- Summaries are lossy by design. The frontier model keeps full editing fidelity
+  by re-reading specific sections when it needs exact line references.
