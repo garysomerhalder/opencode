@@ -142,6 +142,11 @@ export const dict = {
   "dialog.goalLoop.running": "Step {{current}} of {{max}} in {{directory}}",
   "dialog.goalLoop.running.unbounded": "Step {{current}} \u2014 working in {{directory}}...",
   "dialog.goalLoop.queue.position": "Ticket {{current}} of {{total}}",
+  "dialog.goalLoop.queue.header": "Queue",
+  "dialog.goalLoop.queue.next": "Next: {{identifier}}",
+  "dialog.goalLoop.queue.more": "+{{count}} more",
+  "dialog.goalLoop.queue.doneAll": "All tickets done",
+  "dialog.goalLoop.queue.halted": "Queue halted",
 
   "toast.goalLoop.started.title": "Goal loop started",
   "toast.goalLoop.completed.title": "Goal loop complete",
