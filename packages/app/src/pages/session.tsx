@@ -44,6 +44,7 @@ import { ErrorPage } from "@/pages/error"
 import { CommentsProvider, useComments } from "@/context/comments"
 import { useCommand } from "@/context/command"
 import { DirectoryDataProvider } from "@/pages/directory-layout"
+import { SidebarGoalLoop } from "@/pages/layout/sidebar-goal-loop"
 import { useServerSync } from "@/context/server-sync"
 import { useLanguage } from "@/context/language"
 import { useLayout } from "@/context/layout"
@@ -243,16 +244,54 @@ function SessionErrorFallback(props: { error: unknown; sessionID?: string; serve
   return <ErrorPage error={props.error} />
 }
 
-function ResolvedTargetSessionRoute() {
-  const params = useParams<{ serverKey: string; id: string }>()
+function sessionDirectory(info: unknown): string | undefined {
+  if (typeof info !== "object" || info === null) return undefined
+  const root = info as Record<string, unknown>
+  const data = (root["data"] ?? root) as Record<string, unknown>
+  if (typeof data !== "object" || data === null) return undefined
+  if (typeof data["directory"] === "string" && data["directory"].length > 0) return data["directory"]
+  const location = data["location"]
+  if (typeof location === "object" && location !== null) {
+    const directory = (location as Record<string, unknown>)["directory"]
+    if (typeof directory === "string" && directory.length > 0) return directory
+  }
+  return undefined
+}
+
+function ResolvedTargetSessionRoute() {  const params = useParams<{ serverKey: string; id: string }>()
   const tabs = useTabs()
   const sync = useServerSync()
+  const serverSDK = useServerSDK()
   const serverKey = createMemo(() => requireServerKey(params.serverKey))
   const current = createSessionLineage(
     () => params.id,
     () => sync().session.lineage,
   )
-  const directory = createMemo(() => current()?.session.directory)
+  // Sessions created outside the UI (API, background loops) never enter the
+  // synced lineage, so the directory memo below stays undefined and the whole
+  // page renders empty with no error. Fall back to a direct fetch by id —
+  // session lookup is server-global and needs no directory — exactly once.
+  const [fetchedDirectory, setFetchedDirectory] = createSignal<string | undefined>()
+  let fetchedFor: string | null = null
+  createEffect(() => {
+    const id = params.id
+    if (current() || fetchedDirectory() !== undefined || !id || fetchedFor === id) return
+    fetchedFor = id
+    console.info("[session-route] lineage miss, fetching session directly", id)
+    void serverSDK()
+      .client.session.get({ sessionID: id })
+      .then(
+        (info) => {
+          const directory = sessionDirectory(info)
+          console.info("[session-route] direct fetch resolved directory", directory)
+          if (directory) setFetchedDirectory(directory)
+        },
+        (error) => {
+          console.error("[session-route] direct fetch failed", error)
+        },
+      )
+  })
+  const directory = createMemo(() => current()?.session.directory ?? fetchedDirectory())
   const targetDirectory = () => directory()!
 
   createEffect(() => {
@@ -2249,6 +2288,7 @@ export default function Page() {
   return (
     <SessionRouteFrame>
       <SessionHeader />
+      <SidebarGoalLoop />
       <div
         ref={panelRow}
         class="flex-1 min-h-0 flex flex-col md:flex-row"

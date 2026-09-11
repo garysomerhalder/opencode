@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron"
 import type { ElectronAPI, WslServersEvent } from "./types"
+import type { GoalLoopEvent, GoalLoopStartInput } from "@opencode-ai/app/goal-loop/types"
 import type { UpdaterState } from "@opencode-ai/app/updater"
 
 const updaterCallbacks = new Set<(state: UpdaterState) => void>()
@@ -128,11 +129,32 @@ const api: ElectronAPI = {
   },
   setTitlebar: (theme) => ipcRenderer.invoke("set-titlebar", theme),
   runDesktopMenuAction: (action) => ipcRenderer.invoke("run-desktop-menu-action", action),
+  goalLoop: {
+    start: (input) => ipcRenderer.invoke("goal-loop-start", input),
+    stop: () => ipcRenderer.invoke("goal-loop-stop"),
+    status: () => ipcRenderer.invoke("goal-loop-status"),
+    last: (): Promise<GoalLoopStartInput | null> => ipcRenderer.invoke("goal-loop-last"),
+    onEvent: (cb) => {
+      const handler = (_: unknown, event: GoalLoopEvent) => cb(event)
+      ipcRenderer.on("goal-loop-event", handler)
+      return () => ipcRenderer.removeListener("goal-loop-event", handler)
+    },
+  },
   setBackgroundColor: (color: string) => ipcRenderer.invoke("set-background-color", color),
   exportDebugLogs: () => ipcRenderer.invoke("export-debug-logs"),
   setForceFocus: (enabled) => ipcRenderer.invoke("set-force-focus", enabled),
   recordFatalRendererError: (error) => ipcRenderer.invoke("record-fatal-renderer-error", error),
   setNativeTranslations: (bundle) => ipcRenderer.invoke("set-native-translations", bundle),
+  linear: {
+    hasKey: () => ipcRenderer.invoke("linear-has-key"),
+    setKey: (key) => ipcRenderer.invoke("linear-set-key", key),
+    clearKey: () => ipcRenderer.invoke("linear-clear-key"),
+    test: () => ipcRenderer.invoke("linear-test"),
+    assigned: (args) => ipcRenderer.invoke("linear-assigned", args),
+    issue: (id) => ipcRenderer.invoke("linear-issue", { id }),
+    comment: (issueId, body) => ipcRenderer.invoke("linear-comment", { issueId, body }),
+    teams: () => ipcRenderer.invoke("linear-teams"),
+  },
 }
 
 contextBridge.exposeInMainWorld("api", api)

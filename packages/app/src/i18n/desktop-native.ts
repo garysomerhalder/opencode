@@ -235,6 +235,7 @@ export const DESKTOP_NATIVE_ENGLISH = {
   "desktop.menu.restart": "Restart",
   "desktop.menu.exportLogs": "Export Logs...",
   "desktop.menu.newSession": "New Session",
+  "desktop.menu.startGoalLoop": "Start Goal Loop...",
   "desktop.menu.openProject": "Open Project...",
   "desktop.menu.newWindow": "New Window",
   "desktop.menu.closeWindow": "Close Window",
@@ -319,6 +320,10 @@ export const DESKTOP_NATIVE_ENGLISH = {
 
   "desktop.picker.error.notSelected": "File was not selected by the picker",
   "desktop.picker.error.sizeLimit": "Selected attachments exceed the {{limit}} MB limit",
+
+  "desktop.menu.newGoalLoop": "New Goal Loop...",
+  "desktop.menu.startGoalTicketLoop": "Start Goal Loop from Ticket...",
+  "desktop.menu.goalWizard": "Goal Loop Wizard...",
 } as const
 
 export type DesktopNativeKey = keyof typeof DESKTOP_NATIVE_ENGLISH

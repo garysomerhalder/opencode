@@ -12,6 +12,7 @@ import { useSettings } from "@/context/settings"
 import { ExternalLink } from "../external-link"
 import { SettingsListV2 } from "./parts/list"
 import { SettingsRowV2 } from "./parts/row"
+import { SettingsLinearV2 } from "./linear"
 import { LayoutRetirementNotice, LayoutTransitionToggle } from "./interface-transition"
 import {
   createAppearanceSettingsController,
@@ -561,6 +562,8 @@ export const SettingsGeneralV2: Component<{
         <Show when={desktop()}>
           <UpdatesSection />
         </Show>
+
+        <SettingsLinearV2 />
 
         <DisplaySection />
 

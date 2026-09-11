@@ -727,3 +727,18 @@
   line-height: 1;
   color: var(--v2-state-fg-danger);
 }
+
+.settings-v2-linear-description {
+  font-size: 13px;
+  font-weight: 440;
+  line-height: 20px;
+  color: var(--v2-text-text-muted);
+}
+
+.settings-v2-linear-error {
+  padding-block: 16px;
+  font-size: 13px;
+  font-weight: 440;
+  line-height: 20px;
+  color: var(--v2-state-fg-danger);
+}

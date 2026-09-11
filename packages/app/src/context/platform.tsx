@@ -2,6 +2,8 @@ import { createSimpleContext } from "@opencode-ai/ui/context"
 import type { AsyncStorage, SyncStorage } from "@solid-primitives/storage"
 import type { Accessor } from "solid-js"
 import type { DesktopMenuAction } from "../desktop-menu"
+import type { GoalLoopPlatform } from "../goal-loop/types"
+import type { TicketIssue } from "../goal-loop/ticket"
 import { ServerConnection } from "./server"
 import type { WslServersPlatform } from "../wsl/types"
 import type { UpdaterPlatform } from "../updater"
@@ -121,6 +123,32 @@ type PlatformBase = {
 
   /** Record a fatal renderer error in platform logs (desktop only) */
   recordFatalRendererError?(error: FatalRendererErrorLog): Promise<void>
+
+  /** Autonomous goal loop driver in the desktop shell (desktop only) */
+  goalLoop?: GoalLoopPlatform
+
+  /** Linear API key storage and validation in the desktop shell (desktop only) */
+  linear?: LinearSettingsPlatform
+
+  /** Linear tickets for goal-loop ticket picker in the desktop shell (desktop only) */
+  linearTickets?: {
+    assigned(args: { teamKey?: string; first?: number }): Promise<TicketIssue[]>
+    issue(
+      id: string,
+    ): Promise<TicketIssue & { comments?: Array<{ body?: string; createdAt?: string; user?: { name?: string } }> }>
+    teams?(): Promise<Array<{ id: string; key: string; name: string }>>
+  }
+}
+
+export type LinearSettingsPlatform = {
+  /** Whether a Linear API key is stored */
+  hasKey(): Promise<boolean>
+  /** Store a Linear API key */
+  setKey(key: string): Promise<void>
+  /** Remove the stored Linear API key */
+  clearKey(): Promise<void>
+  /** Validate the stored key and return the Linear identity */
+  test(): Promise<{ name: string; email: string }>
 }
 
 export type Platform = PlatformBase &

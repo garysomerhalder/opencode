@@ -47,6 +47,10 @@ export function DirectoryDataProvider(
     (id) =>
       sync()
         .session.sync(id)
+        .then(
+          () => console.info("[goal-loop] session sync ok", id, "msgs=", sync().data.message[id]?.length),
+          (error) => console.error("[goal-loop] session sync failed", id, error),
+        )
         .catch(() => {}),
   )
 

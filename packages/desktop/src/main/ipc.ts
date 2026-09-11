@@ -7,6 +7,7 @@ import type { DesktopMenuAction } from "@opencode-ai/app/desktop-menu"
 import { parseDesktopNativeBundle, type DesktopNativeBundle } from "@opencode-ai/app/i18n/desktop-native"
 
 import type { FatalRendererError, ServerReadyData, TitlebarTheme } from "../preload/types"
+import type { GoalLoop, GoalLoopStartInput } from "./goal-loop"
 import { runDesktopMenuAction } from "./desktop-menu-actions"
 import { setForceFocus } from "./debug"
 import { assertAttachmentBudget, createPickedFileAuthorizations } from "./attachment-picker"
@@ -23,6 +24,7 @@ import {
 import type { UpdaterController } from "./updater-controller"
 import { createUpdaterSubscriptions } from "./updater-subscriptions"
 import { createDesktopDraftStore } from "./draft-store"
+import { clearLinearApiKey, createLinearClient, getLinearApiKey, setLinearApiKey } from "./linear"
 import { nativeT } from "./native-translations"
 
 const pickerFilters = (ext?: string[]) => {
@@ -49,6 +51,8 @@ type Deps = {
   updater: UpdaterController
   showUpdater: () => Promise<void> | void
   setBackgroundColor: (color: string) => void
+  goalLoop: GoalLoop
+  getGoalLoopLast: () => GoalLoopStartInput | null
   exportDebugLogs: () => Promise<string>
   recordFatalRendererError: (error: FatalRendererError) => Promise<void> | void
   setNativeTranslations: (bundle: DesktopNativeBundle) => void
@@ -111,6 +115,72 @@ export function registerIpcHandlers(deps: Deps) {
     if (!bundle) throw new Error("Invalid native translation bundle")
     deps.setNativeTranslations(bundle)
   })
+  ipcMain.handle("goal-loop-start", (_event: IpcMainInvokeEvent, input: GoalLoopStartInput) => {
+    if (!input || typeof input !== "object") throw new Error("Invalid goal loop input")
+    return deps.goalLoop.start(input)
+  })
+  ipcMain.handle("goal-loop-stop", () => deps.goalLoop.stop())
+  ipcMain.handle("goal-loop-status", () => deps.goalLoop.status())
+  ipcMain.handle("goal-loop-last", () => deps.getGoalLoopLast())
+  ipcMain.handle("linear-has-key", async () => (await getLinearApiKey()) !== null)
+  ipcMain.handle("linear-set-key", async (_event: IpcMainInvokeEvent, key: unknown) => {
+    if (typeof key !== "string" || key.trim().length === 0) throw new Error("linear-invalid-key")
+    await setLinearApiKey(key)
+  })
+  ipcMain.handle("linear-clear-key", () => clearLinearApiKey())
+  ipcMain.handle("linear-test", async () => {
+    const key = await getLinearApiKey()
+    if (!key) throw new Error("linear-not-configured")
+    try {
+      const viewer = await createLinearClient({ getKey: getLinearApiKey }).viewer()
+      return { name: viewer.name, email: viewer.email }
+    } catch (error) {
+      if (error instanceof Error && error.message === "linear-not-configured") throw error
+      const detail = error instanceof Error ? error.message : String(error)
+      throw new Error(`Linear authentication failed: ${detail.slice(0, 300)}`)
+    }
+  })
+  ipcMain.handle(
+    "linear-assigned",
+    async (_event: IpcMainInvokeEvent, args?: { teamKey?: unknown; first?: unknown }) => {
+      const key = await getLinearApiKey()
+      if (!key) throw new Error("linear-not-configured")
+      const teamKey =
+        typeof args?.teamKey === "string" && args.teamKey.trim().length > 0 ? args.teamKey.trim() : undefined
+      const first =
+        typeof args?.first === "number" && Number.isFinite(args.first) && args.first > 0
+          ? Math.floor(args.first)
+          : undefined
+      return createLinearClient({ getKey: getLinearApiKey }).assignedIssues({ teamKey, first })
+    },
+  )
+  ipcMain.handle("linear-issue", async (_event: IpcMainInvokeEvent, args?: { id?: unknown }) => {
+    const key = await getLinearApiKey()
+    if (!key) throw new Error("linear-not-configured")
+    if (!args || typeof args.id !== "string" || args.id.trim().length === 0) {
+      throw new Error("linear-invalid-issue-id")
+    }
+    return createLinearClient({ getKey: getLinearApiKey }).issue(args.id)
+  })
+  ipcMain.handle("linear-teams", async () => {
+    const key = await getLinearApiKey()
+    if (!key) throw new Error("linear-not-configured")
+    return createLinearClient({ getKey: getLinearApiKey }).teams()
+  })
+  ipcMain.handle(
+    "linear-comment",
+    async (_event: IpcMainInvokeEvent, args?: { issueId?: unknown; body?: unknown }) => {
+      const key = await getLinearApiKey()
+      if (!key) throw new Error("linear-not-configured")
+      if (!args || typeof args.issueId !== "string" || args.issueId.trim().length === 0) {
+        throw new Error("linear-invalid-issue-id")
+      }
+      if (typeof args.body !== "string" || args.body.trim().length === 0) {
+        throw new Error("linear-invalid-comment-body")
+      }
+      return createLinearClient({ getKey: getLinearApiKey }).comment(args.issueId, args.body)
+    },
+  )
   ipcMain.handle("store-get", (_event: IpcMainInvokeEvent, name: string, key: string) => {
     try {
       const store = getStore(name)
@@ -151,12 +221,14 @@ export function registerIpcHandlers(deps: Deps) {
 
   ipcMain.handle(
     "open-directory-picker",
-    async (_event: IpcMainInvokeEvent, opts?: { multiple?: boolean; title?: string; defaultPath?: string }) => {
-      const result = await dialog.showOpenDialog({
+    async (event: IpcMainInvokeEvent, opts?: { multiple?: boolean; title?: string; defaultPath?: string }) => {
+      const picker: Electron.OpenDialogOptions = {
         properties: ["openDirectory", ...(opts?.multiple ? ["multiSelections" as const] : []), "createDirectory"],
         title: opts?.title ?? nativeT("desktop.dialog.chooseFolder"),
         defaultPath: opts?.defaultPath,
-      })
+      }
+      const win = BrowserWindow.fromWebContents(event.sender)
+      const result = win ? await dialog.showOpenDialog(win, picker) : await dialog.showOpenDialog(picker)
       if (result.canceled) return null
       return opts?.multiple ? result.filePaths : result.filePaths[0]
     },
@@ -168,12 +240,14 @@ export function registerIpcHandlers(deps: Deps) {
       event: IpcMainInvokeEvent,
       opts?: { multiple?: boolean; title?: string; defaultPath?: string; extensions?: string[] },
     ) => {
-      const result = await dialog.showOpenDialog({
+      const picker: Electron.OpenDialogOptions = {
         properties: ["openFile", ...(opts?.multiple ? ["multiSelections" as const] : [])],
         title: opts?.title ?? nativeT("desktop.dialog.chooseFile"),
         defaultPath: opts?.defaultPath,
         filters: pickerFilters(opts?.extensions),
-      })
+      }
+      const win = BrowserWindow.fromWebContents(event.sender)
+      const result = win ? await dialog.showOpenDialog(win, picker) : await dialog.showOpenDialog(picker)
       if (result.canceled) return null
       const files = await Promise.all(
         result.filePaths.map(async (filePath) => ({
@@ -198,11 +272,13 @@ export function registerIpcHandlers(deps: Deps) {
 
   ipcMain.handle(
     "save-file-picker",
-    async (_event: IpcMainInvokeEvent, opts?: { title?: string; defaultPath?: string }) => {
-      const result = await dialog.showSaveDialog({
+    async (event: IpcMainInvokeEvent, opts?: { title?: string; defaultPath?: string }) => {
+      const picker = {
         title: opts?.title ?? nativeT("desktop.dialog.saveFile"),
         defaultPath: opts?.defaultPath,
-      })
+      }
+      const win = BrowserWindow.fromWebContents(event.sender)
+      const result = win ? await dialog.showSaveDialog(win, picker) : await dialog.showSaveDialog(picker)
       if (result.canceled) return null
       return result.filePath ?? null
     },
@@ -301,6 +377,13 @@ export function registerIpcHandlers(deps: Deps) {
 
 export function sendMenuCommand(win: BrowserWindow, id: string) {
   win.webContents.send("menu-command", id)
+}
+
+export function sendToAllWindows(channel: string, payload: unknown) {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed()) continue
+    win.webContents.send(channel, payload)
+  }
 }
 
 export function sendDeepLinks(win: BrowserWindow, urls: string[]) {
