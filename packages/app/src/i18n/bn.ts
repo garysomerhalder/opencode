@@ -1200,6 +1200,8 @@ export const dict: Record<string, string> = {
   "settings.commands.description": "কমান্ড সেটিংস এখানে কনফিগারযোগ্য হবে।",
   "settings.mcp.title": "MCP",
   "settings.mcp.description": "MCP সেটিংস এখানে কনফিগার করা যাবে।",
+  "settings.plugins.title": "Plugins",
+  "settings.plugins.description": "List, install, and remove plugins.",
   "settings.permissions.title": "অনুমতি",
   "settings.permissions.description": "সার্ভার ডিফল্টরূপে কোন সরঞ্জামগুলি ব্যবহার করতে পারে তা নিয়ন্ত্রণ করুন।",
   "settings.permissions.section.tools": "টুলস",

@@ -1121,6 +1121,8 @@ export const dict = {
   "settings.commands.description": "ستكون إعدادات الأمر قابلة للتكوين هنا.",
   "settings.mcp.title": "MCP",
   "settings.mcp.description": "ستكون إعدادات MCP قابلة للتكوين هنا.",
+  "settings.plugins.title": "Plugins",
+  "settings.plugins.description": "List, install, and remove plugins.",
   "settings.permissions.title": "الأذونات",
   "settings.permissions.description": "تحكم في الأدوات التي يمكن للخادم استخدامها بشكل افتراضي.",
   "settings.permissions.section.tools": "الأدوات",

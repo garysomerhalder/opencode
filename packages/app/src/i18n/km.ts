@@ -1199,6 +1199,8 @@ export const dict = {
   "settings.commands.description": "ការកំណត់ពាក្យបញ្ជានឹងអាចកំណត់បាននៅទីនេះ។",
   "settings.mcp.title": "MCP",
   "settings.mcp.description": "ការកំណត់ MCP នឹងអាចកំណត់បាននៅទីនេះ។",
+  "settings.plugins.title": "Plugins",
+  "settings.plugins.description": "List, install, and remove plugins.",
   "settings.permissions.title": "ការអនុញ្ញាត",
   "settings.permissions.description": "គ្រប់គ្រងឧបករណ៍អ្វីដែលម៉ាស៊ីនមេអាចប្រើតាមលំនាំដើម។",
   "settings.permissions.section.tools": "ឧបករណ៍",

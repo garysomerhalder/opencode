@@ -1208,6 +1208,8 @@ export const dict = {
   "settings.commands.description": "کمانڈ دی ترتیبات ایتھے ترتیب دے قابل ہون گیاں۔",
   "settings.mcp.title": "MCP",
   "settings.mcp.description": "MCP ترتیبات ایتھے ترتیب دے قابل ہون گیاں۔",
+  "settings.plugins.title": "Plugins",
+  "settings.plugins.description": "List, install, and remove plugins.",
   "settings.permissions.title": "اجازتاں",
   "settings.permissions.description": "کنٹرول کرو کہ سرور پہلے توں طے شدہ طور تے کیہڑے اوزار استعمال کر سکدا اے۔",
   "settings.permissions.section.tools": "ٹول",

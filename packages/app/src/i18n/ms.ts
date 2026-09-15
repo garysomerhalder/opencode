@@ -1205,6 +1205,8 @@ export const dict = {
   "settings.commands.description": "Tetapan arahan boleh dikonfigurasi di sini.",
   "settings.mcp.title": "MCP",
   "settings.mcp.description": "Tetapan MCP boleh dikonfigurasi di sini.",
+  "settings.plugins.title": "Plugins",
+  "settings.plugins.description": "List, install, and remove plugins.",
   "settings.permissions.title": "Kebenaran",
   "settings.permissions.description": "Kawal alat yang boleh digunakan oleh pelayan secara lalai.",
   "settings.permissions.section.tools": "Alat",

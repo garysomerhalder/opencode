@@ -1217,6 +1217,8 @@ export const dict = {
   "settings.commands.description": "A parancsbeállítások itt konfigurálhatók.",
   "settings.mcp.title": "MCP",
   "settings.mcp.description": "A MCP beállítások itt konfigurálhatók.",
+  "settings.plugins.title": "Plugins",
+  "settings.plugins.description": "List, install, and remove plugins.",
   "settings.permissions.title": "Engedélyek",
   "settings.permissions.description":
     "Szabályozza, hogy a szerver milyen eszközöket használhat alapértelmezés szerint.",

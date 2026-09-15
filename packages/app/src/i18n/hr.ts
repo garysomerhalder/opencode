@@ -1217,6 +1217,8 @@ export const dict = {
   "settings.commands.description": "Ovdje će se moći konfigurirati postavke naredbi.",
   "settings.mcp.title": "MCP",
   "settings.mcp.description": "Ovdje će se moći konfigurirati postavke MCP.",
+  "settings.plugins.title": "Plugins",
+  "settings.plugins.description": "List, install, and remove plugins.",
   "settings.permissions.title": "Dozvole",
   "settings.permissions.description": "Kontrolirajte koje alate poslužitelj može koristiti prema zadanim postavkama.",
   "settings.permissions.section.tools": "Alati",

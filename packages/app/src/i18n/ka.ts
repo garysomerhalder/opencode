@@ -1204,6 +1204,8 @@ export const dict = {
   "settings.commands.description": "ბრძანების პარამეტრების კონფიგურაცია იქნება აქ.",
   "settings.mcp.title": "MCP",
   "settings.mcp.description": "MCP პარამეტრების კონფიგურაცია აქ იქნება შესაძლებელი.",
+  "settings.plugins.title": "Plugins",
+  "settings.plugins.description": "List, install, and remove plugins.",
   "settings.permissions.title": "ნებართვები",
   "settings.permissions.description": "აკონტროლეთ, რომელი ხელსაწყოების გამოყენება შეუძლია სერვერს ნაგულისხმევად.",
   "settings.permissions.section.tools": "ხელსაწყოები",

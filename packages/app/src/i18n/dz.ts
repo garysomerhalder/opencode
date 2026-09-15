@@ -1226,6 +1226,8 @@ export const dict: Record<string, string> = {
   "settings.commands.description": "བརྡ་བཀོད་སྒྲིག་སྟངས་ཚུ་ ནཱ་ལུ་རིམ་སྒྲིག་འབད་བཏུབ་འོང་།",
   "settings.mcp.title": "MCP།",
   "settings.mcp.description": "MCP སྒྲིག་སྟངས་ཚུ་ ནཱ་ལུ་རིམ་སྒྲིག་འབད་བཏུབ་འོང་།",
+  "settings.plugins.title": "Plugins",
+  "settings.plugins.description": "List, install, and remove plugins.",
   "settings.permissions.title": "གནང་བ་ཚུ།",
   "settings.permissions.description": "སར་བར་གྱིས་སྔོན་སྒྲིག་གིས་ལག་ཆས་ག་ཅི་ལག་ལེན་འཐབ་ཚུགསཔ་ཨིན་ན་ཚད་འཛིན་འབད།",
   "settings.permissions.section.tools": "ཐབས༌ཤེས",

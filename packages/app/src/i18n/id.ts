@@ -1293,6 +1293,8 @@ export const dict = {
   "settings.commands.description": "Pengaturan perintah akan dapat dikonfigurasi di sini.",
   "settings.mcp.title": "MCP",
   "settings.mcp.description": "Pengaturan MCP akan dapat dikonfigurasi di sini.",
+  "settings.plugins.title": "Plugins",
+  "settings.plugins.description": "List, install, and remove plugins.",
 
   "settings.permissions.title": "Izin",
   "settings.permissions.description": "Kontrol alat apa yang dapat digunakan server secara bawaan.",

@@ -1210,6 +1210,8 @@ export const dict = {
   "settings.commands.description": "Setările comenzilor vor putea fi configurate aici.",
   "settings.mcp.title": "MCP",
   "settings.mcp.description": "Setările MCP vor putea fi configurate aici.",
+  "settings.plugins.title": "Plugins",
+  "settings.plugins.description": "List, install, and remove plugins.",
   "settings.permissions.title": "Permisiuni",
   "settings.permissions.description": "Controlează ce unelte poate folosi serverul implicit.",
   "settings.permissions.section.tools": "Unelte",

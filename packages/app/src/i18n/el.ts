@@ -1220,6 +1220,8 @@ export const dict = {
   "settings.commands.description": "Οι ρυθμίσεις εντολών θα μπορούν να διαμορφωθούν εδώ.",
   "settings.mcp.title": "MCP",
   "settings.mcp.description": "MCP οι ρυθμίσεις θα μπορούν να διαμορφωθούν εδώ.",
+  "settings.plugins.title": "Plugins",
+  "settings.plugins.description": "List, install, and remove plugins.",
   "settings.permissions.title": "Δικαιώματα",
   "settings.permissions.description": "Ελέγξτε ποια εργαλεία μπορεί να χρησιμοποιήσει ο διακομιστής από προεπιλογή.",
   "settings.permissions.section.tools": "Εργαλεία",

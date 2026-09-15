@@ -1209,6 +1209,8 @@ export const dict = {
   "settings.commands.description": "Овде ће се моћи конфигурисати подешавања команде.",
   "settings.mcp.title": "MCP",
   "settings.mcp.description": "MCP подешавања ће се моћи конфигурисати овде.",
+  "settings.plugins.title": "Plugins",
+  "settings.plugins.description": "List, install, and remove plugins.",
   "settings.permissions.title": "дозволе",
   "settings.permissions.description": "Контролишите које алатке сервер може да користи подразумевано.",
   "settings.permissions.section.tools": "Алати",

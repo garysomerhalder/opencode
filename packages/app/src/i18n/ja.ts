@@ -1111,6 +1111,8 @@ export const dict = {
   "settings.commands.description": "コマンド設定は今後ここで構成できるようになります。",
   "settings.mcp.title": "MCP",
   "settings.mcp.description": "MCP設定は今後ここで構成できるようになります。",
+  "settings.plugins.title": "Plugins",
+  "settings.plugins.description": "List, install, and remove plugins.",
   "settings.permissions.title": "権限",
   "settings.permissions.description": "サーバーがデフォルトで使用できるツールを制御します。",
   "settings.permissions.section.tools": "ツール",

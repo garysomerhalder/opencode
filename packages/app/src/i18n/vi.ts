@@ -1216,6 +1216,8 @@ export const dict = {
   "settings.commands.description": "Cài đặt lệnh sẽ được cấu hình ở đây.",
   "settings.mcp.title": "MCP",
   "settings.mcp.description": "Có thể cấu hình cài đặt MCP tại đây.",
+  "settings.plugins.title": "Plugins",
+  "settings.plugins.description": "List, install, and remove plugins.",
   "settings.permissions.title": "Quyền",
   "settings.permissions.description": "Kiểm soát những công cụ mà máy chủ có thể sử dụng theo mặc định.",
   "settings.permissions.section.tools": "Công cụ",

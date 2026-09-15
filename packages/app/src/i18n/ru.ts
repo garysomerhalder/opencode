@@ -1203,6 +1203,8 @@ export const dict = {
   "settings.commands.description": "Настройки команд будут доступны здесь.",
   "settings.mcp.title": "MCP",
   "settings.mcp.description": "Настройки MCP будут доступны здесь.",
+  "settings.plugins.title": "Plugins",
+  "settings.plugins.description": "List, install, and remove plugins.",
 
   "settings.permissions.title": "Разрешения",
   "settings.permissions.description": "Укажите, какие инструменты сервер может использовать по умолчанию.",

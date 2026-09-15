@@ -1202,6 +1202,8 @@ export const dict = {
   "settings.commands.description": "Skipanarinnstillingar verða stillaðar her.",
   "settings.mcp.title": "MCP",
   "settings.mcp.description": "MCP innstillingar verða stillaðar her.",
+  "settings.plugins.title": "Plugins",
+  "settings.plugins.description": "List, install, and remove plugins.",
   "settings.permissions.title": "Loyvi",
   "settings.permissions.description": "Stýr hvørji tól ambætarin kann brúka sum standard.",
   "settings.permissions.section.tools": "Tól",

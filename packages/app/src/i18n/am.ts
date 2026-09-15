@@ -1178,6 +1178,8 @@ export const dict = {
   "settings.commands.description": "የትእዛዝ ቅንብሮች እዚህ ይዋቀራሉ።",
   "settings.mcp.title": "MCP",
   "settings.mcp.description": "MCPቅንብሮች እዚህ ይዋቀራሉ።",
+  "settings.plugins.title": "Plugins",
+  "settings.plugins.description": "List, install, and remove plugins.",
   "settings.permissions.title": "ፍቃዶች",
   "settings.permissions.description": "አገልጋዩ በነባሪነት ምን ዓይነት መሳሪያዎችን መጠቀም እንደሚችል ይቆጣጠሩ።",
   "settings.permissions.section.tools": "መሳሪያዎች",

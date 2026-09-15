@@ -1203,6 +1203,8 @@ export const dict = {
   "settings.commands.description": "تنظیمات فرمان در اینجا قابل تنظیم خواهد بود.",
   "settings.mcp.title": "MCP",
   "settings.mcp.description": "تنظیمات MCP در اینجا قابل تنظیم خواهند بود.",
+  "settings.plugins.title": "Plugins",
+  "settings.plugins.description": "List, install, and remove plugins.",
   "settings.permissions.title": "مجوزها",
   "settings.permissions.description": "کنترل کنید که سرور به طور پیش فرض از چه ابزارهایی می تواند استفاده کند.",
   "settings.permissions.section.tools": "ابزار",

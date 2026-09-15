@@ -1216,6 +1216,8 @@ export const dict = {
   "settings.commands.description": "Əmr tənzimləmələri burada konfiqurasiya edilə biləcək.",
   "settings.mcp.title": "MCP",
   "settings.mcp.description": "MCP tənzimləmələri burada konfiqurasiya edilə biləcək.",
+  "settings.plugins.title": "Plugins",
+  "settings.plugins.description": "List, install, and remove plugins.",
   "settings.permissions.title": "İcazələr",
   "settings.permissions.description": "Serverin standart olaraq hansı alətləri istifadə edə biləcəyini idarə edin.",
   "settings.permissions.section.tools": "Alətlər",

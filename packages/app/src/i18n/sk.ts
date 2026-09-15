@@ -1207,6 +1207,8 @@ export const dict = {
   "settings.commands.description": "Nastavenia príkazov budú konfigurovateľné tu.",
   "settings.mcp.title": "MCP",
   "settings.mcp.description": "Nastavenia MCP budú konfigurovateľné tu.",
+  "settings.plugins.title": "Plugins",
+  "settings.plugins.description": "List, install, and remove plugins.",
   "settings.permissions.title": "Oprávnenia",
   "settings.permissions.description": "Spravujte, aké nástroje môže server používať predvolene.",
   "settings.permissions.section.tools": "Nástroje",

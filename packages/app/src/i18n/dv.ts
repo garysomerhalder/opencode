@@ -1223,6 +1223,8 @@ export const dict = {
   "settings.commands.description": "ކޮމާންޑް ސެޓިންގސް މިތަނުގައި ކޮންފިގްރޭޓް ކުރެވޭނެއެވެ.",
   "settings.mcp.title": "MCP އެވެ",
   "settings.mcp.description": "MCP ސެޓިންގސް މިތަނުގައި ކޮންފިގްރޭޓް ކުރެވޭނެއެވެ.",
+  "settings.plugins.title": "Plugins",
+  "settings.plugins.description": "List, install, and remove plugins.",
   "settings.permissions.title": "ހުއްދަތައް",
   "settings.permissions.description": "ސަރވަރ އަށް ޑިފޯލްޓްކޮށް ބޭނުންކުރެވޭނީ ކޮން ޓޫލްތަކެއްކަން ކޮންޓްރޯލްކުރުން.",
   "settings.permissions.section.tools": "ސާމާނުތައް",

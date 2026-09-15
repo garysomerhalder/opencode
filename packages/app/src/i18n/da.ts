@@ -1069,6 +1069,8 @@ export const dict = {
   "settings.commands.description": "Kommandoindstillinger vil kunne konfigureres her.",
   "settings.mcp.title": "MCP",
   "settings.mcp.description": "MCP-indstillinger vil kunne konfigureres her.",
+  "settings.plugins.title": "Plugins",
+  "settings.plugins.description": "List, install, and remove plugins.",
 
   "settings.permissions.title": "Tilladelser",
   "settings.permissions.description": "Styr hvilke værktøjer serveren kan bruge som standard.",

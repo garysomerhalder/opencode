@@ -1222,6 +1222,8 @@ export const dict = {
   "settings.commands.description": "ကွန်မန်းဆက်တင်များကို ဤနေရာတွင် စီစဉ်သတ်မှတ်နိုင်မည်ဖြစ်သည်။",
   "settings.mcp.title": "MCP",
   "settings.mcp.description": "MCP ဆက်တင်များကို ဤနေရာတွင် ပြင်ဆင်သတ်မှတ်နိုင်ပါသည်။",
+  "settings.plugins.title": "Plugins",
+  "settings.plugins.description": "List, install, and remove plugins.",
   "settings.permissions.title": "ခွင့်ပြုချက်များ",
   "settings.permissions.description": "မူရင်းအတိုင်း ဆာဗာအသုံးပြုနိုင်သည့် ကိရိယာများကို ထိန်းချုပ်ပါ။",
   "settings.permissions.section.tools": "ကိရိယာများ",

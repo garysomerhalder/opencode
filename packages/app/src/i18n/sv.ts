@@ -1208,6 +1208,8 @@ export const dict = {
   "settings.commands.description": "Kommandoinställningarna kommer att kunna konfigureras här.",
   "settings.mcp.title": "MCP",
   "settings.mcp.description": "MCP-inställningar kommer att kunna konfigureras här.",
+  "settings.plugins.title": "Plugins",
+  "settings.plugins.description": "List, install, and remove plugins.",
   "settings.permissions.title": "Behörigheter",
   "settings.permissions.description": "Kontrollera vilka verktyg servern kan använda som standard.",
   "settings.permissions.section.tools": "Verktyg",

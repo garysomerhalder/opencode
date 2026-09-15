@@ -1201,6 +1201,8 @@ export const dict: Record<string, string> = {
   "settings.commands.description": "විධාන සැකසුම් මෙහි වින්‍යාසගත කළ හැක.",
   "settings.mcp.title": "MCP",
   "settings.mcp.description": "MCP සැකසීම් මෙහි වින්‍යාස කළ හැක.",
+  "settings.plugins.title": "Plugins",
+  "settings.plugins.description": "List, install, and remove plugins.",
   "settings.permissions.title": "අවසර",
   "settings.permissions.description": "පෙරනිමියෙන් සේවාදායකයට භාවිතා කළ හැකි මෙවලම් පාලනය කරන්න.",
   "settings.permissions.section.tools": "මෙවලම්",

@@ -1174,6 +1174,8 @@ export const dict = {
 
   "settings.mcp.title": "MCP",
   "settings.mcp.description": "可在此处配置 MCP 设置。",
+  "settings.plugins.title": "Plugins",
+  "settings.plugins.description": "List, install, and remove plugins.",
 
   "settings.permissions.title": "权限",
   "settings.permissions.description": "控制服务器默认可以使用哪些工具。",

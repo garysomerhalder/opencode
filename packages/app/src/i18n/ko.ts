@@ -832,6 +832,8 @@ export const dict = {
   "settings.commands.description": "명령어 설정은 여기서 구성할 수 있습니다.",
   "settings.mcp.title": "MCP",
   "settings.mcp.description": "MCP 설정은 여기서 구성할 수 있습니다.",
+  "settings.plugins.title": "Plugins",
+  "settings.plugins.description": "List, install, and remove plugins.",
   "settings.permissions.title": "권한",
   "settings.permissions.description": "서버가 기본적으로 사용할 수 있는 도구를 제어합니다.",
   "settings.permissions.section.tools": "도구",

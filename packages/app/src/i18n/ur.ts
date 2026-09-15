@@ -1212,6 +1212,8 @@ export const dict = {
   "settings.commands.description": "کمانڈ کی ترتیبات یہاں قابل ترتیب ہوں گی۔",
   "settings.mcp.title": "MCP",
   "settings.mcp.description": "MCP ترتیبات یہاں قابل ترتیب ہوں گی۔",
+  "settings.plugins.title": "Plugins",
+  "settings.plugins.description": "List, install, and remove plugins.",
   "settings.permissions.title": "اجازتیں",
   "settings.permissions.description": "کنٹرول کریں کہ سرور کن ٹولز کو بطور ڈیفالٹ استعمال کر سکتا ہے۔",
   "settings.permissions.section.tools": "اوزار",

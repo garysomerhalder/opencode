@@ -1216,6 +1216,8 @@ export const dict = {
   "settings.commands.description": "Энд командын тохиргоог хийх боломжтой.",
   "settings.mcp.title": "MCP",
   "settings.mcp.description": "MCP тохиргоог энд тохируулах боломжтой.",
+  "settings.plugins.title": "Plugins",
+  "settings.plugins.description": "List, install, and remove plugins.",
   "settings.permissions.title": "Зөвшөөрөл",
   "settings.permissions.description": "Анхдагчаар сервер ямар хэрэгслийг ашиглаж болохыг хянах.",
   "settings.permissions.section.tools": "Багаж хэрэгсэл",

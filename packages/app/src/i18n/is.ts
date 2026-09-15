@@ -1206,6 +1206,8 @@ export const dict = {
   "settings.commands.description": "Skipunarstillingar verða stillanlegar hér.",
   "settings.mcp.title": "MCP",
   "settings.mcp.description": "MCP stillingar verða stillanlegar hér.",
+  "settings.plugins.title": "Plugins",
+  "settings.plugins.description": "List, install, and remove plugins.",
   "settings.permissions.title": "Heimildir",
   "settings.permissions.description": "Stjórnaðu því hvaða verkfæri þjónninn getur notað sjálfgefið.",
   "settings.permissions.section.tools": "Verkfæri",

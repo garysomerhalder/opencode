@@ -1218,6 +1218,8 @@ export const dict = {
   "settings.commands.description": "Buyruq sozlamalari bu yerda sozlanishi mumkin.",
   "settings.mcp.title": "MCP",
   "settings.mcp.description": "MCP sozlamalari bu yerda sozlanishi mumkin.",
+  "settings.plugins.title": "Plugins",
+  "settings.plugins.description": "List, install, and remove plugins.",
   "settings.permissions.title": "Ruxsatlar",
   "settings.permissions.description": "Server sukut bo'yicha qanday vositalardan foydalanishi mumkinligini boshqaring.",
   "settings.permissions.section.tools": "Asboblar",

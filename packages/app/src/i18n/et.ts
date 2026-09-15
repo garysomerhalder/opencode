@@ -1199,6 +1199,8 @@ export const dict = {
   "settings.commands.description": "Käskude sätteid saab siin konfigureerida.",
   "settings.mcp.title": "MCP",
   "settings.mcp.description": "MCP seadeid saab siin konfigureerida.",
+  "settings.plugins.title": "Plugins",
+  "settings.plugins.description": "List, install, and remove plugins.",
   "settings.permissions.title": "load",
   "settings.permissions.description": "Saate juhtida, milliseid tööriistu server vaikimisi kasutada saab.",
   "settings.permissions.section.tools": "Tööriistad",

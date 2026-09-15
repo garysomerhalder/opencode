@@ -1207,6 +1207,8 @@ export const dict = {
   "settings.commands.description": "Buýruk sazlamalary bu ýerde düzülip bilner.",
   "settings.mcp.title": "MCP",
   "settings.mcp.description": "MCP sazlamalary bu ýerde düzülip bilner.",
+  "settings.plugins.title": "Plugins",
+  "settings.plugins.description": "List, install, and remove plugins.",
   "settings.permissions.title": "Rugsatlar",
   "settings.permissions.description": "Serweriň haýsy gurallary ulanyp biljekdigini dolandyryň.",
   "settings.permissions.section.tools": "Gurallar",

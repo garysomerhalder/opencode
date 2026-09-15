@@ -1309,6 +1309,8 @@ export const dict = {
   "settings.commands.description": "Налаштування команд будуть доступні тут.",
   "settings.mcp.title": "MCP",
   "settings.mcp.description": "Налаштування MCP будуть доступні тут.",
+  "settings.plugins.title": "Plugins",
+  "settings.plugins.description": "List, install, and remove plugins.",
 
   "settings.permissions.title": "Дозволи",
   "settings.permissions.description": "Керуйте тим, які інструменти сервер може використовувати за замовчуванням.",

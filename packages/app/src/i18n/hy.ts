@@ -1212,6 +1212,8 @@ export const dict = {
   "settings.commands.description": "Հրամանի կարգավորումները կկարգավորվեն այստեղ։",
   "settings.mcp.title": "MCP",
   "settings.mcp.description": "MCP կարգավորումները կկարգավորվեն այստեղ։",
+  "settings.plugins.title": "Plugins",
+  "settings.plugins.description": "List, install, and remove plugins.",
   "settings.permissions.title": "Թույլտվություններ",
   "settings.permissions.description": "Վերահսկեք, թե ինչ գործիքներ կարող է օգտագործել սերվերը լռելյայն։",
   "settings.permissions.section.tools": "Գործիքներ",

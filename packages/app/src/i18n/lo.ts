@@ -1196,6 +1196,8 @@ export const dict = {
   "settings.commands.description": "ການຕັ້ງຄ່າຄໍາສັ່ງຈະຖືກຕັ້ງຄ່າໄດ້ທີ່ນີ້.",
   "settings.mcp.title": "MCP",
   "settings.mcp.description": "ການຕັ້ງຄ່າ MCP ຈະຖືກຕັ້ງຄ່າໄດ້ທີ່ນີ້.",
+  "settings.plugins.title": "Plugins",
+  "settings.plugins.description": "List, install, and remove plugins.",
   "settings.permissions.title": "ການອະນຸຍາດ",
   "settings.permissions.description": "ຄວບຄຸມເຄື່ອງມືທີ່ເຊີບເວີໃຊ້ໄດ້ໂດຍຄ່າເລີ່ມຕົ້ນ.",
   "settings.permissions.section.tools": "ເຄື່ອງມື",

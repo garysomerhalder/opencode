@@ -1126,6 +1126,8 @@ export const dict = {
   "settings.commands.description": "Le impostazioni dei comandi saranno configurabili qui.",
   "settings.mcp.title": "MCP",
   "settings.mcp.description": "Le impostazioni MCP saranno configurabili qui.",
+  "settings.plugins.title": "Plugins",
+  "settings.plugins.description": "List, install, and remove plugins.",
   "settings.permissions.title": "Autorizzazioni",
   "settings.permissions.description":
     "Controlla quali strumenti può utilizzare il server per impostazione predefinita.",

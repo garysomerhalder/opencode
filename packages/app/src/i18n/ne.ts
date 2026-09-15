@@ -1205,6 +1205,8 @@ export const dict: Record<string, string> = {
   "settings.commands.description": "आदेश सेटिङहरू यहाँ कन्फिगर योग्य हुनेछ।",
   "settings.mcp.title": "MCP",
   "settings.mcp.description": "MCP सेटिङहरू यहाँ कन्फिगर योग्य हुनेछन्।",
+  "settings.plugins.title": "Plugins",
+  "settings.plugins.description": "List, install, and remove plugins.",
   "settings.permissions.title": "अनुमतिहरू",
   "settings.permissions.description": "सर्भरले पूर्वनिर्धारित रूपमा प्रयोग गर्न सक्ने उपकरणहरू नियन्त्रण गर्नुहोस्।",
   "settings.permissions.section.tools": "उपकरणहरू",

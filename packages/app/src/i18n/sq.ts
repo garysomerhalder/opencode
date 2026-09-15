@@ -1211,6 +1211,8 @@ export const dict = {
   "settings.commands.description": "Cilësimet e komandës do të konfigurohen këtu.",
   "settings.mcp.title": "MCP",
   "settings.mcp.description": "Cilësimet MCP do të konfigurohen këtu.",
+  "settings.plugins.title": "Plugins",
+  "settings.plugins.description": "List, install, and remove plugins.",
   "settings.permissions.title": "Lejet",
   "settings.permissions.description": "Kontrolloni se cilat mjete mund të përdorë serveri si parazgjedhje.",
   "settings.permissions.section.tools": "Mjetet",

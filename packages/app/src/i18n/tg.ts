@@ -1212,6 +1212,8 @@ export const dict = {
   "settings.commands.description": "Танзимоти фармон дар ин ҷо танзим карда мешавад.",
   "settings.mcp.title": "MCP",
   "settings.mcp.description": "MCP танзимот дар ин ҷо танзим карда мешаванд.",
+  "settings.plugins.title": "Plugins",
+  "settings.plugins.description": "List, install, and remove plugins.",
   "settings.permissions.title": "Иҷозатҳо",
   "settings.permissions.description": "Назорат кунед, ки кадом асбобҳоро сервер бо нобаёнӣ истифода бурда метавонад.",
   "settings.permissions.section.tools": "Воситаҳо",

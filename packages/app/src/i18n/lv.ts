@@ -1210,6 +1210,8 @@ export const dict = {
   "settings.commands.description": "Šeit varēs konfigurēt komandu iestatījumus.",
   "settings.mcp.title": "MCP",
   "settings.mcp.description": "Šeit varēs konfigurēt MCP iestatījumus.",
+  "settings.plugins.title": "Plugins",
+  "settings.plugins.description": "List, install, and remove plugins.",
   "settings.permissions.title": "Atļaujas",
   "settings.permissions.description": "Kontrolējiet, kādus rīkus serveris var izmantot pēc noklusējuma.",
   "settings.permissions.section.tools": "Rīki",

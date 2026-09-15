@@ -1102,6 +1102,8 @@ export const dict = {
   "settings.commands.description": "Komentoasetukset voidaan määrittää täällä.",
   "settings.mcp.title": "MCP",
   "settings.mcp.description": "MCP-asetukset voidaan määrittää täällä.",
+  "settings.plugins.title": "Plugins",
+  "settings.plugins.description": "List, install, and remove plugins.",
   "settings.permissions.title": "Käyttöoikeudet",
   "settings.permissions.description": "Hallitse, mitä työkaluja palvelin voi käyttää oletuksena.",
   "settings.permissions.section.tools": "Työkalut",

@@ -1220,6 +1220,8 @@ export const dict = {
   "settings.commands.description": "Čia bus galima konfigūruoti komandų nustatymus.",
   "settings.mcp.title": "MCP",
   "settings.mcp.description": "Čia bus galima konfigūruoti MCP nustatymus.",
+  "settings.plugins.title": "Plugins",
+  "settings.plugins.description": "List, install, and remove plugins.",
   "settings.permissions.title": "Leidimai",
   "settings.permissions.description":
     "Valdykite, kokius įrankius serveris gali naudoti pagal numatytuosius nustatymus.",

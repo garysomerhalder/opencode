@@ -16,8 +16,7 @@ import type { PluginListResponse } from "@opencode-ai/sdk/v2/client"
 type Row = PluginListResponse["plugins"][number]
 type Removed = { spec: string; global: boolean }
 
-export const DialogPluginManager: Component<{ directory?: string }> = (props) => {
-  const dialog = useDialog()
+export const PluginManagerView: Component<{ directory?: string; heading?: boolean }> = (props) => {
   const language = useLanguage()
   const serverSDK = useServerSDK()
 
@@ -145,8 +144,8 @@ export const DialogPluginManager: Component<{ directory?: string }> = (props) =>
     <Show
       when={view() === "list"}
       fallback={
-        <Dialog
-          title={
+        <div>
+          <div class="px-2.5 pb-2">
             <IconButton
               tabIndex={-1}
               icon="arrow-left"
@@ -154,9 +153,7 @@ export const DialogPluginManager: Component<{ directory?: string }> = (props) =>
               onClick={() => setView("list")}
               aria-label={language.t("common.goBack")}
             />
-          }
-          transition
-        >
+          </div>
           <form onSubmit={submitInstall} class="px-2.5 pb-6 flex flex-col gap-6">
             <div class="px-2.5 flex flex-col gap-1">
               <div class="text-16-medium text-text-strong">{language.t("dialog.plugin.install.title")}</div>
@@ -196,14 +193,18 @@ export const DialogPluginManager: Component<{ directory?: string }> = (props) =>
               </Button>
             </div>
           </form>
-        </Dialog>
+        </div>
       }
     >
-      <Dialog
-        title={language.t("dialog.plugin.title")}
-        description={language.t("dialog.plugin.description", { count: items().length })}
-      >
         <div class="flex flex-col gap-3 px-3 pb-3">
+          <Show when={props.heading !== false}>
+            <div class="flex flex-col gap-1 px-1">
+              <div class="text-16-medium text-text-strong">{language.t("dialog.plugin.title")}</div>
+              <p class="text-14-regular text-text-base">
+                {language.t("dialog.plugin.description", { count: items().length })}
+              </p>
+            </div>
+          </Show>
           <List
             search={{ placeholder: language.t("common.search.placeholder"), autofocus: true }}
             emptyMessage={language.t("dialog.plugin.empty")}
@@ -269,8 +270,15 @@ export const DialogPluginManager: Component<{ directory?: string }> = (props) =>
             {language.t("dialog.plugin.install.open")}
           </Button>
         </div>
-      </Dialog>
     </Show>
+  )
+}
+
+export const DialogPluginManager: Component<{ directory?: string }> = (props) => {
+  return (
+    <Dialog>
+      <PluginManagerView directory={props.directory} />
+    </Dialog>
   )
 }
 
