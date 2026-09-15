@@ -7,10 +7,11 @@
   "description": "Automatically pick the reasoning-effort tier and route grunt work to the small model.",
   "scripts": {
     "typecheck": "tsgo --noEmit",
+    "build": "tsc",
     "test": "bun test"
   },
   "exports": {
-    "./server": "./src/index.ts"
+    "./server": "./dist/index.js"
   },
   "dependencies": {
     "@opencode-ai/plugin": "workspace:*",

@@ -68,6 +68,39 @@ describe("chat.message hook", () => {
     await hooks["chat.message"]!({ sessionID: "ses_test", agent: "build", variant: "max" }, output as any)
     expect(output.message.model.variant).toBe("max")
   })
+
+  test("strips image/file parts when routing to the small model", async () => {
+    const hooks = await server({ client: mockClient({ small_model: "openai/gpt-5-nano" }) } as any, {})
+    const output: MessageOutput = {
+      message: { model: { providerID: "main", modelID: "big" } },
+      parts: [
+        { type: "text", text: "Summarize what this file does" },
+        { type: "file", id: "p1", mime: "image/png", url: "data:image/png;base64,AAAA" },
+        { type: "file", id: "p2", mime: "text/plain", url: "file:///tmp/a.txt" },
+      ],
+    }
+    await hooks["chat.message"]!({ sessionID: "ses_test", agent: "build", variant: undefined }, output as any)
+    expect(output.message.model.providerID).toBe("openai")
+    expect(output.message.model.modelID).toBe("gpt-5-nano")
+    expect(output.parts).toHaveLength(3)
+    expect(output.parts[0].text).toBe("Summarize what this file does")
+    for (const part of output.parts.slice(1)) {
+      expect(part.type).toBe("text")
+      expect(part.text).toContain("omitted")
+    }
+    expect(output.parts[1].text).toContain("image")
+  })
+
+  test("routes text-only grunt work without adding placeholders", async () => {
+    const hooks = await server({ client: mockClient({ small_model: "openai/gpt-5-nano" }) } as any, {})
+    const output: MessageOutput = {
+      message: { model: { providerID: "main", modelID: "big" } },
+      parts: [{ type: "text", text: "Summarize what this file does" }],
+    }
+    await hooks["chat.message"]!({ sessionID: "ses_test", agent: "build", variant: undefined }, output as any)
+    expect(output.parts).toHaveLength(1)
+    expect(output.parts[0].text).toBe("Summarize what this file does")
+  })
 })
 
 describe("tool.execute.after read summarization", () => {

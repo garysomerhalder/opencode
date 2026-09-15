@@ -64,8 +64,7 @@ export const SidebarGoalLoop: Component = () => {
   const lastView = () => describeLastInput(last())
 
   // Refresh the remembered input whenever the section is idle, so the idle
-  // state reflects the most recent run. Smart-start itself always reads
-  // last() fresh via the session.goalLoop command (see start()).
+  // state reflects the most recent run. The manager reads last() fresh itself.
   createEffect(() => {
     if (active()) return
     void Promise.resolve()
@@ -107,11 +106,9 @@ export const SidebarGoalLoop: Component = () => {
     })
   }
 
-  // Smart-start: reuse the session.goalLoop command registered in app.tsx
-  // (DesktopCommands.startGoalLoop) — it starts from last() when present and
-  // opens the goal form otherwise. Triggering keeps that flow in one place
-  // instead of duplicating it here.
-  const start = () => {
+  // Single entry point: the session.goalLoop command opens the goal manager
+  // (Active + New in one place). This strip only launches it.
+  const openManager = () => {
     command.trigger("session.goalLoop")
   }
 
@@ -127,12 +124,6 @@ export const SidebarGoalLoop: Component = () => {
         description: err instanceof Error ? err.message : String(err),
       })
     }
-  }
-
-  // The wizard dialog is opened through its command (which dynamic-imports
-  // the dialog like the other openers), so this file imports nothing from it.
-  const openWizard = () => {
-    command.trigger("session.goalWizard")
   }
 
   // Desktop-only surface: without platform.goalLoop every action below is a
@@ -156,15 +147,15 @@ export const SidebarGoalLoop: Component = () => {
             fallback={
               <>
                 <p class="min-w-0 truncate px-2 text-12-regular text-text-weak">
-                  {language.t("command.session.goalWizard.description")}
+                  {language.t("command.session.goalLoop.description")}
                 </p>
                 <button
                   type="button"
-                  data-action="goal-loop-open-wizard"
-                  onClick={openWizard}
+                  data-action="goal-loop-open-manager"
+                  onClick={openManager}
                   class="flex w-full min-w-0 items-center gap-1.5 rounded-md px-2 py-1 text-left text-12-medium text-text-strong hover:bg-surface-raised-base-hover"
                 >
-                  <span class="min-w-0 flex-1 truncate">{language.t("dialog.goalWizard.title")}</span>
+                  <span class="min-w-0 flex-1 truncate">{language.t("command.session.goalLoop")}</span>
                 </button>
               </>
             }
@@ -182,11 +173,11 @@ export const SidebarGoalLoop: Component = () => {
                 </Show>
                 <button
                   type="button"
-                  data-action="goal-loop-start"
-                  onClick={start}
+                  data-action="goal-loop-open-manager"
+                  onClick={openManager}
                   class="flex w-full min-w-0 items-center gap-1.5 rounded-md px-2 py-1 text-left text-12-medium text-text-strong hover:bg-surface-raised-base-hover"
                 >
-                  <span class="min-w-0 flex-1 truncate">{language.t("dialog.goalLoop.action.start")}</span>
+                  <span class="min-w-0 flex-1 truncate">{language.t("command.session.goalLoop")}</span>
                 </button>
               </>
             )}

@@ -39,7 +39,6 @@ import {
 import { Dynamic } from "solid-js/web"
 import { makeEventListener } from "@solid-primitives/event-listener"
 import { CommandProvider, useCommand, type CommandOption } from "@/context/command"
-import { showToast } from "@/utils/toast"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { useGoalLoopNotifications } from "@/goal-loop/notify"
 import { CommentsProvider } from "@/context/comments"
@@ -332,54 +331,11 @@ function DesktopCommands() {
   const platform = usePlatform()
   useGoalLoopNotifications()
 
-  function openGoalLoop() {
+  function openGoalManager() {
     if (!platform.goalLoop) return
-    void import("@/components/dialog-goal-loop").then((x) => {
-      dialog.show(() => <x.DialogGoalLoop />)
+    void import("@/components/dialog-goal-manager").then((x) => {
+      dialog.show(() => <x.DialogGoalManager />)
     })
-  }
-
-  function openGoalTicket() {
-    if (!platform.goalLoop) return
-    void import("@/components/dialog-goal-ticket").then((x) => {
-      dialog.show(() => <x.DialogGoalTicket />)
-    })
-  }
-
-  function openGoalWizard() {
-    if (!platform.goalLoop) return
-    void import("@/components/dialog-goal-wizard").then((x) => {
-      dialog.show(() => <x.DialogGoalWizard />)
-    })
-  }
-
-  function startGoalLoop() {
-    const api = platform.goalLoop
-    if (!api) return
-    void (async () => {
-      try {
-        const last = await api.last?.()
-        if (last && last.goal.trim().length > 0 && last.directory.trim().length > 0) {
-          await api.start(last)
-          showToast({ title: language.t("toast.goalLoop.started.title") })
-          return
-        }
-      } catch (err) {
-        // A running loop rejects the start. Show it instead of an error: the
-        // dialog displays the live loop with Open session + Stop controls.
-        if (err instanceof Error && err.message.includes("already running")) {
-          openGoalLoop()
-          return
-        }
-        showToast({
-          variant: "error",
-          title: language.t("common.requestFailed"),
-          description: err instanceof Error ? err.message : String(err),
-        })
-        return
-      }
-      openGoalLoop()
-    })()
   }
 
   command.register("desktop", () => {
@@ -391,34 +347,7 @@ function DesktopCommands() {
         category: language.t("command.category.session"),
         slash: "goal",
         disabled: !platform.goalLoop,
-        onSelect: () => startGoalLoop(),
-      },
-      {
-        id: "session.goalLoop.new",
-        title: language.t("command.session.goalLoop.new"),
-        description: language.t("command.session.goalLoop.new.description"),
-        category: language.t("command.category.session"),
-        slash: "goal-new",
-        disabled: !platform.goalLoop,
-        onSelect: () => openGoalLoop(),
-      },
-      {
-        id: "session.goalLoop.ticket",
-        title: language.t("command.session.goalLoop.ticket"),
-        description: language.t("command.session.goalLoop.ticket.description"),
-        category: language.t("command.category.session"),
-        slash: "goal-ticket",
-        disabled: !platform.goalLoop,
-        onSelect: () => openGoalTicket(),
-      },
-      {
-        id: "session.goalWizard",
-        title: language.t("command.session.goalWizard"),
-        description: language.t("command.session.goalWizard.description"),
-        category: language.t("command.category.session"),
-        slash: "goal-wizard",
-        disabled: !platform.goalLoop,
-        onSelect: () => openGoalWizard(),
+        onSelect: () => openGoalManager(),
       },
     ]
     if (platform.platform === "desktop" && platform.exportDebugLogs) {

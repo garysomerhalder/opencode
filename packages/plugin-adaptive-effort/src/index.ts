@@ -157,6 +157,7 @@ const server: Plugin = async (input: PluginInput, rawOptions?: PluginOptions) =>
           model.providerID = small.providerID
           model.modelID = small.modelID
           if (!hasExplicitVariant) delete model.variant
+          stripNonTextParts(output.parts)
           return
         }
       }
@@ -200,6 +201,31 @@ const server: Plugin = async (input: PluginInput, rawOptions?: PluginOptions) =>
 function extractPath(content: string): string | undefined {
   const match = /<path>(.*?)<\/path>/.exec(content)
   return match ? match[1] : undefined
+}
+
+// Small models reached through upload-based gateways (e.g. ZAI's coding-plan
+// Anthropic-compatible endpoint) reject inline image/file parts with
+// `[invalid_request_error] Invalid upload request`. When a task routes to the
+// small model, drop non-text parts so the gateway never receives an upload it
+// refuses. Replaced with a plain text placeholder that keeps the message shape
+// intact.
+function stripNonTextParts(parts: Array<{ id: string; type: string; [key: string]: unknown }>): void {
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i]
+    if (part.type === "text") continue
+    const caption =
+      part.type === "file" && typeof part.mime === "string" && part.mime.startsWith("image/")
+        ? "[attached image omitted: small model does not accept inline image uploads]"
+        : `[${part.type} content omitted: small model does not accept inline uploads]`
+    parts.splice(i, 1, {
+      id: part.id,
+      sessionID: part.sessionID,
+      messageID: part.messageID,
+      type: "text",
+      text: caption,
+      synthetic: true,
+    })
+  }
 }
 
 function parseClassification(answer: string): Decision | undefined {
