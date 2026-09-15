@@ -586,3 +586,155 @@ export async function unpatchPluginConfig(
     items,
   }
 }
+
+export type ConfigureInput = {
+  spec: string
+  options?: Record<string, unknown>
+  global?: boolean
+  vcs?: string
+  worktree: string
+  directory: string
+  config?: string
+}
+
+export type ConfigureItem = {
+  kind: Kind
+  mode: "updated" | "noop"
+  file: string
+  updated: string[]
+}
+
+type ConfigureErr =
+  | Err<"invalid_json", { kind: Kind; file: string; line: number; col: number; parse: string }>
+  | Err<"patch_failed", { kind: Kind; error: unknown }>
+
+type ConfigureOne = Ok<{ item: ConfigureItem }> | ConfigureErr
+
+export type ConfigureResult = Ok<{ dir: string; items: ConfigureItem[] }> | (ConfigureErr & { dir: string })
+
+function configurePluginList(
+  text: string,
+  list: unknown[] | undefined,
+  spec: string,
+  options: Record<string, unknown> | undefined,
+): { updated: string[]; text: string } {
+  if (!list?.length) return { updated: [], text }
+  const pkg = parsePluginSpecifier(spec).pkg
+  const rows = list
+    .map((item, i) => ({ item, i, spec: pluginSpec(item) }))
+    .filter((row) => matchesPluginEntry(row.spec, spec, pkg))
+  if (!rows.length) return { updated: [], text }
+
+  // options undefined clears back to a bare spec string; otherwise the entry
+  // becomes [spec, options] preserving the matched spec text.
+  const next = (entry: string) => (options === undefined ? entry : ([entry, options] as const))
+  let out = text
+  for (const row of rows) {
+    const hit = row.spec!
+    out = patch(out, ["plugin", row.i], next(hit))
+  }
+  return { updated: rows.map((row) => row.spec!), text: out }
+}
+
+async function configureOne(
+  dir: string,
+  kind: Kind,
+  spec: string,
+  options: Record<string, unknown> | undefined,
+  dep: PatchDeps,
+): Promise<ConfigureOne> {
+  const name = patchName(kind)
+  await using _ = await Flock.acquire(`plug-config:${Filesystem.resolve(path.join(dir, name))}`)
+
+  const files = dep.files(dir, name)
+  let cfg = files[0] ?? path.join(dir, `${name}.json`)
+  let found = false
+  for (const file of files) {
+    if (!(await dep.exists(file))) continue
+    cfg = file
+    found = true
+    break
+  }
+  if (!found) {
+    return {
+      ok: true,
+      item: { kind, mode: "noop", file: cfg, updated: [] },
+    }
+  }
+
+  const src = await dep.readText(cfg).catch((err: NodeJS.ErrnoException) => {
+    if (err.code === "ENOENT") return "{}"
+    return err
+  })
+  if (src instanceof Error) {
+    return {
+      ok: false,
+      code: "patch_failed",
+      kind,
+      error: src,
+    }
+  }
+  const text = src.trim() ? src : "{}"
+
+  const errs: JsoncParseError[] = []
+  const data = parseJsonc(text, errs, { allowTrailingComma: true })
+  if (errs.length) {
+    const err = errs[0]
+    const lines = text.substring(0, err.offset).split("\n")
+    return {
+      ok: false,
+      code: "invalid_json",
+      kind,
+      file: cfg,
+      line: lines.length,
+      col: lines[lines.length - 1].length + 1,
+      parse: printParseErrorCode(err.error),
+    }
+  }
+
+  const out = configurePluginList(text, pluginList(data), spec, options)
+  if (!out.updated.length) {
+    return {
+      ok: true,
+      item: { kind, mode: "noop", file: cfg, updated: [] },
+    }
+  }
+
+  const write = await dep.write(cfg, out.text).catch((error: unknown) => error)
+  if (write instanceof Error) {
+    return {
+      ok: false,
+      code: "patch_failed",
+      kind,
+      error: write,
+    }
+  }
+
+  return {
+    ok: true,
+    item: { kind, mode: "updated", file: cfg, updated: out.updated },
+  }
+}
+
+export async function configurePluginOptions(
+  input: ConfigureInput,
+  dep: PatchDeps = defaultPatchDeps,
+): Promise<ConfigureResult> {
+  const dir = patchDir(input)
+  const items: ConfigureItem[] = []
+  for (const kind of ["server", "tui"] as const) {
+    const hit = await configureOne(dir, kind, input.spec, input.options, dep)
+    if (!hit.ok) {
+      return {
+        ...hit,
+        dir,
+      }
+    }
+    items.push(hit.item)
+  }
+  return {
+    ok: true,
+    dir,
+    items,
+  }
+}

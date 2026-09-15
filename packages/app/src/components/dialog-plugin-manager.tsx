@@ -20,13 +20,16 @@ export const PluginManagerView: Component<{ directory?: string; heading?: boolea
   const language = useLanguage()
   const serverSDK = useServerSDK()
 
-  const [view, setView] = createSignal<"list" | "install">("list")
+  const [view, setView] = createSignal<"list" | "install" | "options">("list")
   const [spec, setSpec] = createSignal("")
   // Without a project directory, local installs would land in the sidecar's
   // working directory, so lock scope to global.
   const [global, setGlobal] = createSignal(props.directory === undefined)
   const [pending, setPending] = createSignal<string | undefined>()
   const [removed, setRemoved] = createSignal<Removed[]>([])
+  const [editing, setEditing] = createSignal<Removed | undefined>()
+  const [optionsText, setOptionsText] = createSignal("")
+  const [optionsError, setOptionsError] = createSignal<string | undefined>()
 
   const [plugins, { refetch }] = createResource(async () => {
     const result = await serverSDK().client.plugin.list({ directory: props.directory })
@@ -130,6 +133,75 @@ export const PluginManagerView: Component<{ directory?: string; heading?: boolea
     installMutation.mutate({ spec: value, global: global() })
   }
 
+  const configureMutation = useMutation(() => ({
+    mutationFn: async (input: Removed & { options: Record<string, unknown> | undefined }) => {
+      const result = await serverSDK().client.plugin.configure({
+        directory: props.directory,
+        spec: input.spec,
+        options: input.options,
+        global: input.global,
+      })
+      if (!result.data) throw new Error(language.t("common.requestFailed"))
+      return { input, updated: result.data.updated }
+    },
+    onSuccess: ({ input, updated }) => {
+      setPending(undefined)
+      if (!updated.length) {
+        showToast({ title: language.t("toast.plugin.notFound.title", { spec: input.spec }) })
+        return
+      }
+      setView("list")
+      void refetch()
+      showToast({
+        variant: "success",
+        icon: "circle-check",
+        title: language.t("toast.plugin.configured.title", { spec: input.spec }),
+      })
+    },
+    onError: (error) => {
+      setPending(undefined)
+      showToast({
+        title: language.t("common.requestFailed"),
+        description: error instanceof Error ? error.message : String(error),
+      })
+    },
+  }))
+
+  const openOptions = (row: Row) => {
+    if (busy()) return
+    setEditing({ spec: row.spec, global: row.scope === "global" })
+    setOptionsText(JSON.stringify(row.options ?? {}, null, 2))
+    setOptionsError(undefined)
+    setView("options")
+  }
+
+  const submitOptions = (e: SubmitEvent) => {
+    e.preventDefault()
+    const target = editing()
+    if (busy() || !target) return
+    let options: Record<string, unknown>
+    try {
+      const parsed: unknown = JSON.parse(optionsText())
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("object")
+      }
+      options = parsed as Record<string, unknown>
+    } catch {
+      setOptionsError(language.t("dialog.plugin.options.invalid"))
+      return
+    }
+    setOptionsError(undefined)
+    setPending(target.spec)
+    configureMutation.mutate({ ...target, options })
+  }
+
+  const clearOptions = () => {
+    const target = editing()
+    if (busy() || !target) return
+    setPending(target.spec)
+    configureMutation.mutate({ ...target, options: undefined })
+  }
+
   const items = createMemo(() => [...(plugins() ?? [])].sort((a, b) => a.id.localeCompare(b.id)))
   const stale = createMemo(() =>
     removed().filter((row) => !(plugins() ?? []).some((item) => item.spec === row.spec)),
@@ -138,6 +210,8 @@ export const PluginManagerView: Component<{ directory?: string; heading?: boolea
   const meta = (row: Row) => {
     const parts: string[] = [row.scope]
     if (row.version) parts.push(`v${row.version}`)
+    const count = Object.keys(row.options ?? {}).length
+    if (count) parts.push(language.t("dialog.plugin.options.count", { count }))
     return parts.join(" · ")
   }
 
@@ -145,6 +219,58 @@ export const PluginManagerView: Component<{ directory?: string; heading?: boolea
     <Show
       when={view() === "list"}
       fallback={
+        <Show
+          when={view() === "install"}
+          fallback={
+            <div>
+              <div class="px-2.5 pb-2">
+                <IconButton
+                  tabIndex={-1}
+                  icon="arrow-left"
+                  variant="ghost"
+                  onClick={() => setView("list")}
+                  aria-label={language.t("common.goBack")}
+                />
+              </div>
+              <form onSubmit={submitOptions} class="px-2.5 pb-6 flex flex-col gap-6">
+                <div class="px-2.5 flex flex-col gap-1">
+                  <div class="text-16-medium text-text-strong">
+                    {language.t("dialog.plugin.options.title", { spec: editing()?.spec ?? "" })}
+                  </div>
+                  <p class="text-14-regular text-text-base">{language.t("dialog.plugin.options.description")}</p>
+                </div>
+                <div class="px-2.5 flex flex-col gap-4">
+                  <TextField
+                    autofocus
+                    multiline
+                    label={language.t("dialog.plugin.options.label")}
+                    value={optionsText()}
+                    onChange={(v) => {
+                      setOptionsText(v)
+                      setOptionsError(undefined)
+                    }}
+                    validationState={optionsError() ? "invalid" : undefined}
+                    error={optionsError()}
+                  />
+                </div>
+                <div class="px-2.5 flex gap-2">
+                  <Button type="button" variant="ghost" disabled={busy()} onClick={clearOptions}>
+                    {language.t("dialog.plugin.options.clear")}
+                  </Button>
+                  <Button
+                    class="w-auto self-start"
+                    type="submit"
+                    size="large"
+                    variant="primary"
+                    disabled={busy()}
+                  >
+                    {language.t("dialog.plugin.options.submit")}
+                  </Button>
+                </div>
+              </form>
+            </div>
+          }
+        >
         <div>
           <div class="px-2.5 pb-2">
             <IconButton
@@ -195,6 +321,7 @@ export const PluginManagerView: Component<{ directory?: string; heading?: boolea
             </div>
           </form>
         </div>
+        </Show>
       }
     >
         <div class="flex flex-col gap-3 px-3 pb-3">
@@ -225,7 +352,15 @@ export const PluginManagerView: Component<{ directory?: string; heading?: boolea
                   <span class="text-11-regular text-text-weaker truncate">{row.spec}</span>
                   <span class="text-11-regular text-text-weaker">{meta(row)}</span>
                 </div>
-                <div onClick={(e) => e.stopPropagation()}>
+                <div class="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                  <IconButton
+                    type="button"
+                    icon="pencil-line"
+                    variant="ghost"
+                    onClick={() => openOptions(row)}
+                    disabled={busy()}
+                    aria-label={language.t("dialog.plugin.options.open", { spec: row.spec })}
+                  />
                   <Switch
                     checked
                     disabled={busy() && pending() === row.spec}

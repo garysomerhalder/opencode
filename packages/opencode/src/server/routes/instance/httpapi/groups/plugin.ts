@@ -10,6 +10,7 @@ export const PluginItem = Schema.Struct({
   spec: Schema.String,
   source: Schema.String,
   scope: Schema.Union([Schema.Literal("global"), Schema.Literal("local")]),
+  options: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
   version: Schema.optional(Schema.String),
   loadCount: Schema.optional(Schema.Number),
   lastTime: Schema.optional(Schema.Number),
@@ -46,6 +47,22 @@ export const PluginRemoveResponse = Schema.Struct({
 })
 
 export class PluginRemoveError extends Schema.ErrorClass<PluginRemoveError>("PluginRemoveError")(
+  { message: Schema.String },
+  { httpApiStatus: 400 },
+) {}
+
+export const PluginConfigurePayload = Schema.Struct({
+  spec: Schema.String,
+  options: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+  global: Schema.optional(Schema.Boolean),
+})
+
+export const PluginConfigureResponse = Schema.Struct({
+  updated: Schema.Array(Schema.String),
+  files: Schema.Array(Schema.String),
+})
+
+export class PluginConfigureError extends Schema.ErrorClass<PluginConfigureError>("PluginConfigureError")(
   { message: Schema.String },
   { httpApiStatus: 400 },
 ) {}
@@ -88,6 +105,19 @@ export const PluginApi = HttpApi.make("plugin")
             identifier: "plugin.remove",
             summary: "Remove plugin",
             description: "Remove a plugin spec from config. The spec stays recoverable from plugin metadata.",
+          }),
+        ),
+        HttpApiEndpoint.post("configure", `${root}/configure`, {
+          query: WorkspaceRoutingQuery,
+          payload: described(PluginConfigurePayload, "Plugin configure request"),
+          success: described(PluginConfigureResponse, "Plugin options updated successfully"),
+          error: PluginConfigureError,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "plugin.configure",
+            summary: "Configure plugin",
+            description:
+              "Set or clear a plugin's options in config. Omitting options clears back to a bare spec.",
           }),
         ),
       )

@@ -6,7 +6,13 @@ import { Config } from "@/config/config"
 import { ConfigPlugin } from "@/config/plugin"
 import { ConfigPaths } from "@/config/paths"
 import { Global } from "@opencode-ai/core/global"
-import { installPlugin, patchPluginConfig, readPluginManifest, unpatchPluginConfig } from "../../plugin/install"
+import {
+  configurePluginOptions,
+  installPlugin,
+  patchPluginConfig,
+  readPluginManifest,
+  unpatchPluginConfig,
+} from "../../plugin/install"
 import { PluginMeta } from "../../plugin/meta"
 import { parsePluginSpecifier, pluginDisplayId, pluginSource, resolvePluginTarget } from "../../plugin/shared"
 import { errorMessage } from "../../util/error"
@@ -350,6 +356,102 @@ export const PluginRemoveCommand = effectCmd({
   }),
 })
 
+export const PluginConfigureCommand = effectCmd({
+  command: "configure <module>",
+  aliases: ["config"],
+  describe: "set or clear a plugin's options",
+  builder: (yargs) =>
+    yargs
+      .positional("module", {
+        describe: "npm module name, path, or URL",
+        type: "string",
+        demandOption: true,
+      })
+      .option("global", {
+        alias: ["g"],
+        type: "boolean",
+        default: false,
+        describe: "configure in global config",
+      })
+      .option("set", {
+        alias: ["s"],
+        type: "string",
+        array: true,
+        describe: "option override as KEY=JSON (repeatable)",
+      })
+      .option("clear", {
+        type: "boolean",
+        default: false,
+        describe: "clear options back to a bare spec",
+      }),
+  handler: Effect.fn("Cli.plugin.configure")(function* (args) {
+    const mod = String(args.module ?? "").trim()
+    if (!mod) {
+      UI.error("module is required")
+      process.exitCode = 1
+      return
+    }
+
+    let options: Record<string, unknown> | undefined
+    if (!args.clear) {
+      options = {}
+      for (const entry of args.set ?? []) {
+        const index = entry.indexOf("=")
+        if (index < 1) {
+          UI.error(`Invalid --set ${entry}. Expected KEY=JSON`)
+          process.exitCode = 1
+          return
+        }
+        const key = entry.slice(0, index)
+        try {
+          options[key] = JSON.parse(entry.slice(index + 1))
+        } catch {
+          UI.error(`Invalid JSON value for --set ${key}`)
+          process.exitCode = 1
+          return
+        }
+      }
+    }
+
+    const ctx = yield* InstanceRef
+    if (!ctx) return
+    const out = yield* Effect.promise(() =>
+      configurePluginOptions({
+        spec: mod,
+        options,
+        global: Boolean(args.global),
+        vcs: ctx.project.vcs,
+        worktree: ctx.worktree,
+        directory: ctx.directory,
+      }),
+    )
+
+    UI.empty()
+    intro(`Configure plugin ${mod}`)
+    if (!out.ok) {
+      if (out.code === "invalid_json") {
+        log.error(`Invalid JSON in ${out.file} (${out.parse} at line ${out.line}, column ${out.col})`)
+        log.info("Fix the config file and run the command again.")
+      } else {
+        log.error(errorMessage(out.error))
+      }
+      process.exitCode = 1
+      outro("Done")
+      return
+    }
+    const updated = out.items.filter((item) => item.mode === "updated")
+    if (!updated.length) {
+      log.warn(`"${mod}" is not configured (${out.dir})`)
+      process.exitCode = 1
+    } else {
+      for (const item of updated) {
+        log.success(`Updated ${item.updated.join(", ")} in ${item.file}`)
+      }
+    }
+    outro("Done")
+  }),
+})
+
 export const PluginInstallDefaultCommand = effectCmd({
   command: "$0 <module>",
   describe: "install plugin and update config",
@@ -375,6 +477,7 @@ export const PluginCommand = effectCmd({
       .command(PluginAddCommand)
       .command(PluginListCommand)
       .command(PluginRemoveCommand)
+      .command(PluginConfigureCommand)
       .command(PluginInstallDefaultCommand),
   handler: Effect.fn("Cli.plugin")(function* () {
     // Unreachable: `$0 <module>` catches every invocation the named

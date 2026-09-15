@@ -87,6 +87,7 @@ const SUBCOMMANDS = [
   ["plugin", "list"],
   ["plugin", "add"],
   ["plugin", "remove"],
+  ["plugin", "configure"],
 ] as const
 
 // Fixed wrap width so a developer's terminal doesn't affect snapshots.

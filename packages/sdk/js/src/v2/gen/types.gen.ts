@@ -2505,6 +2505,10 @@ export type PluginRemoveError = {
   message: string
 }
 
+export type PluginConfigureError = {
+  message: string
+}
+
 export type ProviderAuthMethod = {
   type: "oauth" | "api"
   label: string
@@ -9422,6 +9426,9 @@ export type PluginListResponses = {
       spec: string
       source: string
       scope: "global" | "local"
+      options?: {
+        [key: string]: unknown
+      }
       version?: string
       loadCount?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
       lastTime?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
@@ -9505,6 +9512,46 @@ export type PluginRemoveResponses = {
 }
 
 export type PluginRemoveResponse = PluginRemoveResponses[keyof PluginRemoveResponses]
+
+export type PluginConfigureData = {
+  /**
+   * Plugin configure request
+   */
+  body?: {
+    spec: string
+    options?: {
+      [key: string]: unknown
+    }
+    global?: boolean
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/plugin/configure"
+}
+
+export type PluginConfigureErrors = {
+  /**
+   * PluginConfigureError | InvalidRequestError
+   */
+  400: PluginConfigureError | InvalidRequestError
+}
+
+export type PluginConfigureError2 = PluginConfigureErrors[keyof PluginConfigureErrors]
+
+export type PluginConfigureResponses = {
+  /**
+   * Plugin options updated successfully
+   */
+  200: {
+    updated: Array<string>
+    files: Array<string>
+  }
+}
+
+export type PluginConfigureResponse = PluginConfigureResponses[keyof PluginConfigureResponses]
 
 export type ProviderListData = {
   body?: never

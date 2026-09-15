@@ -134,6 +134,8 @@ import type {
   PermissionRuleset,
   PermissionV2Reply,
   PermissionV2Source,
+  PluginConfigureErrors,
+  PluginConfigureResponses,
   PluginInstallErrors,
   PluginInstallResponses,
   PluginListErrors,
@@ -3389,6 +3391,49 @@ export class Plugin extends HeyApiClient {
     )
     return (options?.client ?? this.client).post<PluginRemoveResponses, PluginRemoveErrors, ThrowOnError>({
       url: "/plugin/remove",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Configure plugin
+   *
+   * Set or clear a plugin's options in config. Omitting options clears back to a bare spec.
+   */
+  public configure<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      spec?: string
+      options?: {
+        [key: string]: unknown
+      }
+      global?: boolean
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "spec" },
+            { in: "body", key: "options" },
+            { in: "body", key: "global" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<PluginConfigureResponses, PluginConfigureErrors, ThrowOnError>({
+      url: "/plugin/configure",
       ...options,
       ...params,
       headers: {

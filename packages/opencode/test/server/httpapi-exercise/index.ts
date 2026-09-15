@@ -205,6 +205,36 @@ const scenarios: Scenario[] = [
       "status",
     ),
   http.protected
+    .post("/plugin/configure", "plugin.configure")
+    .mutating()
+    .seeded((ctx) =>
+      Effect.gen(function* () {
+        yield* ctx.file(".opencode/opencode.json", JSON.stringify({ plugin: ["exercise-plugin@1.0.0"] }))
+        return {}
+      }),
+    )
+    .at((ctx) => ({
+      path: "/plugin/configure",
+      headers: ctx.headers(),
+      body: { spec: "exercise-plugin", options: { verbose: true } },
+    }))
+    .jsonEffect(
+      200,
+      (body, ctx) =>
+        Effect.gen(function* () {
+          object(body)
+          check(
+            Array.isArray(body.updated) && body.updated.includes("exercise-plugin@1.0.0"),
+            "plugin configure should report the updated spec",
+          )
+          const text = yield* Effect.promise(() =>
+            Bun.file(path.join(ctx.directory!, ".opencode", "opencode.json")).text(),
+          )
+          check(text.includes("verbose"), "plugin configure should persist options in project config")
+        }),
+      "status",
+    ),
+  http.protected
     .post("/plugin/remove", "plugin.remove")
     .mutating()
     .seeded((ctx) =>

@@ -1,7 +1,13 @@
 import { Config } from "@/config/config"
 import { ConfigPlugin } from "@/config/plugin"
 import * as InstanceState from "@/effect/instance-state"
-import { installPlugin, patchPluginConfig, readPluginManifest, unpatchPluginConfig } from "@/plugin/install"
+import {
+  configurePluginOptions,
+  installPlugin,
+  patchPluginConfig,
+  readPluginManifest,
+  unpatchPluginConfig,
+} from "@/plugin/install"
 import { PluginMeta } from "@/plugin/meta"
 import { parsePluginSpecifier, pluginDisplayId, pluginSource } from "@/plugin/shared"
 import { errorMessage } from "@/util/error"
@@ -9,6 +15,8 @@ import { Effect } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { InstanceHttpApi } from "../api"
 import {
+  PluginConfigureError,
+  PluginConfigurePayload,
   PluginInstallError,
   PluginInstallPayload,
   PluginRemoveError,
@@ -41,6 +49,7 @@ export const pluginHandlers = HttpApiBuilder.group(InstanceHttpApi, "plugin", (h
           spec,
           source: origin.source,
           scope: origin.scope,
+          options: ConfigPlugin.pluginOptions(origin.spec),
           version: meta?.version,
           loadCount: meta?.load_count,
           lastTime: meta?.last_time,
@@ -142,6 +151,49 @@ export const pluginHandlers = HttpApiBuilder.group(InstanceHttpApi, "plugin", (h
       }
     })
 
-    return handlers.handle("list", list).handle("install", install).handle("remove", remove)
+    const configure = Effect.fn("PluginHttpApi.configure")(function* (ctx: {
+      payload: typeof PluginConfigurePayload.Type
+    }) {
+      const instance = yield* InstanceState.context
+      const spec = ctx.payload.spec.trim()
+      if (!spec) {
+        return yield* Effect.fail(new PluginConfigureError({ message: "Plugin spec is required" }))
+      }
+
+      const out = yield* Effect.promise(() =>
+        configurePluginOptions({
+          spec,
+          options: ctx.payload.options,
+          global: ctx.payload.global,
+          vcs: instance.project.vcs,
+          worktree: instance.worktree,
+          directory: instance.directory,
+        }),
+      )
+      if (!out.ok) {
+        return yield* Effect.fail(
+          new PluginConfigureError({
+            message:
+              out.code === "invalid_json"
+                ? `Invalid JSON in ${out.file} (${out.parse} at line ${out.line}, column ${out.col})`
+                : errorMessage(out.error),
+          }),
+        )
+      }
+
+      yield* config.invalidate()
+
+      const updated = out.items.flatMap((item) => item.updated)
+      return {
+        updated,
+        files: out.items.filter((item) => item.mode === "updated").map((item) => item.file),
+      }
+    })
+
+    return handlers
+      .handle("list", list)
+      .handle("install", install)
+      .handle("remove", remove)
+      .handle("configure", configure)
   }),
 )

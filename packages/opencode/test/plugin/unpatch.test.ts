@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import path from "path"
 import { Filesystem } from "@/util/filesystem"
-import { unpatchPluginConfig, type PatchDeps } from "../../src/plugin/install"
+import { configurePluginOptions, unpatchPluginConfig, type PatchDeps } from "../../src/plugin/install"
 import { tmpdir } from "../fixture/fixture"
 
 function deps(): PatchDeps {
@@ -115,5 +115,57 @@ describe("plugin.unpatch.config", () => {
     expect(out.ok).toBe(false)
     if (out.ok) return
     expect(out.code).toBe("invalid_json")
+  })
+})
+
+describe("plugin.configure.options", () => {
+  test("sets options on a bare spec entry", async () => {
+    await using tmp = await tmpdir()
+    await seed(tmp.path, "opencode", ["acme@1.2.3", "other"])
+    const out = await configurePluginOptions(
+      { spec: "acme", options: { verbose: true }, worktree: tmp.path, directory: tmp.path },
+      deps(),
+    )
+    expect(out.ok).toBe(true)
+    if (!out.ok) return
+    expect(out.items.find((item) => item.kind === "server")?.mode).toBe("updated")
+    expect((await read(tmp.path, "opencode")).plugin).toEqual([["acme@1.2.3", { verbose: true }], "other"])
+  })
+
+  test("replaces options on a tuple entry", async () => {
+    await using tmp = await tmpdir()
+    await seed(tmp.path, "opencode", [["acme@1.2.3", { verbose: false }]])
+    const out = await configurePluginOptions(
+      { spec: "acme@1.2.3", options: { retries: 3 }, worktree: tmp.path, directory: tmp.path },
+      deps(),
+    )
+    expect(out.ok).toBe(true)
+    if (!out.ok) return
+    expect((await read(tmp.path, "opencode")).plugin).toEqual([["acme@1.2.3", { retries: 3 }]])
+  })
+
+  test("clears options back to a bare spec when options are omitted", async () => {
+    await using tmp = await tmpdir()
+    await seed(tmp.path, "opencode", [["acme@1.2.3", { verbose: true }]])
+    const out = await configurePluginOptions(
+      { spec: "acme", options: undefined, worktree: tmp.path, directory: tmp.path },
+      deps(),
+    )
+    expect(out.ok).toBe(true)
+    if (!out.ok) return
+    expect((await read(tmp.path, "opencode")).plugin).toEqual(["acme@1.2.3"])
+  })
+
+  test("reports noop when the spec is absent", async () => {
+    await using tmp = await tmpdir()
+    await seed(tmp.path, "opencode", ["other"])
+    const out = await configurePluginOptions(
+      { spec: "acme", options: { verbose: true }, worktree: tmp.path, directory: tmp.path },
+      deps(),
+    )
+    expect(out.ok).toBe(true)
+    if (!out.ok) return
+    expect(out.items.every((item) => item.mode === "noop")).toBe(true)
+    expect((await read(tmp.path, "opencode")).plugin).toEqual(["other"])
   })
 })

@@ -47,6 +47,11 @@ export const McpManagerView: Component<{ directory?: string; heading?: boolean }
   const [cwd, setCwd] = createSignal("")
   const [url, setUrl] = createSignal("")
   const [oauth, setOauth] = createSignal(false)
+  const [clientId, setClientId] = createSignal("")
+  const [clientSecret, setClientSecret] = createSignal("")
+  const [oauthScope, setOauthScope] = createSignal("")
+  const [callbackPort, setCallbackPort] = createSignal("")
+  const [redirectUri, setRedirectUri] = createSignal("")
   const [env, setEnv] = createSignal<Entry[]>([{ key: "", value: "" }])
   const [headers, setHeaders] = createSignal<Entry[]>([{ key: "", value: "" }])
   const [global, setGlobal] = createSignal(props.directory === undefined)
@@ -128,12 +133,29 @@ export const McpManagerView: Component<{ directory?: string; heading?: boolean }
     mutationFn: async () => {
       const server = name().trim()
       if (!server) throw new Error(language.t("dialog.mcp.install.name.empty"))
+      let oauthConfig: McpRemoteConfig["oauth"] | undefined
+      if (remote() && oauth()) {
+        const port = callbackPort().trim()
+        oauthConfig = {
+          ...(clientId().trim() ? { clientId: clientId().trim() } : {}),
+          ...(clientSecret().trim() ? { clientSecret: clientSecret().trim() } : {}),
+          ...(oauthScope().trim() ? { scope: oauthScope().trim() } : {}),
+          ...(redirectUri().trim() ? { redirectUri: redirectUri().trim() } : {}),
+        }
+        if (port) {
+          const value = Number(port)
+          if (!Number.isInteger(value) || value < 1 || value > 65535) {
+            throw new Error(language.t("dialog.mcp.install.oauth.callbackPort.invalid"))
+          }
+          oauthConfig.callbackPort = value
+        }
+      }
       const config = remote()
         ? ({
             type: "remote",
             url: url().trim(),
             ...(parseEntries(headers()) ? { headers: parseEntries(headers()) } : {}),
-            ...(oauth() ? { oauth: {} } : {}),
+            ...(oauthConfig ? { oauth: oauthConfig } : {}),
           } as McpRemoteConfig)
         : ({
             type: "local",
@@ -217,6 +239,11 @@ export const McpManagerView: Component<{ directory?: string; heading?: boolean }
     setCwd("")
     setUrl("")
     setOauth(false)
+    setClientId("")
+    setClientSecret("")
+    setOauthScope("")
+    setCallbackPort("")
+    setRedirectUri("")
     setEnv([{ key: "", value: "" }])
     setHeaders([{ key: "", value: "" }])
   }
@@ -472,6 +499,38 @@ export const McpManagerView: Component<{ directory?: string; heading?: boolean }
                     </div>
                     <Switch checked={oauth()} disabled={busy()} onChange={setOauth} />
                   </div>
+                  <Show when={oauth()}>
+                    <TextField
+                      label={language.t("dialog.mcp.install.oauth.clientId.label")}
+                      placeholder={language.t("dialog.mcp.install.oauth.clientId.placeholder")}
+                      value={clientId()}
+                      onChange={setClientId}
+                    />
+                    <TextField
+                      label={language.t("dialog.mcp.install.oauth.clientSecret.label")}
+                      placeholder={language.t("dialog.mcp.install.oauth.clientSecret.placeholder")}
+                      value={clientSecret()}
+                      onChange={setClientSecret}
+                    />
+                    <TextField
+                      label={language.t("dialog.mcp.install.oauth.scope.label")}
+                      placeholder={language.t("dialog.mcp.install.oauth.scope.placeholder")}
+                      value={oauthScope()}
+                      onChange={setOauthScope}
+                    />
+                    <TextField
+                      label={language.t("dialog.mcp.install.oauth.callbackPort.label")}
+                      placeholder={language.t("dialog.mcp.install.oauth.callbackPort.placeholder")}
+                      value={callbackPort()}
+                      onChange={setCallbackPort}
+                    />
+                    <TextField
+                      label={language.t("dialog.mcp.install.oauth.redirectUri.label")}
+                      placeholder={language.t("dialog.mcp.install.oauth.redirectUri.placeholder")}
+                      value={redirectUri()}
+                      onChange={setRedirectUri}
+                    />
+                  </Show>
                 </Show>
                 <div class="w-full flex items-center justify-between gap-x-3">
                   <div class="flex flex-col gap-0.5">

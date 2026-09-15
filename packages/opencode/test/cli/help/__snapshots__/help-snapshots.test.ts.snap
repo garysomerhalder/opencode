@@ -371,10 +371,11 @@ exports[`opencode CLI help-text snapshots every documented command emits stable 
 manage plugins
 
 Commands:
-  opencode plugin add <module>     install plugin and update config               [aliases: install]
-  opencode plugin list             list installed plugins                              [aliases: ls]
-  opencode plugin remove <module>  remove plugin and update config          [aliases: rm, uninstall]
-  opencode plugin <module>         install plugin and update config                        [default]
+  opencode plugin add <module>        install plugin and update config            [aliases: install]
+  opencode plugin list                list installed plugins                           [aliases: ls]
+  opencode plugin remove <module>     remove plugin and update config       [aliases: rm, uninstall]
+  opencode plugin configure <module>  set or clear a plugin's options              [aliases: config]
+  opencode plugin <module>            install plugin and update config                     [default]
 
 Positionals:
   module  npm module name, path, or URL                                                     [string]
@@ -693,4 +694,23 @@ Options:
       --log-level   log level                   [string] [choices: "DEBUG", "INFO", "WARN", "ERROR"]
       --pure        run without external plugins                                           [boolean]
   -g, --global      remove from global config                             [boolean] [default: false]"
+`;
+
+exports[`opencode CLI help-text snapshots every documented command emits stable help text: opencode plugin configure --help 1`] = `
+"opencode plugin configure <module>
+
+set or clear a plugin's options
+
+Positionals:
+  module  npm module name, path, or URL                                          [string] [required]
+
+Options:
+  -h, --help        show help                                                              [boolean]
+  -v, --version     show version number                                                    [boolean]
+      --print-logs  print logs to stderr                                                   [boolean]
+      --log-level   log level                   [string] [choices: "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        run without external plugins                                           [boolean]
+  -g, --global      configure in global config                            [boolean] [default: false]
+  -s, --set         option override as KEY=JSON (repeatable)                                 [array]
+      --clear       clear options back to a bare spec                     [boolean] [default: false]"
 `;
