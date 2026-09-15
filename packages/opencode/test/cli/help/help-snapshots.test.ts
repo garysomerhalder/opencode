@@ -71,6 +71,7 @@ const TOP_LEVEL = [
 const SUBCOMMANDS = [
   ["mcp", "list"],
   ["mcp", "add"],
+  ["mcp", "remove"],
   ["mcp", "auth"],
   ["mcp", "logout"],
   ["providers", "list"],

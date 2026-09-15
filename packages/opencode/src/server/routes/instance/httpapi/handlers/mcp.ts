@@ -1,9 +1,21 @@
 import { MCP } from "@/mcp"
+import { addMcpEntry, removeMcpEntry, resolveConfigFile } from "@/mcp/config-file"
+import * as InstanceState from "@/effect/instance-state"
+import { errorMessage } from "@/util/error"
 import { Effect, Schema } from "effect"
 import { HttpApiBuilder, HttpApiError } from "effect/unstable/httpapi"
 import { InstanceHttpApi } from "../api"
 import { McpServerNotFoundError } from "../errors"
-import { AddPayload, AuthCallbackPayload, StatusMap, UnsupportedOAuthError } from "../groups/mcp"
+import {
+  AddPayload,
+  AuthCallbackPayload,
+  InstallPayload,
+  McpInstallError,
+  McpRemoveError,
+  RemovePayload,
+  StatusMap,
+  UnsupportedOAuthError,
+} from "../groups/mcp"
 
 export const mcpHandlers = HttpApiBuilder.group(InstanceHttpApi, "mcp", (handlers) =>
   Effect.gen(function* () {
@@ -18,6 +30,77 @@ export const mcpHandlers = HttpApiBuilder.group(InstanceHttpApi, "mcp", (handler
       return yield* Schema.decodeUnknownEffect(StatusMap)(
         "status" in result ? { [ctx.payload.name]: result } : result,
       ).pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
+    })
+
+    const install = Effect.fn("McpHttpApi.install")(function* (ctx: {
+      payload: typeof InstallPayload.Type
+    }) {
+      const instance = yield* InstanceState.context
+      const name = ctx.payload.name.trim()
+      if (!name) {
+        return yield* Effect.fail(new McpInstallError({ message: "MCP server name is required" }))
+      }
+
+      const file = yield* Effect.promise(() =>
+        resolveConfigFile({
+          global: ctx.payload.global,
+          vcs: instance.project.vcs,
+          worktree: instance.worktree,
+          directory: instance.directory,
+        }),
+      )
+      const patched = yield* Effect.promise(() => addMcpEntry(file, name, ctx.payload.config))
+      if (!patched.ok) {
+        return yield* Effect.fail(
+          new McpInstallError({
+            message:
+              patched.code === "invalid_json"
+                ? `Invalid JSON in ${patched.file} (${patched.parse} at line ${patched.line}, column ${patched.col})`
+                : errorMessage(patched.error),
+          }),
+        )
+      }
+
+      const result = (yield* mcp.add(name, ctx.payload.config)).status
+      return yield* Schema.decodeUnknownEffect(StatusMap)("status" in result ? { [name]: result } : result).pipe(
+        Effect.mapError((error) => new McpInstallError({ message: errorMessage(error) })),
+      )
+    })
+
+    const remove = Effect.fn("McpHttpApi.remove")(function* (ctx: { payload: typeof RemovePayload.Type }) {
+      const instance = yield* InstanceState.context
+      const name = ctx.payload.name.trim()
+      if (!name) {
+        return yield* Effect.fail(new McpRemoveError({ message: "MCP server name is required" }))
+      }
+
+      const file = yield* Effect.promise(() =>
+        resolveConfigFile({
+          global: ctx.payload.global,
+          vcs: instance.project.vcs,
+          worktree: instance.worktree,
+          directory: instance.directory,
+        }),
+      )
+      const patched = yield* Effect.promise(() => removeMcpEntry(file, name))
+      if (!patched.ok) {
+        return yield* Effect.fail(
+          new McpRemoveError({
+            message:
+              patched.code === "invalid_json"
+                ? `Invalid JSON in ${patched.file} (${patched.parse} at line ${patched.line}, column ${patched.col})`
+                : errorMessage(patched.error),
+          }),
+        )
+      }
+
+      yield* mcp.remove(name)
+      let logout = false
+      if (ctx.payload.logout) {
+        yield* mcp.removeAuth(name)
+        logout = true
+      }
+      return { removed: patched.removed, logout }
     })
 
     const authStart = Effect.fn("McpHttpApi.authStart")(function* (ctx: { params: { name: string } }) {
@@ -101,6 +184,8 @@ export const mcpHandlers = HttpApiBuilder.group(InstanceHttpApi, "mcp", (handler
     return handlers
       .handle("status", status)
       .handle("add", add)
+      .handle("install", install)
+      .handle("remove", remove)
       .handle("authStart", authStart)
       .handle("authCallback", authCallback)
       .handle("authAuthenticate", authAuthenticate)

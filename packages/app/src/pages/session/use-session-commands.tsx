@@ -307,9 +307,10 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
   }
 
   const chooseMcp = () => {
+    const directory = sdk().directory
     void openDialog(
       () => import("@/components/dialog-select-mcp"),
-      (x) => dialog.show(() => <x.DialogSelectMcp />),
+      (x) => dialog.show(() => <x.DialogSelectMcp directory={directory} />),
     )
   }
 

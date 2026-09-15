@@ -9,7 +9,9 @@ import { LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/sdk/types.js"
 import * as prompts from "@clack/prompts"
 import { UI } from "../ui"
 import { MCP } from "../../mcp"
+import { addMcpEntry, configCandidates, removeMcpEntry, resolveConfigFile } from "../../mcp/config-file"
 import { McpAuth } from "../../mcp/auth"
+import { errorMessage } from "../../util/error"
 import { McpOAuthProvider } from "../../mcp/oauth-provider"
 import { Config } from "@/config/config"
 import { ConfigMCPV1 } from "@opencode-ai/core/v1/config/mcp"
@@ -99,11 +101,92 @@ export const McpCommand = cmd({
     yargs
       .command(McpAddCommand)
       .command(McpListCommand)
+      .command(McpRemoveCommand)
       .command(McpAuthCommand)
       .command(McpLogoutCommand)
       .command(McpDebugCommand)
       .demandCommand(),
   async handler() {},
+})
+
+export const McpRemoveCommand = effectCmd({
+  command: "remove <name>",
+  aliases: ["rm", "uninstall"],
+  describe: "remove an MCP server",
+  builder: (yargs) =>
+    yargs
+      .positional("name", {
+        describe: "name of the MCP server",
+        type: "string",
+        demandOption: true,
+      })
+      .option("global", {
+        alias: ["g"],
+        type: "boolean",
+        default: false,
+        describe: "remove from global config",
+      })
+      .option("logout", {
+        type: "boolean",
+        default: false,
+        describe: "also remove stored OAuth credentials",
+      }),
+  handler: Effect.fn("Cli.mcp.remove")(function* (args) {
+    const name = String(args.name ?? "").trim()
+    if (!name) {
+      UI.error("name is required")
+      process.exitCode = 1
+      return
+    }
+
+    const maybeCtx = yield* InstanceRef
+    if (!maybeCtx) return yield* Effect.die("InstanceRef not provided")
+    const ctx = maybeCtx
+
+    const removed = yield* Effect.promise(async () => {
+      UI.empty()
+      prompts.intro(`Remove MCP server ${name}`)
+
+      const file = await resolveConfigFile({
+        global: Boolean(args.global),
+        vcs: ctx.project.vcs,
+        worktree: ctx.worktree,
+        directory: ctx.directory,
+      })
+      const out = await removeMcpEntry(file, name)
+      if (!out.ok) {
+        if (out.code === "invalid_json") {
+          prompts.log.error(`Invalid JSON in ${out.file} (${out.parse} at line ${out.line}, column ${out.col})`)
+          prompts.log.info("Fix the config file and run the command again.")
+        } else {
+          prompts.log.error(errorMessage(out.error))
+        }
+        process.exitCode = 1
+        prompts.outro("Done")
+        return false
+      }
+      if (!out.removed) {
+        prompts.log.warn(`MCP server "${name}" is not configured in ${out.file}`)
+        process.exitCode = 1
+        prompts.outro("Done")
+        return false
+      }
+      prompts.log.success(`MCP server "${name}" removed from ${out.file}`)
+      return true
+    })
+    if (!removed) return
+
+    if (args.logout) {
+      const credentials = yield* McpAuth.Service.use((auth) => auth.all())
+      if (!credentials[name]) {
+        prompts.log.info(`No OAuth credentials stored for ${name}`)
+      } else {
+        yield* MCP.Service.use((mcp) => mcp.removeAuth(name))
+        prompts.log.success(`Removed OAuth credentials for ${name}`)
+      }
+    }
+    prompts.outro("Done")
+  }),
 })
 
 export const McpListCommand = effectCmd({
@@ -392,13 +475,7 @@ export const McpLogoutCommand = effectCmd({
 })
 
 async function resolveConfigPath(baseDir: string, global = false) {
-  // Check for existing config files (prefer .jsonc over .json, check .opencode/ subdirectory too)
-  const candidates = [path.join(baseDir, "opencode.json"), path.join(baseDir, "opencode.jsonc")]
-
-  if (!global) {
-    candidates.push(path.join(baseDir, ".opencode", "opencode.json"), path.join(baseDir, ".opencode", "opencode.jsonc"))
-  }
-
+  const candidates = configCandidates(baseDir, global)
   for (const candidate of candidates) {
     if (await Filesystem.exists(candidate)) {
       return candidate
@@ -410,18 +487,11 @@ async function resolveConfigPath(baseDir: string, global = false) {
 }
 
 async function addMcpToConfig(name: string, mcpConfig: ConfigMCPV1.Info, configPath: string) {
-  let text = "{}"
-  if (await Filesystem.exists(configPath)) {
-    text = await Filesystem.readText(configPath)
+  const out = await addMcpEntry(configPath, name, mcpConfig)
+  if (!out.ok) {
+    if (out.code === "invalid_json") throw new Error(`Invalid JSON in ${out.file} (${out.parse})`)
+    throw out.error
   }
-
-  // Use jsonc-parser to modify while preserving comments
-  const edits = modify(text, ["mcp", name], mcpConfig, {
-    formattingOptions: { tabSize: 2, insertSpaces: true },
-  })
-  const result = applyEdits(text, edits)
-
-  await Filesystem.write(configPath, result)
 
   return configPath
 }

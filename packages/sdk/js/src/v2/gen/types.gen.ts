@@ -2414,6 +2414,14 @@ export type McpStatus =
   | McpStatusNeedsAuth
   | McpStatusNeedsClientRegistration
 
+export type McpInstallError = {
+  message: string
+}
+
+export type McpRemoveError = {
+  message: string
+}
+
 export type McpUnsupportedOAuthError = {
   error: string
 }
@@ -8501,6 +8509,81 @@ export type McpAddResponses = {
 }
 
 export type McpAddResponse = McpAddResponses[keyof McpAddResponses]
+
+export type McpInstallData = {
+  /**
+   * MCP install request
+   */
+  body?: {
+    name: string
+    config: McpLocalConfig | McpRemoteConfig
+    global?: boolean
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/mcp/install"
+}
+
+export type McpInstallErrors = {
+  /**
+   * McpInstallError | InvalidRequestError
+   */
+  400: McpInstallError | InvalidRequestError
+}
+
+export type McpInstallError2 = McpInstallErrors[keyof McpInstallErrors]
+
+export type McpInstallResponses = {
+  /**
+   * MCP server installed successfully
+   */
+  200: {
+    [key: string]: McpStatus
+  }
+}
+
+export type McpInstallResponse = McpInstallResponses[keyof McpInstallResponses]
+
+export type McpRemoveData = {
+  /**
+   * MCP remove request
+   */
+  body?: {
+    name: string
+    global?: boolean
+    logout?: boolean
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/mcp/remove"
+}
+
+export type McpRemoveErrors = {
+  /**
+   * McpRemoveError | InvalidRequestError
+   */
+  400: McpRemoveError | InvalidRequestError
+}
+
+export type McpRemoveError2 = McpRemoveErrors[keyof McpRemoveErrors]
+
+export type McpRemoveResponses = {
+  /**
+   * MCP server removed successfully
+   */
+  200: {
+    removed: boolean
+    logout: boolean
+  }
+}
+
+export type McpRemoveResponse = McpRemoveResponses[keyof McpRemoveResponses]
 
 export type McpAuthRemoveData = {
   body?: never

@@ -467,6 +467,60 @@ const scenarios: Scenario[] = [
     }))
     .status(400),
   http.protected
+    .post("/mcp/install", "mcp.install")
+    .mutating()
+    .at((ctx) => ({
+      path: "/mcp/install",
+      headers: ctx.headers(),
+      body: {
+        name: "httpapi-installed",
+        config: { type: "local", command: ["bun", "--version"], enabled: false },
+      },
+    }))
+    .jsonEffect(
+      200,
+      (body, ctx) =>
+        Effect.gen(function* () {
+          object(body)
+          object(body["httpapi-installed"])
+          check(
+            body["httpapi-installed"].status === "disabled",
+            "installed MCP server should persist without spawning",
+          )
+          const text = yield* Effect.promise(() =>
+            Bun.file(path.join(ctx.directory!, "opencode.json")).text(),
+          )
+          check(text.includes("httpapi-installed"), "mcp install should persist the server in project config")
+        }),
+      "status",
+    ),
+  http.protected
+    .post("/mcp/remove", "mcp.remove")
+    .mutating()
+    .seeded((ctx) =>
+      Effect.gen(function* () {
+        yield* ctx.file(
+          "opencode.json",
+          JSON.stringify({ mcp: { "httpapi-removed": { type: "local", command: ["bun", "--version"] } } }),
+        )
+        return {}
+      }),
+    )
+    .at((ctx) => ({ path: "/mcp/remove", headers: ctx.headers(), body: { name: "httpapi-removed" } }))
+    .jsonEffect(
+      200,
+      (body, ctx) =>
+        Effect.gen(function* () {
+          object(body)
+          check(body.removed === true, "mcp remove should report the server removed")
+          const text = yield* Effect.promise(() =>
+            Bun.file(path.join(ctx.directory!, "opencode.json")).text(),
+          )
+          check(!text.includes("httpapi-removed"), "mcp remove should drop the server from project config")
+        }),
+      "status",
+    ),
+  http.protected
     .post("/mcp/{name}/auth", "mcp.auth.start")
     .at((ctx) => ({ path: route("/mcp/{name}/auth", { name: "httpapi-missing" }), headers: ctx.headers() }))
     .json(404, object, "status"),

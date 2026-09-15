@@ -13,6 +13,33 @@ export const AddPayload = Schema.Struct({
   config: ConfigMCPV1.Info,
 })
 
+export const InstallPayload = Schema.Struct({
+  name: Schema.String,
+  config: ConfigMCPV1.Info,
+  global: Schema.optional(Schema.Boolean),
+})
+
+export class McpInstallError extends Schema.ErrorClass<McpInstallError>("McpInstallError")(
+  { message: Schema.String },
+  { httpApiStatus: 400 },
+) {}
+
+export const RemovePayload = Schema.Struct({
+  name: Schema.String,
+  global: Schema.optional(Schema.Boolean),
+  logout: Schema.optional(Schema.Boolean),
+})
+
+export const RemoveResponse = Schema.Struct({
+  removed: Schema.Boolean,
+  logout: Schema.Boolean,
+})
+
+export class McpRemoveError extends Schema.ErrorClass<McpRemoveError>("McpRemoveError")(
+  { message: Schema.String },
+  { httpApiStatus: 400 },
+) {}
+
 export const StatusMap = Schema.Record(Schema.String, MCP.Status)
 export const AuthStartResponse = Schema.Struct({
   authorizationUrl: Schema.String,
@@ -62,6 +89,31 @@ export const McpApi = HttpApi.make("mcp")
             identifier: "mcp.add",
             summary: "Add MCP server",
             description: "Dynamically add a new Model Context Protocol (MCP) server to the system.",
+          }),
+        ),
+        HttpApiEndpoint.post("install", "/mcp/install", {
+          query: WorkspaceRoutingQuery,
+          payload: described(InstallPayload, "MCP install request"),
+          success: described(StatusMap, "MCP server installed successfully"),
+          error: McpInstallError,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "mcp.install",
+            summary: "Install MCP server",
+            description: "Persist an MCP server to config and connect it in the running instance.",
+          }),
+        ),
+        HttpApiEndpoint.post("remove", "/mcp/remove", {
+          query: WorkspaceRoutingQuery,
+          payload: described(RemovePayload, "MCP remove request"),
+          success: described(RemoveResponse, "MCP server removed successfully"),
+          error: McpRemoveError,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "mcp.remove",
+            summary: "Remove MCP server",
+            description:
+              "Delete an MCP server from config and tear down its runtime client. Optionally drops stored OAuth credentials.",
           }),
         ),
         HttpApiEndpoint.post("authStart", McpPaths.auth, {

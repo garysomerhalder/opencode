@@ -107,8 +107,12 @@ import type {
   McpConnectResponses,
   McpDisconnectErrors,
   McpDisconnectResponses,
+  McpInstallErrors,
+  McpInstallResponses,
   McpLocalConfig,
   McpRemoteConfig,
+  McpRemoveErrors,
+  McpRemoveResponses,
   McpStatusErrors,
   McpStatusResponses,
   ModelRef,
@@ -2457,6 +2461,88 @@ export class Mcp extends HeyApiClient {
     )
     return (options?.client ?? this.client).post<McpAddResponses, McpAddErrors, ThrowOnError>({
       url: "/mcp",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Install MCP server
+   *
+   * Persist an MCP server to config and connect it in the running instance.
+   */
+  public install<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      name?: string
+      config?: McpLocalConfig | McpRemoteConfig
+      global?: boolean
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "name" },
+            { in: "body", key: "config" },
+            { in: "body", key: "global" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<McpInstallResponses, McpInstallErrors, ThrowOnError>({
+      url: "/mcp/install",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Remove MCP server
+   *
+   * Delete an MCP server from config and tear down its runtime client. Optionally drops stored OAuth credentials.
+   */
+  public remove<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      name?: string
+      global?: boolean
+      logout?: boolean
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "name" },
+            { in: "body", key: "global" },
+            { in: "body", key: "logout" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<McpRemoveResponses, McpRemoveErrors, ThrowOnError>({
+      url: "/mcp/remove",
       ...options,
       ...params,
       headers: {

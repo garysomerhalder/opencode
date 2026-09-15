@@ -172,6 +172,7 @@ export interface Interface {
     clientName?: string,
   ) => Effect.Effect<Record<string, ResourceTemplateInfo & { client: string }>>
   readonly add: (name: string, mcp: ConfigMCPV1.Info) => Effect.Effect<{ status: Record<string, Status> | Status }>
+  readonly remove: (name: string) => Effect.Effect<boolean>
   readonly connect: (name: string) => Effect.Effect<void, NotFoundError>
   readonly disconnect: (name: string) => Effect.Effect<void, NotFoundError>
   readonly getPrompt: (
@@ -658,6 +659,22 @@ const layer = Layer.effect(
       s.status[name] = { status: "disabled" }
     })
 
+    // Idempotent runtime teardown: drops the client, cached tools, and status
+    // so a config-deleted server disappears without a restart. Returns whether
+    // anything was registered under the name.
+    const remove = Effect.fn("MCP.remove")(function* (name: string) {
+      const s = yield* InstanceState.get(state)
+      const present =
+        name in s.config || name in s.status || name in s.clients || name in s.defs || name in s.instructions
+      yield* closeClient(s, name)
+      delete s.config[name]
+      delete s.status[name]
+      delete s.clients[name]
+      delete s.defs[name]
+      delete s.instructions[name]
+      return present
+    })
+
     function requestTimeout(s: State, name: string, configured: McpEntry | undefined, fallback?: number) {
       const staticTimeout = configured && isMcpConfigured(configured) ? configured.timeout : undefined
       return s.config[name]?.timeout ?? staticTimeout ?? fallback
@@ -978,6 +995,7 @@ const layer = Layer.effect(
       resources,
       resourceTemplates,
       add,
+      remove,
       connect,
       disconnect,
       getPrompt,
