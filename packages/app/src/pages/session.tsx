@@ -62,6 +62,7 @@ import { TerminalProvider, useTerminal } from "@/context/terminal"
 import { PromptInput } from "@/components/prompt-input"
 import { PromptInputV2Composer, usePromptInputV2Controller } from "@/components/prompt-input-v2"
 import { useSettingsCommand } from "@/components/settings-dialog"
+import { usePluginManagerCommand } from "@/components/dialog-plugin-manager"
 import { setCursorPosition } from "@/components/prompt-input/editor-dom"
 import { promptLength } from "@/components/prompt-input/history"
 import { type FollowupDraft, sendFollowupDraft } from "@/components/prompt-input/submit"
@@ -165,7 +166,7 @@ export function TargetSessionRouteContent() {
     // Settings must keep the target-server SDK, sync, and models context and remain registered
     // when session content falls back to the route error boundary.
     <TargetServerScopedProviders directory={directory} sessionID={() => params.id}>
-      <TargetSessionSettingsCommand />
+      <TargetSessionSettingsCommand directory={directory} />
       <SessionRouteErrorBoundary sessionID={params.id} serverKey={requireServerKey(params.serverKey)} padded>
         <ResolvedTargetSessionRoute />
       </SessionRouteErrorBoundary>
@@ -173,8 +174,9 @@ export function TargetSessionRouteContent() {
   )
 }
 
-function TargetSessionSettingsCommand() {
+function TargetSessionSettingsCommand(props: { directory?: () => string | undefined }) {
   useSettingsCommand()
+  usePluginManagerCommand(props.directory)
   return null
 }
 

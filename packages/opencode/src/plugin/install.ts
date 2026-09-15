@@ -178,6 +178,15 @@ function patch(text: string, path: Array<string | number>, value: unknown, inser
   )
 }
 
+// Shared identity: exact spec match, or same npm package for versioned specs.
+// file:// entries only match themselves so unrelated local plugins are never swept up.
+function matchesPluginEntry(entry: string | undefined, spec: string, pkg: string): boolean {
+  if (!entry) return false
+  if (entry === spec) return true
+  if (entry.startsWith("file://")) return false
+  return parsePluginSpecifier(entry).pkg === pkg
+}
+
 function patchPluginList(
   text: string,
   list: unknown[] | undefined,
@@ -191,12 +200,7 @@ function patchPluginList(
     i,
     spec: pluginSpec(item),
   }))
-  const dup = rows.filter((item) => {
-    if (!item.spec) return false
-    if (item.spec === spec) return true
-    if (item.spec.startsWith("file://")) return false
-    return parsePluginSpecifier(item.spec).pkg === pkg
-  })
+  const dup = rows.filter((item) => matchesPluginEntry(item.spec, spec, pkg))
 
   if (!dup.length) {
     if (!list) {
@@ -330,7 +334,7 @@ export async function readPluginManifest(target: string): Promise<ManifestResult
   }
 }
 
-function patchDir(input: PatchInput) {
+function patchDir(input: Pick<PatchInput, "global" | "vcs" | "worktree" | "directory" | "config">) {
   if (input.global) return input.config ?? Global.Path.config
   const git = input.vcs === "git" && input.worktree !== "/"
   const root = git ? input.worktree : input.directory
@@ -423,6 +427,151 @@ export async function patchPluginConfig(input: PatchInput, dep: PatchDeps = defa
   const items: PatchItem[] = []
   for (const target of input.targets) {
     const hit = await patchOne(dir, target, input.spec, Boolean(input.force), dep)
+    if (!hit.ok) {
+      return {
+        ...hit,
+        dir,
+      }
+    }
+    items.push(hit.item)
+  }
+  return {
+    ok: true,
+    dir,
+    items,
+  }
+}
+
+export type UnpatchInput = {
+  spec: string
+  global?: boolean
+  vcs?: string
+  worktree: string
+  directory: string
+  config?: string
+}
+
+export type UnpatchItem = {
+  kind: Kind
+  mode: "removed" | "noop"
+  file: string
+  removed: string[]
+}
+
+type UnpatchErr =
+  | Err<"invalid_json", { kind: Kind; file: string; line: number; col: number; parse: string }>
+  | Err<"patch_failed", { kind: Kind; error: unknown }>
+
+type UnpatchOne = Ok<{ item: UnpatchItem }> | UnpatchErr
+
+export type UnpatchResult = Ok<{ dir: string; items: UnpatchItem[] }> | (UnpatchErr & { dir: string })
+
+function unpatchPluginList(
+  text: string,
+  list: unknown[] | undefined,
+  spec: string,
+): { removed: string[]; text: string } {
+  if (!list?.length) return { removed: [], text }
+  const pkg = parsePluginSpecifier(spec).pkg
+  const del = list
+    .map((item, i) => ({ item, i, spec: pluginSpec(item) }))
+    .filter((row) => matchesPluginEntry(row.spec, spec, pkg))
+    .map((row) => row.i)
+    .sort((a, b) => b - a)
+  if (!del.length) return { removed: [], text }
+
+  const removed = del.map((i) => String(pluginSpec(list[i])))
+  let out = text
+  for (const i of del) {
+    out = patch(out, ["plugin", i], undefined)
+  }
+  return { removed, text: out }
+}
+
+async function unpatchOne(dir: string, kind: Kind, spec: string, dep: PatchDeps): Promise<UnpatchOne> {
+  const name = patchName(kind)
+  await using _ = await Flock.acquire(`plug-config:${Filesystem.resolve(path.join(dir, name))}`)
+
+  const files = dep.files(dir, name)
+  let cfg = files[0] ?? path.join(dir, `${name}.json`)
+  let found = false
+  for (const file of files) {
+    if (!(await dep.exists(file))) continue
+    cfg = file
+    found = true
+    break
+  }
+  // Never create config files on remove; absence means nothing to remove.
+  if (!found) {
+    return {
+      ok: true,
+      item: { kind, mode: "noop", file: cfg, removed: [] },
+    }
+  }
+
+  const src = await dep.readText(cfg).catch((err: NodeJS.ErrnoException) => {
+    if (err.code === "ENOENT") return "{}"
+    return err
+  })
+  if (src instanceof Error) {
+    return {
+      ok: false,
+      code: "patch_failed",
+      kind,
+      error: src,
+    }
+  }
+  const text = src.trim() ? src : "{}"
+
+  const errs: JsoncParseError[] = []
+  const data = parseJsonc(text, errs, { allowTrailingComma: true })
+  if (errs.length) {
+    const err = errs[0]
+    const lines = text.substring(0, err.offset).split("\n")
+    return {
+      ok: false,
+      code: "invalid_json",
+      kind,
+      file: cfg,
+      line: lines.length,
+      col: lines[lines.length - 1].length + 1,
+      parse: printParseErrorCode(err.error),
+    }
+  }
+
+  const out = unpatchPluginList(text, pluginList(data), spec)
+  if (!out.removed.length) {
+    return {
+      ok: true,
+      item: { kind, mode: "noop", file: cfg, removed: [] },
+    }
+  }
+
+  const write = await dep.write(cfg, out.text).catch((error: unknown) => error)
+  if (write instanceof Error) {
+    return {
+      ok: false,
+      code: "patch_failed",
+      kind,
+      error: write,
+    }
+  }
+
+  return {
+    ok: true,
+    item: { kind, mode: "removed", file: cfg, removed: out.removed },
+  }
+}
+
+export async function unpatchPluginConfig(
+  input: UnpatchInput,
+  dep: PatchDeps = defaultPatchDeps,
+): Promise<UnpatchResult> {
+  const dir = patchDir(input)
+  const items: UnpatchItem[] = []
+  // Remove from both server (opencode.json) and tui (tui.json) configs; misses report noop.
+  for (const kind of ["server", "tui"] as const) {
+    const hit = await unpatchOne(dir, kind, input.spec, dep)
     if (!hit.ok) {
       return {
         ...hit,

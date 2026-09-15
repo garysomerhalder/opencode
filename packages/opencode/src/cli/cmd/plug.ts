@@ -1,10 +1,14 @@
 import { intro, log, outro, spinner } from "@clack/prompts"
 import { Effect } from "effect"
+import type { Argv } from "yargs"
 
+import { Config } from "@/config/config"
+import { ConfigPlugin } from "@/config/plugin"
 import { ConfigPaths } from "@/config/paths"
 import { Global } from "@opencode-ai/core/global"
-import { installPlugin, patchPluginConfig, readPluginManifest } from "../../plugin/install"
-import { resolvePluginTarget } from "../../plugin/shared"
+import { installPlugin, patchPluginConfig, readPluginManifest, unpatchPluginConfig } from "../../plugin/install"
+import { PluginMeta } from "../../plugin/meta"
+import { parsePluginSpecifier, pluginDisplayId, pluginSource, resolvePluginTarget } from "../../plugin/shared"
 import { errorMessage } from "../../util/error"
 import { Filesystem } from "@/util/filesystem"
 import { Process } from "@/util/process"
@@ -175,44 +179,32 @@ export function createPlugTask(input: PlugInput, dep: PlugDeps = defaultPlugDeps
   }
 }
 
-export const PluginCommand = effectCmd({
-  command: "plugin <module>",
-  aliases: ["plug"],
-  describe: "install plugin and update config",
-  builder: (yargs) =>
-    yargs
-      .positional("module", {
-        type: "string",
-        describe: "npm module name",
-      })
-      .option("global", {
-        alias: ["g"],
-        type: "boolean",
-        default: false,
-        describe: "install in global config",
-      })
-      .option("force", {
-        alias: ["f"],
-        type: "boolean",
-        default: false,
-        describe: "replace existing plugin version",
-      }),
-  handler: Effect.fn("Cli.plug")(function* (args) {
-    const mod = String(args.module ?? "").trim()
-    if (!mod) {
-      UI.error("module is required")
-      process.exitCode = 1
-      return
-    }
+function installOptions<T>(yargs: Argv<T>) {
+  return yargs
+    .positional("module", {
+      type: "string",
+      describe: "npm module name, path, or URL",
+    })
+    .option("global", {
+      alias: ["g"],
+      type: "boolean",
+      default: false,
+      describe: "install in global config",
+    })
+    .option("force", {
+      alias: ["f"],
+      type: "boolean",
+      default: false,
+      describe: "replace existing plugin version",
+    })
+}
 
+function runInstall(mod: string, global: boolean, force: boolean) {
+  return Effect.fn("Cli.plug.install")(function* () {
     UI.empty()
     intro(`Install plugin ${mod}`)
 
-    const run = createPlugTask({
-      mod,
-      global: Boolean(args.global),
-      force: Boolean(args.force),
-    })
+    const run = createPlugTask({ mod, global, force })
 
     const ctx = yield* InstanceRef
     if (!ctx) return
@@ -226,5 +218,168 @@ export const PluginCommand = effectCmd({
 
     outro("Done")
     if (!ok) process.exitCode = 1
+  })
+}
+
+function findMeta(spec: string, store: Awaited<ReturnType<typeof PluginMeta.list>>) {
+  const direct = Object.values(store).find((entry) => entry.spec === spec)
+  if (direct) return direct
+  if (pluginSource(spec) === "file") return
+  const pkg = parsePluginSpecifier(spec).pkg
+  return Object.values(store).find(
+    (entry) => entry.source === "npm" && parsePluginSpecifier(entry.spec).pkg === pkg,
+  )
+}
+
+export const PluginAddCommand = effectCmd({
+  command: "add <module>",
+  aliases: ["install"],
+  describe: "install plugin and update config",
+  builder: (yargs) => installOptions(yargs),
+  handler: Effect.fn("Cli.plugin.add")(function* (args) {
+    const mod = String(args.module ?? "").trim()
+    if (!mod) {
+      UI.error("module is required")
+      process.exitCode = 1
+      return
+    }
+    yield* runInstall(mod, Boolean(args.global), Boolean(args.force))()
+  }),
+})
+
+export const PluginListCommand = effectCmd({
+  command: "list",
+  aliases: ["ls"],
+  describe: "list installed plugins",
+  builder: (yargs) => yargs,
+  handler: Effect.fn("Cli.plugin.list")(function* () {
+    const config = yield* Config.Service.use((cfg) => cfg.get())
+    const store = yield* Effect.promise(() => PluginMeta.list())
+    const origins = config.plugin_origins ?? []
+
+    UI.empty()
+    intro("Plugins")
+
+    if (!origins.length) {
+      log.warn("No plugins configured")
+      outro("Add plugins with: opencode plugin add <module>")
+      return
+    }
+
+    for (const origin of origins) {
+      const spec = ConfigPlugin.pluginSpecifier(origin.spec)
+      const meta = findMeta(spec, store)
+      const version = meta?.version ? ` v${meta.version}` : ""
+      log.info(
+        `${pluginDisplayId(spec)} ${UI.Style.TEXT_DIM}(${origin.scope})${version}\n    ${UI.Style.TEXT_DIM}${spec} · ${origin.source}`,
+      )
+    }
+
+    outro(`${origins.length} plugin(s)`)
+  }),
+})
+
+export const PluginRemoveCommand = effectCmd({
+  command: "remove <module>",
+  aliases: ["rm", "uninstall"],
+  describe: "remove plugin and update config",
+  builder: (yargs) =>
+    yargs
+      .positional("module", {
+        type: "string",
+        describe: "npm module name, path, or URL",
+        demandOption: true,
+      })
+      .option("global", {
+        alias: ["g"],
+        type: "boolean",
+        default: false,
+        describe: "remove from global config",
+      }),
+  handler: Effect.fn("Cli.plugin.remove")(function* (args) {
+    const mod = String(args.module ?? "").trim()
+    if (!mod) {
+      UI.error("module is required")
+      process.exitCode = 1
+      return
+    }
+
+    UI.empty()
+    intro(`Remove plugin ${mod}`)
+
+    const ctx = yield* InstanceRef
+    if (!ctx) return
+    const out = yield* Effect.promise(() =>
+      unpatchPluginConfig({
+        spec: mod,
+        global: Boolean(args.global),
+        vcs: ctx.project.vcs,
+        worktree: ctx.worktree,
+        directory: ctx.directory,
+      }),
+    )
+
+    if (!out.ok) {
+      if (out.code === "invalid_json") {
+        log.error(`Invalid JSON in ${out.file} (${out.parse} at line ${out.line}, column ${out.col})`)
+        log.info("Fix the config file and run the command again.")
+      } else {
+        log.error(errorMessage(out.error))
+      }
+      process.exitCode = 1
+      outro("Done")
+      return
+    }
+
+    let removed = 0
+    for (const item of out.items) {
+      if (item.mode === "removed") {
+        removed += item.removed.length
+        log.info(`Removed ${item.removed.join(", ")} from ${item.file}`)
+        continue
+      }
+      log.info(`Not configured in ${item.file}`)
+    }
+    if (!removed) {
+      log.warn(`"${mod}" is not configured (${out.dir})`)
+      process.exitCode = 1
+    } else {
+      log.success(`Removed ${mod}`)
+    }
+    outro("Done")
+  }),
+})
+
+export const PluginInstallDefaultCommand = effectCmd({
+  command: "$0 <module>",
+  describe: "install plugin and update config",
+  builder: (yargs) => installOptions(yargs),
+  handler: Effect.fn("Cli.plug")(function* (args) {
+    // Bare `plugin <module>` keeps the historical install behavior.
+    const mod = String(args.module ?? "").trim()
+    if (!mod) {
+      UI.error("module is required")
+      process.exitCode = 1
+      return
+    }
+    yield* runInstall(mod, Boolean(args.global), Boolean(args.force))()
+  }),
+})
+
+export const PluginCommand = effectCmd({
+  command: "plugin",
+  aliases: ["plug"],
+  describe: "manage plugins",
+  builder: (yargs) =>
+    yargs
+      .command(PluginAddCommand)
+      .command(PluginListCommand)
+      .command(PluginRemoveCommand)
+      .command(PluginInstallDefaultCommand),
+  handler: Effect.fn("Cli.plugin")(function* () {
+    // Unreachable: `$0 <module>` catches every invocation the named
+    // subcommands don't. Kept so the dispatcher always has a handler.
+    UI.error("module is required")
+    process.exitCode = 1
   }),
 })

@@ -130,6 +130,12 @@ import type {
   PermissionRuleset,
   PermissionV2Reply,
   PermissionV2Source,
+  PluginInstallErrors,
+  PluginInstallResponses,
+  PluginListErrors,
+  PluginListResponses,
+  PluginRemoveErrors,
+  PluginRemoveResponses,
   ProjectCommands,
   ProjectCurrentErrors,
   ProjectCurrentResponses,
@@ -3187,6 +3193,116 @@ export class Permission extends HeyApiClient {
     )
     return (options?.client ?? this.client).post<PermissionRespondResponses, PermissionRespondErrors, ThrowOnError>({
       url: "/session/{sessionID}/permissions/{permissionID}",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
+export class Plugin extends HeyApiClient {
+  /**
+   * List plugins
+   *
+   * List all configured plugins with their source, scope, and load metadata.
+   */
+  public list<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<PluginListResponses, PluginListErrors, ThrowOnError>({
+      url: "/plugin",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Install plugin
+   *
+   * Install a plugin from an npm spec or local path and register it in config.
+   */
+  public install<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      spec?: string
+      global?: boolean
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "spec" },
+            { in: "body", key: "global" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<PluginInstallResponses, PluginInstallErrors, ThrowOnError>({
+      url: "/plugin",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Remove plugin
+   *
+   * Remove a plugin spec from config. The spec stays recoverable from plugin metadata.
+   */
+  public remove<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      spec?: string
+      global?: boolean
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "spec" },
+            { in: "body", key: "global" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<PluginRemoveResponses, PluginRemoveErrors, ThrowOnError>({
+      url: "/plugin/remove",
       ...options,
       ...params,
       headers: {
@@ -7185,6 +7301,11 @@ export class OpencodeClient extends HeyApiClient {
   private _permission?: Permission
   get permission(): Permission {
     return (this._permission ??= new Permission({ client: this.client }))
+  }
+
+  private _plugin?: Plugin
+  get plugin(): Plugin {
+    return (this._plugin ??= new Plugin({ client: this.client }))
   }
 
   private _provider?: Provider

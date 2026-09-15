@@ -1,7 +1,9 @@
 import { useDialog } from "@opencode-ai/ui/context/dialog"
+import { usePluginManagerCommand } from "@/components/dialog-plugin-manager"
 import { useSettingsCommand } from "@/components/settings-dialog"
 import { useCommand } from "@/context/command"
 import { useLanguage } from "@/context/language"
+import { useSDK } from "@/context/sdk"
 
 export function useNewSessionCommands(input: {
   restoreFocus: () => void
@@ -13,8 +15,10 @@ export function useNewSessionCommands(input: {
   const command = useCommand()
   const dialog = useDialog()
   const language = useLanguage()
+  const sdk = useSDK()
 
   useSettingsCommand()
+  usePluginManagerCommand(() => sdk().directory)
   command.register("new-session", () => [
     {
       id: "command.palette",

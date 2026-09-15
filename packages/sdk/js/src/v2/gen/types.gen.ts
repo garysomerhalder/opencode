@@ -2489,6 +2489,14 @@ export type PermissionNotFoundError = {
   message: string
 }
 
+export type PluginInstallError = {
+  message: string
+}
+
+export type PluginRemoveError = {
+  message: string
+}
+
 export type ProviderAuthMethod = {
   type: "oauth" | "api"
   label: string
@@ -9300,6 +9308,118 @@ export type PermissionReplyResponses = {
 }
 
 export type PermissionReplyResponse = PermissionReplyResponses[keyof PermissionReplyResponses]
+
+export type PluginListData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/plugin"
+}
+
+export type PluginListErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type PluginListError = PluginListErrors[keyof PluginListErrors]
+
+export type PluginListResponses = {
+  /**
+   * Installed plugins
+   */
+  200: {
+    plugins: Array<{
+      id: string
+      spec: string
+      source: string
+      scope: "global" | "local"
+      version?: string
+      loadCount?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      lastTime?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }>
+  }
+}
+
+export type PluginListResponse = PluginListResponses[keyof PluginListResponses]
+
+export type PluginInstallData = {
+  /**
+   * Plugin install request
+   */
+  body?: {
+    spec: string
+    global?: boolean
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/plugin"
+}
+
+export type PluginInstallErrors = {
+  /**
+   * PluginInstallError | InvalidRequestError
+   */
+  400: PluginInstallError | InvalidRequestError
+}
+
+export type PluginInstallError2 = PluginInstallErrors[keyof PluginInstallErrors]
+
+export type PluginInstallResponses = {
+  /**
+   * Plugin installed successfully
+   */
+  200: {
+    dir: string
+    server: boolean
+    tui: boolean
+  }
+}
+
+export type PluginInstallResponse = PluginInstallResponses[keyof PluginInstallResponses]
+
+export type PluginRemoveData = {
+  /**
+   * Plugin remove request
+   */
+  body?: {
+    spec: string
+    global?: boolean
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/plugin/remove"
+}
+
+export type PluginRemoveErrors = {
+  /**
+   * PluginRemoveError | InvalidRequestError
+   */
+  400: PluginRemoveError | InvalidRequestError
+}
+
+export type PluginRemoveError2 = PluginRemoveErrors[keyof PluginRemoveErrors]
+
+export type PluginRemoveResponses = {
+  /**
+   * Plugin removed successfully
+   */
+  200: {
+    removed: Array<string>
+  }
+}
+
+export type PluginRemoveResponse = PluginRemoveResponses[keyof PluginRemoveResponses]
 
 export type ProviderListData = {
   body?: never

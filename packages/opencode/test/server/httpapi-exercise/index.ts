@@ -21,6 +21,7 @@ import { Effect } from "effect"
 import { OpenApi } from "effect/unstable/httpapi"
 import { TestLLMServer } from "../../lib/llm-server"
 import path from "path"
+import { pathToFileURL } from "url"
 import { array, boolean, check, isRecord, message, object, stable } from "./assertions"
 import { controlledPtyInput, http, route } from "./dsl"
 import {
@@ -162,6 +163,74 @@ const scenarios: Scenario[] = [
     .at((ctx) => ({ path: "/config", headers: ctx.headers(), body: { username: 1 } }))
     .status(400),
   http.protected.get("/config/providers", "config.providers").json(),
+  http.protected.get("/plugin", "plugin.list").json(
+    200,
+    (body) => {
+      object(body)
+      array(body.plugins)
+    },
+    "status",
+  ),
+  http.protected
+    .post("/plugin", "plugin.install")
+    .mutating()
+    .seeded((ctx) =>
+      Effect.gen(function* () {
+        const pluginDir = path.join(ctx.directory!, "exercise-plugin")
+        yield* Effect.promise(() =>
+          Bun.write(
+            path.join(pluginDir, "package.json"),
+            JSON.stringify({ name: "exercise-plugin", version: "1.0.0", main: "./server.js" }),
+          ),
+        )
+        yield* Effect.promise(() =>
+          Bun.write(path.join(pluginDir, "server.js"), "export default async () => ({})"),
+        )
+        return { spec: pathToFileURL(pluginDir).href }
+      }),
+    )
+    .at((ctx) => ({ path: "/plugin", headers: ctx.headers(), body: { spec: ctx.state.spec } }))
+    .jsonEffect(
+      200,
+      (body, ctx) =>
+        Effect.gen(function* () {
+          object(body)
+          check(body.server === true, "plugin install should report a server target")
+          check(body.tui === false, "plugin install should report no tui target")
+          const text = yield* Effect.promise(() =>
+            Bun.file(path.join(ctx.directory!, ".opencode", "opencode.json")).text(),
+          )
+          check(text.includes(ctx.state.spec), "plugin install should persist the spec in project config")
+        }),
+      "status",
+    ),
+  http.protected
+    .post("/plugin/remove", "plugin.remove")
+    .mutating()
+    .seeded((ctx) =>
+      Effect.gen(function* () {
+        const spec = "file:///exercise-plugin-removed"
+        yield* ctx.file(".opencode/opencode.json", JSON.stringify({ plugin: [spec] }))
+        return { spec }
+      }),
+    )
+    .at((ctx) => ({ path: "/plugin/remove", headers: ctx.headers(), body: { spec: ctx.state.spec } }))
+    .jsonEffect(
+      200,
+      (body, ctx) =>
+        Effect.gen(function* () {
+          object(body)
+          check(
+            Array.isArray(body.removed) && body.removed.includes(ctx.state.spec),
+            "plugin remove should report the removed spec",
+          )
+          const text = yield* Effect.promise(() =>
+            Bun.file(path.join(ctx.directory!, ".opencode", "opencode.json")).text(),
+          )
+          check(!text.includes(ctx.state.spec), "plugin remove should drop the spec from project config")
+        }),
+      "status",
+    ),
   http.protected.get("/project", "project.list").json(200, array, "status"),
   http.protected.get("/project/current", "project.current").json(
     200,

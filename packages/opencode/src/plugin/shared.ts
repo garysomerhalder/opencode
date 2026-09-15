@@ -58,6 +58,18 @@ export function pluginSource(spec: string): PluginSource {
   return "npm"
 }
 
+// Human-facing identity: npm package name for registry specs, local path for file specs.
+export function pluginDisplayId(spec: string): string {
+  if (pluginSource(spec) === "file") {
+    try {
+      return fileURLToPath(spec)
+    } catch {
+      return spec
+    }
+  }
+  return parsePluginSpecifier(spec).pkg
+}
+
 function resolveExportPath(raw: string, dir: string) {
   if (raw.startsWith("file://")) return fileURLToPath(raw)
   if (path.isAbsolute(raw)) return raw
