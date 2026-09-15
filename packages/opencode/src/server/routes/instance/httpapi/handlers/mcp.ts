@@ -1,5 +1,6 @@
 import { MCP } from "@/mcp"
 import { addMcpEntry, removeMcpEntry, resolveConfigFile } from "@/mcp/config-file"
+import { Config } from "@/config/config"
 import * as InstanceState from "@/effect/instance-state"
 import { errorMessage } from "@/util/error"
 import { Effect, Schema } from "effect"
@@ -20,6 +21,7 @@ import {
 export const mcpHandlers = HttpApiBuilder.group(InstanceHttpApi, "mcp", (handlers) =>
   Effect.gen(function* () {
     const mcp = yield* MCP.Service
+    const config = yield* Config.Service
 
     const status = Effect.fn("McpHttpApi.status")(function* () {
       return yield* mcp.status()
@@ -62,6 +64,7 @@ export const mcpHandlers = HttpApiBuilder.group(InstanceHttpApi, "mcp", (handler
       }
 
       const result = (yield* mcp.add(name, ctx.payload.config)).status
+      yield* config.invalidate()
       return yield* Schema.decodeUnknownEffect(StatusMap)("status" in result ? { [name]: result } : result).pipe(
         Effect.mapError((error) => new McpInstallError({ message: errorMessage(error) })),
       )
@@ -80,6 +83,7 @@ export const mcpHandlers = HttpApiBuilder.group(InstanceHttpApi, "mcp", (handler
       const globals: Array<boolean | undefined> =
         ctx.payload.global === undefined ? [false, true] : [ctx.payload.global]
       let removed = false
+      const files: string[] = []
       for (const global of globals) {
         const file = yield* Effect.promise(() => resolveConfigFile({ ...scope, global }))
         const patched = yield* Effect.promise(() => removeMcpEntry(file, name))
@@ -93,16 +97,20 @@ export const mcpHandlers = HttpApiBuilder.group(InstanceHttpApi, "mcp", (handler
             }),
           )
         }
-        removed = removed || patched.removed
+        if (patched.removed) {
+          removed = true
+          files.push(patched.file)
+        }
       }
 
       yield* mcp.remove(name)
+      yield* config.invalidate()
       let logout = false
       if (ctx.payload.logout) {
         yield* mcp.removeAuth(name)
         logout = true
       }
-      return { removed, logout }
+      return { removed, files, logout }
     })
 
     const authStart = Effect.fn("McpHttpApi.authStart")(function* (ctx: { params: { name: string } }) {

@@ -8579,6 +8579,7 @@ export type McpRemoveResponses = {
    */
   200: {
     removed: boolean
+    files: Array<string>
     logout: boolean
   }
 }
@@ -9499,6 +9500,7 @@ export type PluginRemoveResponses = {
    */
   200: {
     removed: Array<string>
+    files: Array<string>
   }
 }
 

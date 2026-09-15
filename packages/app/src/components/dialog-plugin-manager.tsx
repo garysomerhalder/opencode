@@ -44,9 +44,9 @@ export const PluginManagerView: Component<{ directory?: string; heading?: boolea
         global: row.global,
       })
       if (!result.data) throw new Error(language.t("common.requestFailed"))
-      return { row, removed: result.data.removed }
+      return { row, removed: result.data.removed, files: result.data.files }
     },
-    onSuccess: ({ row, removed: gone }) => {
+    onSuccess: ({ row, removed: gone, files }) => {
       setPending(undefined)
       if (!gone.length) {
         showToast({
@@ -60,6 +60,7 @@ export const PluginManagerView: Component<{ directory?: string; heading?: boolea
         variant: "success",
         icon: "circle-check",
         title: language.t("toast.plugin.removed.title", { spec: row.spec }),
+        description: language.t("toast.plugin.removed.description", { files: files.join(", ") }),
       })
     },
     onError: (error) => {

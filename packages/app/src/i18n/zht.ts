@@ -560,6 +560,7 @@ export const dict = {
   "dialog.mcp.remove.submit": "Remove server",
   "toast.mcp.installed.title": "Added {{name}}",
   "toast.mcp.removed.title": "Removed {{name}}",
+  "toast.mcp.removed.description": "Removed from {{files}}",
   "toast.mcp.notFound.title": "{{name}} is not configured",
   "dialog.plugin.title": "Plugins",
   "dialog.plugin.description": "{{count}} installed",
@@ -580,6 +581,7 @@ export const dict = {
   "toast.plugin.installed.title": "Installed {{spec}}",
   "toast.plugin.installed.description": "Scope: {{dir}}",
   "toast.plugin.removed.title": "Removed {{spec}}",
+  "toast.plugin.removed.description": "Removed from {{files}}",
   "toast.plugin.notFound.title": "{{spec}} is not configured",
 
   "dialog.lsp.empty": "會根據檔案類型自動偵測 LSP",

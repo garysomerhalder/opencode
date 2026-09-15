@@ -42,6 +42,7 @@ export const PluginRemovePayload = Schema.Struct({
 
 export const PluginRemoveResponse = Schema.Struct({
   removed: Schema.Array(Schema.String),
+  files: Schema.Array(Schema.String),
 })
 
 export class PluginRemoveError extends Schema.ErrorClass<PluginRemoveError>("PluginRemoveError")(

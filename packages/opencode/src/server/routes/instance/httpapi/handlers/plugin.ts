@@ -96,6 +96,8 @@ export const pluginHandlers = HttpApiBuilder.group(InstanceHttpApi, "plugin", (h
         )
       }
 
+      yield* config.invalidate()
+
       return {
         dir: out.dir,
         server: manifest.targets.some((item) => item.kind === "server"),
@@ -132,7 +134,12 @@ export const pluginHandlers = HttpApiBuilder.group(InstanceHttpApi, "plugin", (h
         )
       }
 
-      return { removed: out.items.flatMap((item) => item.removed) }
+      yield* config.invalidate()
+
+      return {
+        removed: out.items.flatMap((item) => item.removed),
+        files: out.items.filter((item) => item.mode === "removed").map((item) => item.file),
+      }
     })
 
     return handlers.handle("list", list).handle("install", install).handle("remove", remove)

@@ -183,9 +183,9 @@ export const McpManagerView: Component<{ directory?: string; heading?: boolean }
         logout: logout(),
       })
       if (!result.data) throw new Error(language.t("common.requestFailed"))
-      return { server, removed: result.data.removed }
+      return { server, removed: result.data.removed, files: result.data.files }
     },
-    onSuccess: ({ server, removed }) => {
+    onSuccess: ({ server, removed, files }) => {
       setPending(undefined)
       if (!removed) {
         showToast({ title: language.t("toast.mcp.notFound.title", { name: server }) })
@@ -199,6 +199,7 @@ export const McpManagerView: Component<{ directory?: string; heading?: boolean }
         variant: "success",
         icon: "circle-check",
         title: language.t("toast.mcp.removed.title", { name: server }),
+        description: language.t("toast.mcp.removed.description", { files: files.join(", ") }),
       })
     },
     onError: (error) => {

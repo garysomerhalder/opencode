@@ -32,6 +32,7 @@ export const RemovePayload = Schema.Struct({
 
 export const RemoveResponse = Schema.Struct({
   removed: Schema.Boolean,
+  files: Schema.Array(Schema.String),
   logout: Schema.Boolean,
 })
 
