@@ -123,8 +123,7 @@ export const McpRemoveCommand = effectCmd({
       .option("global", {
         alias: ["g"],
         type: "boolean",
-        default: false,
-        describe: "remove from global config",
+        describe: "remove from global config only (default removes from every config)",
       })
       .option("logout", {
         type: "boolean",
@@ -147,31 +146,39 @@ export const McpRemoveCommand = effectCmd({
       UI.empty()
       prompts.intro(`Remove MCP server ${name}`)
 
-      const file = await resolveConfigFile({
-        global: Boolean(args.global),
+      const scope = {
         vcs: ctx.project.vcs,
         worktree: ctx.worktree,
         directory: ctx.directory,
-      })
-      const out = await removeMcpEntry(file, name)
-      if (!out.ok) {
-        if (out.code === "invalid_json") {
-          prompts.log.error(`Invalid JSON in ${out.file} (${out.parse} at line ${out.line}, column ${out.col})`)
-          prompts.log.info("Fix the config file and run the command again.")
-        } else {
-          prompts.log.error(errorMessage(out.error))
+      }
+      // Without --global, remove from every config that defines the server.
+      const globals = args.global === undefined ? [false, true] : [args.global]
+      let removed = false
+      for (const global of globals) {
+        const candidate = await resolveConfigFile({ ...scope, global })
+        const out = await removeMcpEntry(candidate, name)
+        if (!out.ok) {
+          if (out.code === "invalid_json") {
+            prompts.log.error(`Invalid JSON in ${out.file} (${out.parse} at line ${out.line}, column ${out.col})`)
+            prompts.log.info("Fix the config file and run the command again.")
+          } else {
+            prompts.log.error(errorMessage(out.error))
+          }
+          process.exitCode = 1
+          prompts.outro("Done")
+          return false
         }
+        if (out.removed) {
+          removed = true
+          prompts.log.success(`MCP server "${name}" removed from ${out.file}`)
+        }
+      }
+      if (!removed) {
+        prompts.log.warn(`MCP server "${name}" is not configured`)
         process.exitCode = 1
         prompts.outro("Done")
         return false
       }
-      if (!out.removed) {
-        prompts.log.warn(`MCP server "${name}" is not configured in ${out.file}`)
-        process.exitCode = 1
-        prompts.outro("Done")
-        return false
-      }
-      prompts.log.success(`MCP server "${name}" removed from ${out.file}`)
       return true
     })
     if (!removed) return

@@ -54,7 +54,6 @@ export const McpManagerView: Component<{ directory?: string; heading?: boolean }
   // Remove confirm state
   const [target, setTarget] = createSignal("")
   const [logout, setLogout] = createSignal(false)
-  const [removeGlobal, setRemoveGlobal] = createSignal(false)
 
   const [data, { refetch }] = createResource(async () => {
     const client = serverSDK().client
@@ -181,7 +180,6 @@ export const McpManagerView: Component<{ directory?: string; heading?: boolean }
       const result = await serverSDK().client.mcp.remove({
         directory: props.directory,
         name: server,
-        global: removeGlobal(),
         logout: logout(),
       })
       if (!result.data) throw new Error(language.t("common.requestFailed"))
@@ -328,19 +326,6 @@ export const McpManagerView: Component<{ directory?: string; heading?: boolean }
                   <p class="text-14-regular text-text-base">{language.t("dialog.mcp.remove.description")}</p>
                 </div>
                 <div class="px-2.5 flex flex-col gap-4">
-                  <div class="w-full flex items-center justify-between gap-x-3">
-                    <div class="flex flex-col gap-0.5">
-                      <span class="text-14-regular text-text-strong">
-                        {language.t("dialog.mcp.remove.scope.label")}
-                      </span>
-                      <span class="text-12-regular text-text-weaker">
-                        {removeGlobal()
-                          ? language.t("dialog.mcp.install.scope.global")
-                          : language.t("dialog.mcp.install.scope.local")}
-                      </span>
-                    </div>
-                    <Switch checked={removeGlobal()} disabled={busy()} onChange={setRemoveGlobal} />
-                  </div>
                   <div class="w-full flex items-center justify-between gap-x-3">
                     <div class="flex flex-col gap-0.5">
                       <span class="text-14-regular text-text-strong">
@@ -555,7 +540,6 @@ export const McpManagerView: Component<{ directory?: string; heading?: boolean }
                   onClick={() => {
                     if (busy()) return
                     setTarget(row.name)
-                    setRemoveGlobal(false)
                     setLogout(false)
                     setView("remove")
                   }}

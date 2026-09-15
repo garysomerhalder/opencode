@@ -74,24 +74,26 @@ export const mcpHandlers = HttpApiBuilder.group(InstanceHttpApi, "mcp", (handler
         return yield* Effect.fail(new McpRemoveError({ message: "MCP server name is required" }))
       }
 
-      const file = yield* Effect.promise(() =>
-        resolveConfigFile({
-          global: ctx.payload.global,
-          vcs: instance.project.vcs,
-          worktree: instance.worktree,
-          directory: instance.directory,
-        }),
-      )
-      const patched = yield* Effect.promise(() => removeMcpEntry(file, name))
-      if (!patched.ok) {
-        return yield* Effect.fail(
-          new McpRemoveError({
-            message:
-              patched.code === "invalid_json"
-                ? `Invalid JSON in ${patched.file} (${patched.parse} at line ${patched.line}, column ${patched.col})`
-                : errorMessage(patched.error),
-          }),
-        )
+      const scope = { vcs: instance.project.vcs, worktree: instance.worktree, directory: instance.directory }
+      // Without an explicit scope, remove from every config that defines the
+      // server so "remove" never silently leaves it active in another scope.
+      const globals: Array<boolean | undefined> =
+        ctx.payload.global === undefined ? [false, true] : [ctx.payload.global]
+      let removed = false
+      for (const global of globals) {
+        const file = yield* Effect.promise(() => resolveConfigFile({ ...scope, global }))
+        const patched = yield* Effect.promise(() => removeMcpEntry(file, name))
+        if (!patched.ok) {
+          return yield* Effect.fail(
+            new McpRemoveError({
+              message:
+                patched.code === "invalid_json"
+                  ? `Invalid JSON in ${patched.file} (${patched.parse} at line ${patched.line}, column ${patched.col})`
+                  : errorMessage(patched.error),
+            }),
+          )
+        }
+        removed = removed || patched.removed
       }
 
       yield* mcp.remove(name)
@@ -100,7 +102,7 @@ export const mcpHandlers = HttpApiBuilder.group(InstanceHttpApi, "mcp", (handler
         yield* mcp.removeAuth(name)
         logout = true
       }
-      return { removed: patched.removed, logout }
+      return { removed, logout }
     })
 
     const authStart = Effect.fn("McpHttpApi.authStart")(function* (ctx: { params: { name: string } }) {

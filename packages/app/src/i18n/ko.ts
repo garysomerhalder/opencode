@@ -418,7 +418,6 @@ export const dict = {
   "dialog.mcp.remove.open": "Remove {{name}}",
   "dialog.mcp.remove.title": "Remove {{name}}?",
   "dialog.mcp.remove.description": "Deletes the server from config. Re-adding requires its connection details.",
-  "dialog.mcp.remove.scope.label": "Remove from",
   "dialog.mcp.remove.logout.label": "Also log out",
   "dialog.mcp.remove.logout.description": "Drop stored OAuth credentials for this server.",
   "dialog.mcp.remove.submit": "Remove server",
