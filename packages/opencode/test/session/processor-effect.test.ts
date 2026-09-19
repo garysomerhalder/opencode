@@ -805,6 +805,88 @@ it.live("session.processor effect tests compact on structured context overflow",
   ),
 )
 
+// Some gateways (OpenCode Go -> Muse) reject an over-long request with a
+// generic 400 instead of a context-length message. isOverflow() only sees the
+// last finished turn, so a turn that lands just under the usable limit lets the
+// next request (history + new prompt + max_tokens) exceed the window.
+const opaque400 = {
+  model: "test-model",
+  error: {
+    param: null,
+    type: "invalid_request_error",
+    message:
+      "Error from provider (Console Go): Upstream request failed: [invalid_request_error] The request contains invalid parameters. Check the request body for any errors or inconsistencies.",
+  },
+}
+
+const opaque400Run = (dir: string, contextTotal: number) =>
+  Effect.gen(function* () {
+    const { processors, session, provider } = yield* boot()
+    const chat = yield* session.create({})
+    const parent = yield* user(chat.id, "continue")
+    const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
+    const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
+    const handle = yield* processors.create({
+      assistantMessage: msg,
+      sessionID: chat.id,
+      model: mdl,
+      contextTokens: {
+        total: contextTotal,
+        input: 0,
+        output: 0,
+        reasoning: 0,
+        cache: { read: contextTotal, write: 0 },
+      },
+    })
+    const value = yield* handle.process({
+      user: {
+        id: parent.id,
+        sessionID: chat.id,
+        role: "user",
+        time: parent.time,
+        agent: parent.agent,
+        model: { providerID: ref.providerID, modelID: ref.modelID },
+      } satisfies SessionV1.User,
+      sessionID: chat.id,
+      model: mdl,
+      agent: agent(),
+      system: [],
+      messages: [{ role: "user", content: "continue" }],
+      tools: {},
+    })
+    return { value, handle }
+  })
+
+it.live("session.processor effect tests compact on an opaque 400 when the last context was near the limit", () =>
+  provideTmpdirServer(
+    ({ dir, llm }) =>
+      Effect.gen(function* () {
+        yield* llm.error(400, opaque400)
+        // test-model: context 100_000, output 10_000 -> usable 90_000.
+        const { value, handle } = yield* opaque400Run(dir, 89_990)
+
+        expect(value).toBe("compact")
+        expect(yield* llm.calls).toBe(1)
+        expect(handle.message.error).toBeUndefined()
+      }),
+    { config: (url) => providerCfg(url) },
+  ),
+)
+
+it.live("session.processor effect tests keep an opaque 400 as an API error when the context is small", () =>
+  provideTmpdirServer(
+    ({ dir, llm }) =>
+      Effect.gen(function* () {
+        yield* llm.error(400, opaque400)
+        const { value, handle } = yield* opaque400Run(dir, 1_000)
+
+        expect(value).toBe("stop")
+        expect(handle.message.error?.name).toBe("APIError")
+      }),
+    { config: (url) => providerCfg(url) },
+  ),
+)
+
 it.live("session.processor effect tests complete AI SDK tool calls when native flag is off", () =>
   provideTmpdirServer(
     ({ dir, llm }) =>

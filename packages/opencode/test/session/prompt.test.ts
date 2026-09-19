@@ -705,6 +705,47 @@ it.instance("loop stops provider overflow instead of auto-compacting when disabl
   }),
 )
 
+it.instance("loop compacts once and recovers when an opaque 400 follows a near-limit turn", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({ title: "Pinned" })
+
+    // test-model: context 100_000, output 10_000 -> usable 90_000. 85_010 is
+    // under the auto-compaction threshold but within the near-overflow margin.
+    yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "hello" }],
+    })
+    yield* llm.text("big", { usage: { input: 85_000, output: 10 } })
+    yield* prompt.loop({ sessionID: chat.id })
+
+    yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "again" }],
+    })
+    yield* llm.error(400, {
+      error: { type: "invalid_request_error", message: "The request contains invalid parameters." },
+    })
+    yield* llm.text("summary")
+    yield* llm.text("recovered")
+
+    const result = yield* prompt.loop({ sessionID: chat.id })
+    const messages = yield* sessions.messages({ sessionID: chat.id })
+
+    expect(result.info.role).toBe("assistant")
+    if (result.info.role === "assistant") expect(result.info.error).toBeUndefined()
+    expect(result.parts).toEqual(expect.arrayContaining([expect.objectContaining({ type: "text", text: "recovered" })]))
+    expect(messages.filter((message) => message.parts.some((part) => part.type === "compaction"))).toHaveLength(1)
+    expect(yield* llm.calls).toBe(4)
+  }),
+)
+
 noLLMServer.instance.skip(
   "prompt emits v2 prompted and synthetic events (v2 projector disabled)",
   () =>

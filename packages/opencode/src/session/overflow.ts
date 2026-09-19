@@ -28,7 +28,27 @@ export function isOverflow(input: {
   if (input.cfg.compaction?.auto === false) return false
   if (input.model.limit.context === 0) return false
 
-  const count =
-    input.tokens.total || input.tokens.input + input.tokens.output + input.tokens.cache.read + input.tokens.cache.write
-  return count >= usable(input)
+  return count(input.tokens) >= usable(input)
+}
+
+// isOverflow() judges the last finished turn, but the next request also carries
+// the new prompt and asks for max_tokens on top. A turn that lands just under
+// the usable limit can therefore make the next request exceed the window, and
+// some gateways report that as a generic 400 instead of a context-length error.
+// Within this margin, such a 400 is treated as an overflow.
+export function isNearOverflow(input: {
+  cfg: ConfigV1.Info
+  tokens: SessionV1.Assistant["tokens"]
+  model: Provider.Model
+  outputTokenMax?: number
+}) {
+  if (input.cfg.compaction?.auto === false) return false
+  if (input.model.limit.context === 0) return false
+  return count(input.tokens) >= usable(input) * NEAR_OVERFLOW_RATIO
+}
+
+const NEAR_OVERFLOW_RATIO = 0.9
+
+function count(tokens: SessionV1.Assistant["tokens"]) {
+  return tokens.total || tokens.input + tokens.output + tokens.cache.read + tokens.cache.write
 }

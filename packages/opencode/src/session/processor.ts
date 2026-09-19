@@ -12,7 +12,7 @@ import { Snapshot } from "@/snapshot"
 import { Session } from "./session"
 import { LLM } from "./llm"
 import { MessageV2 } from "./message-v2"
-import { isOverflow } from "./overflow"
+import { isNearOverflow, isOverflow } from "./overflow"
 import { PartID } from "./schema"
 import type { SessionID } from "./schema"
 import { SessionRetry } from "./retry"
@@ -51,6 +51,9 @@ type Input = {
   assistantMessage: SessionV1.Assistant
   sessionID: SessionID
   model: Provider.Model
+  // Token usage of the last finished turn in this session, if any. Used to
+  // recognise an opaque provider 400 as a context overflow.
+  contextTokens?: SessionV1.Assistant["tokens"]
 }
 
 export interface Interface {
@@ -119,6 +122,22 @@ const layer = Layer.effect(
           providerID: input.model.providerID,
           aborted,
         })
+
+      // Some gateways (e.g. OpenCode Go in front of Muse) reject a request that
+      // overflows the context window with a generic non-retryable 400. When the
+      // last finished turn was already close to the limit, treat it as an
+      // overflow so the session compacts. After compaction the last finished
+      // turn is a summary, so a 400 that persists surfaces as a normal error.
+      const overflowFromOpaque400 = (error: ReturnType<typeof parse>, cfg: Parameters<typeof isOverflow>[0]["cfg"]) => {
+        if (!SessionV1.APIError.isInstance(error)) return error
+        if (error.data.statusCode !== 400 || error.data.isRetryable) return error
+        if (!input.contextTokens) return error
+        if (!isNearOverflow({ cfg, tokens: input.contextTokens, model: input.model })) return error
+        return new SessionV1.ContextOverflowError({
+          message: error.data.message,
+          responseBody: error.data.responseBody,
+        }).toObject()
+      }
 
       const settleToolCall = Effect.fn("SessionProcessor.settleToolCall")(function* (toolCallID: string) {
         const done = ctx.toolcalls[toolCallID]?.done
@@ -617,9 +636,10 @@ const layer = Layer.effect(
           error: errorMessage(e),
           stack: e instanceof Error ? e.stack : undefined,
         })
-        const error = parse(e)
+        const cfg = yield* config.get()
+        const error = overflowFromOpaque400(parse(e), cfg)
         if (SessionV1.ContextOverflowError.isInstance(error)) {
-          if ((yield* config.get()).compaction?.auto === false && !ctx.assistantMessage.summary) {
+          if (cfg.compaction?.auto === false && !ctx.assistantMessage.summary) {
             ctx.assistantMessage.error = error
             ctx.assistantMessage.finish = "error"
             yield* events.publish(Session.Event.Error, { sessionID: ctx.sessionID, error })

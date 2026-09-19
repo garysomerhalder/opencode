@@ -1215,6 +1215,7 @@ const layer = Layer.effect(
               assistantMessage: msg,
               sessionID,
               model,
+              contextTokens: lastFinished && lastFinished.summary !== true ? lastFinished.tokens : undefined,
             })
             .pipe(Effect.onInterrupt(() => finalizeInterruptedAssistant))
 
