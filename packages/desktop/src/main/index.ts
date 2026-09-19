@@ -53,8 +53,11 @@ import { migrate } from "./migrate"
 import { cleanupStoreFiles } from "./store-cleanup"
 import { startBackgroundCli } from "./background-cli"
 import { setNativeTranslations } from "./native-translations"
+import { activeBrand } from "@opencode-ai/app/brand"
 
-const APP_NAMES: Record<string, string> = {
+// Display names only (brand layer). APP_IDS and the userData path below are identity and do not change.
+const BRAND = activeBrand()
+const APP_NAMES: Record<string, string> = BRAND?.appNames ?? {
   dev: "OpenCode Dev",
   beta: "OpenCode Beta",
   prod: "OpenCode",
@@ -162,7 +165,14 @@ const main = Effect.gen(function* () {
     process.env.XDG_STATE_HOME = join(root, "state")
     return root
   })()
-  app.setName(app.isPackaged ? APP_NAMES[CHANNEL] : "OpenCode Dev")
+  app.setName(app.isPackaged ? APP_NAMES[CHANNEL] : APP_NAMES.dev)
+  if (BRAND) {
+    app.setAboutPanelOptions({
+      applicationName: BRAND.productName,
+      applicationVersion: app.getVersion(),
+      credits: BRAND.messages["brand.credit"],
+    })
+  }
   app.setAppUserModelId(appId)
   app.setPath(
     "userData",

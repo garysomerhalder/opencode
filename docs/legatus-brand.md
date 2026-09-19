@@ -57,7 +57,18 @@ How each place was found: `grep -rn "OpenCode"` over `packages/desktop/src`,
 | `packages/desktop/src/main/native-translations.ts` | The initial English native bundle (menus and recovery dialogs, before the renderer sends its bundle) goes through `brandDictionary`. | `DESKTOP_NATIVE_ENGLISH` |
 | `packages/desktop/src/renderer/i18n/index.ts` | The desktop-renderer dictionary (updater dialogs) goes through `brandDictionary`. | grep |
 | `packages/desktop/icons/legatus/*` (new) + `scripts/copy-icons.ts` | App icons generated from the official icon SVG: the white mark on `#0A0E14` with padding, per the Brand API social/favicon spec. Sizes 16–1024 as PNG, `icon.ico` (16/24/32/48/64/128/256), `icon.icns`, and the same file names as `icons/dev`. `copy-icons` uses `icons/legatus` when the brand is active; `icons/{dev,beta,prod}` are untouched. | `predev.ts` → `copy-icons.ts` |
-| `packages/desktop/scripts/legatus-icons.ts` (new) | Rebuilds the icon set from the SVG (`@resvg/resvg-js` is fetched on demand into a temp directory, not added as a repo dependency). | |
+| `packages/desktop/scripts/legatus-icons.ts` + `legatus-icons-lib.ts` + test (new) | Rebuilds the icon set from the SVG. The ICO/ICNS containers are written by the lib, which is tested. `@resvg/resvg-js` is installed on demand outside the repo (`RESVG_MODULE=…`), not added as a dependency. | |
+| `packages/ui/script/build-legatus-theme.ts` (new) | Regenerates `themes/legatus.json` from the token snapshot. | |
+| `packages/desktop/src/renderer/brand/svg.ts` + `svg.test.ts` (new) | SVG → `{viewBox, inner}` with `currentColor`. The test checks that the flat icon is the official mark shifted by −306 on x, and that `logo.tsx` keeps the same exports as the upstream logo module. | |
+
+As-built notes:
+- The credit string lives in `LEGATUS.messages` (added by `brandDictionary`), not in `en.ts`. The
+  i18n parity test requires every English key in all 60 locales, and a brand-only key should not
+  touch 60 upstream files. Every locale falls back to the English credit.
+- `index.html` `<title>` is fixed at "Legatus". It does not follow `OPENCODE_BRAND` (a static file).
+- The first frame of a cold start still uses the oc-2 background from `oc-theme-preload.js`
+  (#080808 against #0A0E14). The Legatus theme applies once the ThemeProvider mounts, and the
+  theme is not written to `opencode-theme-id` until the user picks one.
 
 Kept on purpose, with "OpenCode" left as is: "OpenCode server" (the server really is opencode),
 WSL "Install/Update OpenCode" (installs the `opencode` CLI), "OpenCode Zen/Go" (upstream paid

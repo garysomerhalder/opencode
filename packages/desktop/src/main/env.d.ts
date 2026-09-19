@@ -1,5 +1,6 @@
 interface ImportMetaEnv {
   readonly OPENCODE_CHANNEL: string
+  readonly VITE_OPENCODE_BRAND?: string
 }
 
 interface ImportMeta {
