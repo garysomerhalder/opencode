@@ -13,6 +13,7 @@ import contextMenu from "electron-context-menu"
 
 import type { ServerReadyData } from "../preload/types"
 import { checkAppExists, resolveAppPath } from "./apps"
+import { createConnectionFile, type ConnectionFile } from "./connection-file"
 import { CHANNEL } from "./constants"
 import { registerIpcHandlers, sendDeepLinks, sendMenuCommand, sendToAllWindows } from "./ipc"
 import { forwardInitializationFailure } from "./initialization"
@@ -69,6 +70,7 @@ const jsCallStackFeature = "DocumentPolicyIncludeJSCallStacksInCrashReports"
 
 let logger: ReturnType<typeof initLogging>
 let server: SidecarListener | null = null
+let connectionFile: ConnectionFile | null = null
 
 const pendingDeepLinks: string[] = []
 
@@ -92,6 +94,7 @@ async function killSidecar() {
   if (!server) return
   const current = server
   server = null
+  connectionFile?.remove("sidecar stopped")
   await current.stop()
 }
 
@@ -221,6 +224,18 @@ const main = Effect.gen(function* () {
     return
   }
 
+  // We hold the single-instance lock, so an existing connection file belongs to a dead
+  // instance (crash, hard kill, dev hot reload) and must not be served to local tools.
+  connectionFile = createConnectionFile({
+    dir: app.getPath("userData"),
+    appVersion: app.getVersion(),
+    logger: {
+      log: (message, meta) => logger.log(message, meta),
+      warn: (message, meta) => logger.warn(message, meta),
+    },
+  })
+  connectionFile.clearStale()
+
   const shellEnv = preferAppEnv(app.getPath("userData"))
 
   app.on("second-instance", (_event: Event, argv: string[]) => {
@@ -244,11 +259,13 @@ const main = Effect.gen(function* () {
 
   app.on("before-quit", () => {
     setAppQuitting()
+    connectionFile?.remove("quit")
     void stopSidecars()
   })
 
   app.on("will-quit", () => {
     setAppQuitting()
+    connectionFile?.remove("quit")
     void stopSidecars()
   })
 
@@ -267,6 +284,7 @@ const main = Effect.gen(function* () {
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
     process.on(signal, () => {
       setAppQuitting()
+      connectionFile?.remove("signal")
       void stopSidecars().finally(() => app.quit())
     })
   }
@@ -382,6 +400,7 @@ const main = Effect.gen(function* () {
         username: sidecar.username,
         password: sidecar.password,
       })
+      connectionFile?.write({ url: sidecar.url, username: sidecar.username, password: sidecar.password })
 
       if (process.platform === "win32") {
         void wslServers.initialize().catch((error) => logger.error("wsl server initialization failed", error))
@@ -424,10 +443,14 @@ const main = Effect.gen(function* () {
         userDataPath: app.getPath("userData"),
         onStdout: (message) => writeLog("server", "stdout", { message }),
         onStderr: (message) => writeLog("server", "stderr", { message }, "warn"),
-        onExit: (code) => writeLog("utility", "sidecar exited", { code }, "warn"),
+        onExit: (code) => {
+          writeLog("utility", "sidecar exited", { code }, "warn")
+          connectionFile?.remove("sidecar exited")
+        },
       }),
     )
     server = listener
+    connectionFile?.write({ url, username: "opencode", password })
     yield* Deferred.succeed(serverReady, {
       url,
       username: "opencode",
