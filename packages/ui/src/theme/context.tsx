@@ -60,6 +60,7 @@ const names: Record<string, string> = {
   github: "GitHub",
   gruvbox: "Gruvbox",
   kanagawa: "Kanagawa",
+  legatus: "Legatus",
   "lucent-orng": "Lucent Orng",
   material: "Material",
   matrix: "Matrix",
