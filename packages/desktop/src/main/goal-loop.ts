@@ -27,14 +27,34 @@ export type GoalLoopDeps = {
   startTimeoutMs?: number
   pollIntervalMs?: number
   maxConsecutiveErrors?: number
+  /** Consecutive aborted turns tolerated before the loop gives up. */
+  maxConsecutiveAborts?: number
+  /** First wait after an aborted turn; doubles per consecutive abort. */
+  abortBackoffMs?: number
+  /** How long the server may stay unreachable (refused, 5xx) before it counts as one error. */
+  outageToleranceMs?: number
+  /** First retry wait after a failed request; doubles per attempt. */
+  retryBackoffMs?: number
+  maxBackoffMs?: number
 }
 
 export const DEFAULT_COMPLETION_MARKER = "GOAL_COMPLETE"
 const DEFAULT_WAIT_TIMEOUT_MS = 15 * 60 * 1000
 const DEFAULT_MAX_CONSECUTIVE_ERRORS = 3
+const DEFAULT_MAX_CONSECUTIVE_ABORTS = 5
+const DEFAULT_ABORT_BACKOFF_MS = 5 * 1000
+const DEFAULT_OUTAGE_TOLERANCE_MS = 2 * 60 * 1000
+const DEFAULT_RETRY_BACKOFF_MS = 1000
+const DEFAULT_MAX_BACKOFF_MS = 30 * 1000
 const HISTORY_LIMIT = 20
 const ACTIVE_POLL_INTERVAL_MS = 2000
 const EXECUTION_START_TIMEOUT_MS = 30 * 1000
+
+// The server is unreachable or restarting (connection refused/reset, 5xx,
+// 429). The loop retries these with backoff instead of counting an error.
+class TransientError extends Error {}
+
+type SessionMessage = { id: string | null; role: unknown; aborted: boolean; raw: unknown }
 
 function authHeader(server: GoalLoopServer): Record<string, string> {
   if (!server.username && !server.password) return {}
@@ -95,6 +115,33 @@ export function completionReached(text: string, marker: string): boolean {
   return new RegExp(`^${escaped}$`, "m").test(text)
 }
 
+// Reads a message list (v1 info/parts or v2 envelope) in chronological order.
+function parseMessages(payload: unknown): SessionMessage[] {
+  const record = (payload ?? {}) as Record<string, unknown>
+  const items =
+    [Array.isArray(payload) ? payload : undefined, record["data"], record["messages"], record["items"]].find(
+      (value): value is unknown[] => Array.isArray(value),
+    ) ?? []
+  return items
+    .filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null)
+    .map((item) => {
+      const info = (item["info"] ?? item) as Record<string, unknown>
+      const error = (info["error"] ?? {}) as { name?: unknown; data?: { message?: unknown } }
+      return {
+        id: typeof info["id"] === "string" ? info["id"] : null,
+        role: info["role"] ?? item["type"],
+        aborted: error.name === "MessageAbortedError" || error.data?.message === "Aborted",
+        raw: item,
+      }
+    })
+}
+
+// Assistant output of the latest turn: everything after the last user message.
+function turnText(messages: SessionMessage[]): string {
+  const start = messages.findLastIndex((message) => message.role === "user") + 1
+  return extractAssistantText(messages.slice(start).map((message) => message.raw))
+}
+
 export function createGoalLoop(deps: GoalLoopDeps) {
   const fetchImpl = deps.fetchImpl ?? fetch
   const now = deps.now ?? Date.now
@@ -103,12 +150,19 @@ export function createGoalLoop(deps: GoalLoopDeps) {
   const startTimeoutMs = deps.startTimeoutMs ?? EXECUTION_START_TIMEOUT_MS
   const pollIntervalMs = deps.pollIntervalMs ?? ACTIVE_POLL_INTERVAL_MS
   const maxConsecutiveErrors = deps.maxConsecutiveErrors ?? DEFAULT_MAX_CONSECUTIVE_ERRORS
+  const maxConsecutiveAborts = deps.maxConsecutiveAborts ?? DEFAULT_MAX_CONSECUTIVE_ABORTS
+  const abortBackoffMs = deps.abortBackoffMs ?? DEFAULT_ABORT_BACKOFF_MS
+  const outageToleranceMs = deps.outageToleranceMs ?? DEFAULT_OUTAGE_TOLERANCE_MS
+  const retryBackoffMs = deps.retryBackoffMs ?? DEFAULT_RETRY_BACKOFF_MS
+  const maxBackoffMs = deps.maxBackoffMs ?? DEFAULT_MAX_BACKOFF_MS
 
   let active: GoalLoopState | null = null
   let stopped = false
   let directory = ""
 
   async function request(server: GoalLoopServer, path: string, init?: RequestInit): Promise<unknown> {
+    // fetch only rejects when the request never got an HTTP answer (refused,
+    // reset, DNS), which is what a restarting server looks like.
     const res = await fetchImpl(new URL(path, server.url), {
       ...init,
       headers: {
@@ -117,7 +171,12 @@ export function createGoalLoop(deps: GoalLoopDeps) {
         ...authHeader(server),
         ...(init?.headers ?? {}),
       },
+    }).catch((error: unknown) => {
+      throw new TransientError(`goal loop request failed: ${path} ${error instanceof Error ? error.message : String(error)}`)
     })
+    if (res.status >= 500 || res.status === 429) {
+      throw new TransientError(`goal loop request failed: ${res.status} ${path} ${(await res.text()).slice(0, 300)}`)
+    }
     if (!res.ok) throw new Error(`goal loop request failed: ${res.status} ${path} ${(await res.text()).slice(0, 300)}`)
     const text = await res.text()
     if (!text) return null
@@ -182,87 +241,198 @@ export function createGoalLoop(deps: GoalLoopDeps) {
     })
   }
 
-  async function waitIdle(server: GoalLoopServer, sessionID: string): Promise<void> {
-    await waitForActive(server, sessionID, true, startTimeoutMs, "session did not start executing")
-    await waitForActive(server, sessionID, false, waitTimeoutMs, "session did not finish within the wait timeout")
-  }
-
-  async function waitForActive(
-    server: GoalLoopServer,
-    sessionID: string,
-    wantActive: boolean,
-    timeoutMs: number,
-    timeoutMessage: string,
-  ): Promise<void> {
-    const deadline = now() + timeoutMs
-    while (true) {
-      if (stopped) throw new Error("stopped")
-      const payload = (await request(
-        server,
-        `/session/status?directory=${encodeURIComponent(directory)}`,
-        { method: "GET" },
-      )) as Record<string, { type?: string }>
-      // v1 reports per-session status; a missing entry means idle.
-      const status = payload?.[sessionID]?.type ?? "idle"
-      const isActive = status !== "idle"
-      if (isActive === wantActive) return
-      if (now() >= deadline) throw new Error(timeoutMessage)
-      await sleep(pollIntervalMs)
-    }
-  }
-
   function sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms))
   }
 
-  async function latestAssistantText(server: GoalLoopServer, sessionID: string): Promise<string> {
-    const payload = await request(
-      server,
-      `/session/${sessionID}/message?directory=${encodeURIComponent(directory)}&limit=${HISTORY_LIMIT}`,
-      { method: "GET" },
+  async function sessionMessages(server: GoalLoopServer, sessionID: string): Promise<SessionMessage[]> {
+    return parseMessages(
+      await request(
+        server,
+        `/session/${sessionID}/message?directory=${encodeURIComponent(directory)}&limit=${HISTORY_LIMIT}`,
+        { method: "GET" },
+      ),
     )
-    return extractAssistantText(payload)
   }
 
-  async function drive(state: GoalLoopState, server: GoalLoopServer, input: GoalLoopStartInput): Promise<void> {
-    let errors = 0
-    while (!stopped) {
+  // Drives the session by watching for "the latest turn completed in this
+  // session" rather than only the turns the loop started itself: another
+  // client may post prompts into the same session (an architect sending
+  // corrections), and the server may abort a turn (config reload) or restart.
+  // A turn counts as completed when the session is idle, no admitted user
+  // message is still waiting to run, and either a busy period was observed or
+  // a new assistant message appeared (turns shorter than one poll interval).
+  async function drive(
+    state: GoalLoopState,
+    server: GoalLoopServer,
+    input: GoalLoopStartInput,
+    baselineAssistantID: string | null,
+  ): Promise<void> {
+    const sessionID = state.sessionID ?? ""
+    const alive = () => !stopped && active?.id === state.id && active.status === "running"
+    const track = {
+      errors: 0,
+      aborts: 0,
+      outageSince: null as number | null,
+      sawBusy: false,
+      busySince: null as number | null,
+      sentAt: now(),
+      pendingUser: null as { id: string | null; at: number } | null,
+      staleUserID: undefined as string | null | undefined,
+      retries: 0,
+      lastAssistantID: baselineAssistantID,
+      // text of the continue prompt the loop owes the session, sent as soon as
+      // the session is observed idle with nothing queued
+      owed: null as string | null,
+      delay: 0,
+    }
+
+    const send = async (text: string) => {
+      track.owed = text
+      await prompt(server, sessionID, text, input)
+      track.owed = null
+      track.sawBusy = false
+      track.sentAt = now()
+    }
+
+    // Advances the iteration counter and returns the continue prompt text, or
+    // null when the iteration cap ends the loop.
+    const nextContinue = () => {
       const current = active
-      if (!current || current.id !== state.id || current.status !== "running") return
+      if (!current) return null
+      const nextIteration = current.iteration + 1
+      if (current.maxIterations !== null && nextIteration > current.maxIterations) {
+        finish("capped", `reached ${current.maxIterations} iterations without ${current.completionMarker}`)
+        return null
+      }
+      const next = setState({ ...current, iteration: nextIteration, updatedAt: now() })
+      emit({ loopID: next.id, type: "iteration", state: next })
+      return continuePromptText(next.goal, next.completionMarker, nextIteration, next.maxIterations)
+    }
+
+    while (alive()) {
+      if (track.delay > 0) {
+        await sleep(track.delay)
+        track.delay = 0
+        if (!alive()) return
+      }
       try {
-        await waitIdle(server, current.sessionID ?? "")
-        if (stopped) return
-        const text = await latestAssistantText(server, current.sessionID ?? "")
-        if (completionReached(text, current.completionMarker)) {
+        const busy = await sessionBusy(server, sessionID)
+        track.retries = 0
+        if (track.outageSince !== null) {
+          const seconds = Math.round((now() - track.outageSince) / 1000)
+          track.outageSince = null
+          note(`server reachable again after ${seconds}s; continuing`)
+        }
+        if (busy) {
+          track.sawBusy = true
+          track.busySince ??= now()
+          track.delay = pollIntervalMs
+          if (now() - track.busySince < waitTimeoutMs) continue
+          track.busySince = now()
+          throw new Error("session did not finish within the wait timeout")
+        }
+        track.busySince = null
+
+        const messages = await sessionMessages(server, sessionID)
+        const last = messages.at(-1)
+        if (last?.role === "user" && last.id !== track.staleUserID) {
+          // An admitted prompt (the loop's own or another client's) has not run
+          // yet. Never send on top of it; wait for its turn instead.
+          if (track.pendingUser?.id !== last.id) track.pendingUser = { id: last.id, at: now() }
+          track.delay = pollIntervalMs
+          if (now() - track.pendingUser.at < startTimeoutMs) continue
+          // It never ran; stop waiting on it and re-prompt on the next idle poll.
+          track.staleUserID = last.id
+          track.pendingUser = null
+          track.owed ??= nextContinue()
+          if (track.owed === null) return
+          throw new Error("session did not start executing")
+        }
+        track.pendingUser = null
+
+        const latest = messages.findLast((message) => message.role === "assistant")
+        const newTurn = track.sawBusy || (latest?.id != null && latest.id !== track.lastAssistantID)
+        if (!newTurn) {
+          if (track.owed !== null) {
+            await send(track.owed)
+            continue
+          }
+          track.delay = pollIntervalMs
+          if (now() - track.sentAt < startTimeoutMs) continue
+          track.owed = nextContinue()
+          if (track.owed === null) return
+          throw new Error("session did not start executing")
+        }
+
+        track.sawBusy = false
+        track.lastAssistantID = latest?.id ?? track.lastAssistantID
+        track.errors = 0
+        const current = active
+        if (!current) return
+        if (completionReached(turnText(messages), current.completionMarker)) {
           finish("completed", null)
           return
         }
-        errors = 0
-        const nextIteration = current.iteration + 1
-        if (current.maxIterations !== null && nextIteration > current.maxIterations) {
-          finish("capped", `reached ${current.maxIterations} iterations without ${current.completionMarker}`)
-          return
+        if (latest?.aborted) {
+          track.aborts += 1
+          if (track.aborts >= maxConsecutiveAborts) {
+            finish("failed", `turn aborted ${track.aborts} times in a row`)
+            return
+          }
+          note(`recovered from an aborted turn (${track.aborts} of ${maxConsecutiveAborts}); continuing`)
+          track.owed ??= nextContinue()
+          if (track.owed === null) return
+          // Re-poll after the backoff so the continue only goes out once the
+          // session is confirmed idle.
+          track.delay = Math.min(abortBackoffMs * 2 ** (track.aborts - 1), maxBackoffMs)
+          continue
         }
-        const next = setState({ ...current, iteration: nextIteration, updatedAt: now() })
-        emit({ loopID: next.id, type: "iteration", state: next })
-        await prompt(
-          server,
-          next.sessionID ?? "",
-          continuePromptText(next.goal, next.completionMarker, nextIteration, next.maxIterations),
-          input,
-        )
+        track.aborts = 0
+        // a continue still owed from an earlier abort or failed send covers this turn too
+        const text = track.owed ?? nextContinue()
+        if (text === null) return
+        await send(text)
       } catch (error) {
-        errors += 1
-        if (stopped) return
-        if (errors >= maxConsecutiveErrors) {
-          const message = error instanceof Error ? error.message : String(error)
-          const sessionID = active?.sessionID ?? null
-          if (sessionID) await interruptQuietly(server, sessionID)
+        if (!alive()) return
+        const message = error instanceof Error ? error.message : String(error)
+        track.delay = Math.min(retryBackoffMs * 2 ** track.retries, maxBackoffMs)
+        track.retries += 1
+        if (error instanceof TransientError) {
+          track.outageSince ??= now()
+          if (now() - track.outageSince < outageToleranceMs) {
+            note(`server unreachable, retrying: ${message}`)
+            continue
+          }
+          // A sustained outage counts as one error; the next window starts fresh.
+          track.outageSince = null
+        }
+        track.errors += 1
+        if (track.errors >= maxConsecutiveErrors) {
+          await interruptQuietly(server, sessionID)
           finish("failed", message)
           return
         }
+        note(`recovered from an error (${track.errors} of ${maxConsecutiveErrors}): ${message}`)
       }
     }
+  }
+
+  // Keeps the loop running while recording what it just recovered from, so
+  // goalLoop.status() and the UI show why the loop is still going.
+  function note(reason: string) {
+    const current = active
+    if (!current || current.status !== "running" || current.reason === reason) return
+    const next = setState({ ...current, reason, updatedAt: now() })
+    emit({ loopID: next.id, type: "iteration", state: next })
+  }
+
+  async function sessionBusy(server: GoalLoopServer, sessionID: string): Promise<boolean> {
+    const payload = (await request(server, `/session/status?directory=${encodeURIComponent(directory)}`, {
+      method: "GET",
+    })) as Record<string, { type?: string }> | null
+    // v1 reports per-session status; a missing entry means idle.
+    return (payload?.[sessionID]?.type ?? "idle") !== "idle"
   }
 
   async function interruptQuietly(server: GoalLoopServer, sessionID: string): Promise<void> {
@@ -301,6 +471,13 @@ export function createGoalLoop(deps: GoalLoopDeps) {
     directory = input.directory
     const server = await deps.getServer()
     const sessionID = await createSession(server, input)
+    // A reused session already has turns; remember the newest assistant
+    // message so an old reply is never mistaken for the loop's first turn.
+    const baselineAssistantID = input.sessionID
+      ? await sessionMessages(server, sessionID)
+          .then((messages) => messages.findLast((message) => message.role === "assistant")?.id ?? null)
+          .catch(() => null)
+      : null
     const state = setState({
       id: randomID(),
       status: "running",
@@ -318,7 +495,7 @@ export function createGoalLoop(deps: GoalLoopDeps) {
     deps.persistLast?.(input)
     emit({ loopID: state.id, type: "started", state })
     await prompt(server, sessionID, firstPromptText(goal, marker), input)
-    void drive(state, server, input)
+    void drive(state, server, input, baselineAssistantID)
     return state
   }
 

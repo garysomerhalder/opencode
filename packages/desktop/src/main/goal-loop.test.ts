@@ -120,7 +120,7 @@ describe("goal loop driver", () => {
     const state = await loop.start({ directory: "/repo", goal: "ship it" })
     expect(state.status).toBe("running")
     expect(state.sessionID).toBe("ses_1")
-    await Bun.sleep(50)
+    await waitFor(() => loop.status() === null)
     expect(loop.status()).toBe(null)
     expect(events.map((e) => e.type)).toEqual(["started", "completed"])
     expect(calls.some((c) => c.startsWith("POST /session?"))).toBe(true)
@@ -141,7 +141,7 @@ describe("goal loop driver", () => {
     )
     const loop = createGoalLoop({ getServer: async () => server, fetchImpl, onEvent: (e) => events.push(e), pollIntervalMs: 5 })
     await loop.start({ directory: "/repo", goal: "ship it", maxIterations: 2 })
-    await Bun.sleep(50)
+    await waitFor(() => loop.status() === null)
     expect(events.map((e) => e.type)).toEqual(["started", "iteration", "capped"])
     const capped = events.at(-1)
     if (capped?.type !== "capped") throw new Error("expected capped event")
@@ -173,7 +173,7 @@ describe("goal loop driver", () => {
     const state = await loop.start({ directory: "C:/work/proj", goal: "v1 shape" })
     expect(createURL).toContain(`directory=${encodeURIComponent("C:/work/proj")}`)
     expect(state.sessionID).toBe("ses_7")
-    await Bun.sleep(50)
+    await waitFor(() => loop.status() === null)
     expect(events.at(-1)?.type).toBe("completed")
   })
 
@@ -232,9 +232,12 @@ describe("goal loop driver", () => {
       fetchImpl,
       onEvent: (e) => events.push(e),
       maxConsecutiveErrors: 2,
+      // a rejected fetch reads as a server outage; with no tolerance it counts at once
+      outageToleranceMs: 0,
+      retryBackoffMs: 1,
     })
     await loop.start({ directory: "/repo", goal: "flaky" })
-    await Bun.sleep(50)
+    await waitFor(() => loop.status() === null)
     expect(events.at(-1)?.type).toBe("failed")
   })
 
@@ -245,6 +248,7 @@ describe("goal loop driver", () => {
         { method: "POST", path: "/session", respond: () => ({ id: "ses_8" }) },
         { method: "POST", path: "/session/ses_8/prompt_async", respond: () => ({}) },
         statusRoutes("ses_8", () => false, { n: 0 }),
+        { method: "GET", path: "/session/ses_8/message", respond: () => [] },
         { method: "POST", path: "/session/ses_8/abort", respond: () => ({}) },
       ],
       [],
@@ -258,7 +262,7 @@ describe("goal loop driver", () => {
       maxConsecutiveErrors: 1,
     })
     await loop.start({ directory: "/repo", goal: "never starts" })
-    await Bun.sleep(50)
+    await waitFor(() => loop.status() === null)
     const failed = events.at(-1)
     if (failed?.type !== "failed") throw new Error("expected failed event")
     expect(failed.state.reason).toContain("did not start executing")
@@ -308,7 +312,7 @@ describe("goal loop driver", () => {
     const input = { directory: "/repo", goal: "ship it", maxIterations: 2 }
     await loop.start(input)
     expect(persisted).toEqual([input])
-    await Bun.sleep(50)
+    await waitFor(() => loop.status() === null)
     expect(loop.status()).toBe(null)
   })
 
@@ -335,7 +339,7 @@ describe("goal loop driver", () => {
     const started = events.at(0)
     if (started?.type !== "started") throw new Error("expected started event")
     expect(started.state.ticket).toEqual(ticket)
-    await Bun.sleep(50)
+    await waitFor(() => loop.status() === null)
     expect(loop.status()).toBe(null)
   })
 
@@ -372,7 +376,7 @@ describe("goal loop driver", () => {
     const loop = createGoalLoop({ getServer: async () => server, fetchImpl, onEvent: (e) => events.push(e), pollIntervalMs: 5 })
     const state = await loop.start({ directory: "/repo", goal: "ship it" })
     expect(state.ticket).toBe(null)
-    await Bun.sleep(50)
+    await waitFor(() => loop.status() === null)
     expect(loop.status()).toBe(null)
   })
 
@@ -395,7 +399,7 @@ describe("goal loop driver", () => {
     const loop = createGoalLoop({ getServer: async () => server, fetchImpl, onEvent: (e) => events.push(e), pollIntervalMs: 5 })
     const state = await loop.start({ directory: "/repo", goal: "long job" })
     expect(state.maxIterations).toBe(null)
-    await Bun.sleep(100)
+    await waitFor(() => loop.status() === null)
     expect(polls.n).toBeGreaterThan(10)
     expect(events.at(-1)?.type).toBe("completed")
     expect(events.map((e) => e.type)).not.toContain("capped")
@@ -431,3 +435,273 @@ describe("goal loop driver", () => {
 function json(body: unknown): Response {
   return new Response(JSON.stringify(body), { status: 200 })
 }
+
+async function waitFor(predicate: () => boolean, timeoutMs = 2000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (!predicate()) {
+    if (Date.now() > deadline) throw new Error("timed out waiting for condition")
+    await Bun.sleep(2)
+  }
+}
+
+type Reply = { text: string; aborted?: boolean }
+type Turn = { startAfter: number; busyFor: number; reply: Reply; message?: { info: Record<string, unknown>; parts: unknown[] } }
+type TurnPlan = { reply: Reply; busyFor?: number; startAfter?: number }
+
+// A small stateful stand-in for the opencode server. Every admitted user
+// message queues one turn; a queued turn reads as idle for `startAfter` status
+// polls, then busy for `busyFor` polls. Like opencode, the assistant message
+// is created when the turn starts and filled in when it ends, so a prompt
+// posted mid-turn sorts after it.
+// `violations` counts prompts the loop sent while a turn was still queued or
+// running, i.e. a double-send into a busy session.
+function fakeServer(sessionID: string, plan: (index: number) => TurnPlan) {
+  const messages: unknown[] = []
+  const queue: Turn[] = []
+  const calls: string[] = []
+  const hooks: Array<(poll: number) => void> = []
+  const state = {
+    current: null as Turn | null,
+    ids: 0,
+    loopTurns: 0,
+    statusPolls: 0,
+    violations: 0,
+    outage: null as ((poll: number) => Response | "refuse" | null) | null,
+  }
+
+  function admit(text: string, turn: TurnPlan) {
+    messages.push({ info: { id: `msg_${String(++state.ids).padStart(4, "0")}`, role: "user" }, parts: [{ type: "text", text }] })
+    const entry = { startAfter: turn.startAfter ?? 0, busyFor: turn.busyFor ?? 1, reply: turn.reply }
+    if (state.current) queue.push(entry)
+    else state.current = entry
+  }
+
+  function begin(turn: Turn) {
+    if (turn.message) return
+    turn.message = { info: { id: `msg_${String(++state.ids).padStart(4, "0")}`, role: "assistant" }, parts: [] }
+    messages.push(turn.message)
+  }
+
+  function complete(turn: Turn) {
+    begin(turn)
+    if (!turn.message) return
+    if (turn.reply.aborted) turn.message.info["error"] = { name: "MessageAbortedError", data: { message: "Aborted" } }
+    turn.message.parts.push({ type: "text", text: turn.reply.text })
+  }
+
+  function poll(): boolean {
+    while (state.current) {
+      if (state.current.startAfter > 0) {
+        state.current.startAfter -= 1
+        return false
+      }
+      if (state.current.busyFor > 0) {
+        begin(state.current)
+        state.current.busyFor -= 1
+        return true
+      }
+      complete(state.current)
+      state.current = queue.shift() ?? null
+    }
+    return false
+  }
+
+  const fetchImpl = (async (input: URL | RequestInfo, init?: RequestInit) => {
+    const url = new URL(String(input))
+    const method = (init?.method ?? "GET").toUpperCase()
+    calls.push(`${method} ${url.pathname}`)
+    if (url.pathname === "/session/status") {
+      state.statusPolls += 1
+      const failure = state.outage?.(state.statusPolls) ?? null
+      if (failure === "refuse") throw new TypeError("fetch failed: connect ECONNREFUSED 127.0.0.1:4096")
+      if (failure) return failure
+      hooks.forEach((hook) => hook(state.statusPolls))
+      return json(poll() ? { [sessionID]: { type: "busy" } } : {})
+    }
+    if (url.pathname === "/session" && method === "POST") return json({ id: sessionID })
+    if (url.pathname === `/session/${sessionID}/prompt_async` && method === "POST") {
+      if (state.current) state.violations += 1
+      const body = JSON.parse(String(init?.body)) as { parts: { text: string }[] }
+      admit(body.parts[0]?.text ?? "", plan(state.loopTurns++))
+      return json({})
+    }
+    if (url.pathname === `/session/${sessionID}/message` && method === "GET") return json(messages.slice(-20))
+    if (url.pathname === `/session/${sessionID}/abort` && method === "POST") {
+      state.current = null
+      queue.length = 0
+      return json({})
+    }
+    throw new Error(`unexpected request: ${method} ${url.pathname}`)
+  }) as typeof fetch
+
+  return {
+    fetchImpl,
+    prompts: () => calls.filter((c) => c === `POST /session/${sessionID}/prompt_async`).length,
+    violations: () => state.violations,
+    // true once the current turn is actually running (its assistant message exists)
+    running: () => state.current?.message !== undefined,
+    onPoll: (hook: (poll: number) => void) => hooks.push(hook),
+    setOutage: (fn: (poll: number) => Response | "refuse" | null) => {
+      state.outage = fn
+    },
+    external: admit,
+  }
+}
+
+describe("goal loop resilience", () => {
+  test("an aborted turn is not an error: waits for idle, then continues", async () => {
+    const events: GoalLoopEvent[] = []
+    // Turn 0 is aborted so fast (a server config reload) that no status poll
+    // ever sees it busy. Turn 1 aborts after running. Turn 2 finishes.
+    const fake = fakeServer("ses_abort", (index) => {
+      if (index === 0) return { reply: { text: "partial", aborted: true }, busyFor: 0 }
+      if (index === 1) return { reply: { text: "partial again", aborted: true }, busyFor: 2 }
+      return { reply: { text: "done\nGOAL_COMPLETE" } }
+    })
+    const loop = createGoalLoop({
+      getServer: async () => server,
+      fetchImpl: fake.fetchImpl,
+      onEvent: (e) => events.push(e),
+      pollIntervalMs: 2,
+      startTimeoutMs: 40,
+      abortBackoffMs: 5,
+      maxConsecutiveErrors: 1,
+    })
+    await loop.start({ directory: "/repo", goal: "survive aborts" })
+    await waitFor(() => events.at(-1)?.type === "completed")
+    expect(events.map((e) => e.type)).not.toContain("failed")
+    expect(events.some((e) => e.state.status === "running" && (e.state.reason ?? "").includes("abort"))).toBe(true)
+    expect(fake.prompts()).toBe(3)
+    expect(fake.violations()).toBe(0)
+  })
+
+  test("gives up after too many consecutive aborted turns", async () => {
+    const events: GoalLoopEvent[] = []
+    const fake = fakeServer("ses_abort_cap", () => ({ reply: { text: "", aborted: true }, busyFor: 1 }))
+    const loop = createGoalLoop({
+      getServer: async () => server,
+      fetchImpl: fake.fetchImpl,
+      onEvent: (e) => events.push(e),
+      pollIntervalMs: 2,
+      abortBackoffMs: 1,
+      maxConsecutiveAborts: 3,
+    })
+    await loop.start({ directory: "/repo", goal: "keeps aborting" })
+    await waitFor(() => events.at(-1)?.type === "failed")
+    expect(events.at(-1)?.state.reason).toContain("aborted")
+    // the first prompt plus one continue per tolerated abort
+    expect(fake.prompts()).toBe(3)
+  })
+
+  test("tolerates an external user message mid-wait without double-sending while busy", async () => {
+    const events: GoalLoopEvent[] = []
+    const fake = fakeServer("ses_ext", (index) => ({
+      reply: { text: index >= 2 ? "done\nGOAL_COMPLETE" : "working" },
+      busyFor: 3,
+    }))
+    const injected = { done: false }
+    fake.onPoll(() => {
+      // while the loop's first continue runs, an architect posts a correction
+      // that the server only starts a few polls after that turn ends
+      if (injected.done || fake.prompts() !== 2 || !fake.running()) return
+      injected.done = true
+      fake.external("architect: use the other API", { reply: { text: "adjusted" }, startAfter: 3, busyFor: 2 })
+    })
+    const loop = createGoalLoop({
+      getServer: async () => server,
+      fetchImpl: fake.fetchImpl,
+      onEvent: (e) => events.push(e),
+      pollIntervalMs: 2,
+      startTimeoutMs: 200,
+      maxConsecutiveErrors: 1,
+    })
+    await loop.start({ directory: "/repo", goal: "handle corrections" })
+    await waitFor(() => events.at(-1)?.type === "completed")
+    expect(injected.done).toBe(true)
+    expect(fake.violations()).toBe(0)
+    // first prompt, a continue after turn 0, a continue after the external turn
+    expect(fake.prompts()).toBe(3)
+    expect(events.map((e) => e.type)).not.toContain("failed")
+  })
+
+  test("completes when the marker appears in an externally triggered turn", async () => {
+    const events: GoalLoopEvent[] = []
+    const fake = fakeServer("ses_ext_done", () => ({ reply: { text: "working" }, busyFor: 3 }))
+    const injected = { done: false }
+    fake.onPoll(() => {
+      if (injected.done || fake.prompts() !== 2 || !fake.running()) return
+      injected.done = true
+      fake.external("architect: that is enough, wrap up", {
+        reply: { text: "wrapped up\nGOAL_COMPLETE" },
+        startAfter: 3,
+        busyFor: 2,
+      })
+    })
+    const loop = createGoalLoop({
+      getServer: async () => server,
+      fetchImpl: fake.fetchImpl,
+      onEvent: (e) => events.push(e),
+      pollIntervalMs: 2,
+      startTimeoutMs: 200,
+      maxConsecutiveErrors: 1,
+    })
+    await loop.start({ directory: "/repo", goal: "external finish" })
+    await waitFor(() => events.at(-1)?.type === "completed")
+    expect(injected.done).toBe(true)
+    expect(fake.violations()).toBe(0)
+    expect(fake.prompts()).toBe(2)
+    expect(loop.status()).toBe(null)
+  })
+
+  test("rides out a brief server outage and keeps reporting running", async () => {
+    const events: GoalLoopEvent[] = []
+    const fake = fakeServer("ses_outage", (index) => ({
+      reply: { text: index >= 1 ? "done\nGOAL_COMPLETE" : "working" },
+      busyFor: 2,
+    }))
+    // status polls 3..12: the server restarts, first refusing connections, then answering 503
+    fake.setOutage((poll) => {
+      if (poll >= 3 && poll < 8) return "refuse"
+      if (poll >= 8 && poll < 13) return new Response("starting", { status: 503 })
+      return null
+    })
+    const seen: (string | null)[] = []
+    const loop = createGoalLoop({
+      getServer: async () => server,
+      fetchImpl: fake.fetchImpl,
+      onEvent: (e) => events.push(e),
+      pollIntervalMs: 2,
+      retryBackoffMs: 1,
+      maxBackoffMs: 4,
+      maxConsecutiveErrors: 3,
+    })
+    await loop.start({ directory: "/repo", goal: "survive restart" })
+    await waitFor(() => {
+      const state = loop.status()
+      if (state) seen.push(state.status === "running" ? state.reason : `not running: ${state.status}`)
+      return events.at(-1)?.type === "completed" || events.at(-1)?.type === "failed"
+    })
+    expect(events.at(-1)?.type).toBe("completed")
+    expect(seen.some((r) => (r ?? "").includes("unreachable"))).toBe(true)
+    expect(fake.violations()).toBe(0)
+  })
+
+  test("a sustained outage still fails the loop", async () => {
+    const events: GoalLoopEvent[] = []
+    const fake = fakeServer("ses_down", () => ({ reply: { text: "working" }, busyFor: 2 }))
+    fake.setOutage(() => "refuse")
+    const loop = createGoalLoop({
+      getServer: async () => server,
+      fetchImpl: fake.fetchImpl,
+      onEvent: (e) => events.push(e),
+      pollIntervalMs: 2,
+      retryBackoffMs: 1,
+      maxBackoffMs: 2,
+      outageToleranceMs: 20,
+      maxConsecutiveErrors: 2,
+    })
+    await loop.start({ directory: "/repo", goal: "server gone" })
+    await waitFor(() => events.at(-1)?.type === "failed")
+    expect(events.at(-1)?.state.reason).toContain("ECONNREFUSED")
+  })
+})
