@@ -540,6 +540,8 @@ function fakeServer(sessionID: string, plan: (index: number) => TurnPlan) {
     violations: () => state.violations,
     // true once the current turn is actually running (its assistant message exists)
     running: () => state.current?.message !== undefined,
+    // the assistant message of the running turn, for tests that stream parts into it
+    activeMessage: () => state.current?.message,
     onPoll: (hook: (poll: number) => void) => hooks.push(hook),
     setOutage: (fn: (poll: number) => Response | "refuse" | null) => {
       state.outage = fn
@@ -703,5 +705,119 @@ describe("goal loop resilience", () => {
     await loop.start({ directory: "/repo", goal: "server gone" })
     await waitFor(() => events.at(-1)?.type === "failed")
     expect(events.at(-1)?.state.reason).toContain("ECONNREFUSED")
+  })
+
+  test("a turn busy far past the wait timeout keeps running while it makes progress", async () => {
+    const events: GoalLoopEvent[] = []
+    const fake = fakeServer("ses_long", () => ({ reply: { text: "working" }, busyFor: 1_000_000 }))
+    fake.onPoll(() => {
+      // a tool call finishes on every poll, like a long build streaming steps
+      const message = fake.activeMessage()
+      if (!message) return
+      message.parts.push({
+        id: `prt_${message.parts.length}`,
+        type: "tool",
+        tool: "bash",
+        state: { status: "completed", time: { start: 1, end: 2 } },
+      })
+    })
+    const loop = createGoalLoop({
+      getServer: async () => server,
+      fetchImpl: fake.fetchImpl,
+      onEvent: (e) => events.push(e),
+      pollIntervalMs: 2,
+      waitTimeoutMs: 200,
+      progressCheckMs: 0,
+      maxConsecutiveErrors: 1,
+    })
+    await loop.start({ directory: "/repo", goal: "long build" })
+    const startedAt = Date.now()
+    // five wait timeouts of continuous busy work
+    await waitFor(() => Date.now() - startedAt > 1000 || loop.status() === null, 3000)
+    expect(loop.status()?.status).toBe("running")
+    expect(events.map((e) => e.type)).not.toContain("failed")
+    expect(events.some((e) => (e.state.reason ?? "").includes("error"))).toBe(false)
+    // no event per poll: steady progress is not news
+    expect(events.filter((e) => e.type === "iteration").length).toBeLessThan(3)
+    expect(fake.prompts()).toBe(1)
+    await loop.stop()
+  })
+
+  test("a busy turn with no progress for the wait timeout counts as an error", async () => {
+    const events: GoalLoopEvent[] = []
+    const fake = fakeServer("ses_quiet", () => ({ reply: { text: "working" }, busyFor: 1_000_000 }))
+    const loop = createGoalLoop({
+      getServer: async () => server,
+      fetchImpl: fake.fetchImpl,
+      onEvent: (e) => events.push(e),
+      pollIntervalMs: 2,
+      waitTimeoutMs: 120,
+      progressCheckMs: 0,
+      maxConsecutiveErrors: 2,
+    })
+    const startedAt = Date.now()
+    await loop.start({ directory: "/repo", goal: "wedged" })
+    await waitFor(() => loop.status() === null, 3000)
+    const reasons = events.map((e) => e.state.reason ?? "")
+    // the first stall is recovered from, the second one ends the loop
+    const recovered = reasons.filter((r) => r.startsWith("recovered from an error (1 of 2)"))
+    expect(recovered.some((r) => r.includes("no progress"))).toBe(true)
+    expect(reasons.some((r) => r.startsWith("working (last progress"))).toBe(true)
+    const failed = events.at(-1)
+    if (failed?.type !== "failed") throw new Error("expected failed event")
+    expect(failed.state.reason).toContain("no progress")
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(2 * 120)
+    // quiet-time notes are milestones, not one per poll
+    expect(events.filter((e) => e.type === "iteration").length).toBeLessThanOrEqual(8)
+  })
+
+  test("a tool stuck running past the wait timeout counts as a stall even while its output streams", async () => {
+    const events: GoalLoopEvent[] = []
+    const fake = fakeServer("ses_hung", () => ({ reply: { text: "working" }, busyFor: 1_000_000 }))
+    const hung = { at: 0 }
+    fake.onPoll(() => {
+      const message = fake.activeMessage()
+      if (!message) return
+      const last = message.parts.at(-1) as { state?: { status: string; metadata: { output: string } } } | undefined
+      if (last?.state?.status === "running") {
+        // the command keeps printing but never exits
+        last.state.metadata.output += "."
+        return
+      }
+      if (message.parts.length < 5) {
+        message.parts.push({
+          id: `prt_${message.parts.length}`,
+          type: "tool",
+          tool: "bash",
+          state: { status: "completed", time: { start: 1, end: 2 } },
+        })
+        return
+      }
+      hung.at = Date.now()
+      message.parts.push({
+        id: "prt_hung",
+        type: "tool",
+        tool: "bash",
+        state: { status: "running", time: { start: 3 }, metadata: { output: "" } },
+      })
+    })
+    const loop = createGoalLoop({
+      getServer: async () => server,
+      fetchImpl: fake.fetchImpl,
+      onEvent: (e) => events.push(e),
+      pollIntervalMs: 2,
+      waitTimeoutMs: 120,
+      progressCheckMs: 0,
+      maxConsecutiveErrors: 1,
+    })
+    await loop.start({ directory: "/repo", goal: "hung command" })
+    await waitFor(() => loop.status() === null, 3000)
+    const failed = events.at(-1)
+    if (failed?.type !== "failed") throw new Error("expected failed event")
+    expect(failed.state.reason).toContain("bash")
+    expect(hung.at).toBeGreaterThan(0)
+    expect(Date.now() - hung.at).toBeGreaterThanOrEqual(120)
+    // the loop interrupted the wedged session when it gave up
+    expect(fake.running()).toBe(false)
   })
 })
