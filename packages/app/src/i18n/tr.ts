@@ -1102,6 +1102,9 @@ export const dict = {
 
   "settings.general.row.language.title": "Dil",
   "settings.general.row.language.description": "OpenCode'un görünüm dilini değiştirin",
+  "settings.general.row.externalDirectory.title": "Ask before accessing folders outside the project",
+  "settings.general.row.externalDirectory.description":
+    "When off, the agent can use folders outside the project without asking (applies to all projects)",
   "settings.general.row.shell.title": "Terminal Kabuğu",
   "settings.general.row.shell.description":
     "Terminalinizde kullanılacak kabuğu seçin. Uyumlu kabuklar, ajan araç çağrılarında da kullanılır.",

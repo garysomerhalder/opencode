@@ -1092,6 +1092,9 @@ export const dict = {
   "settings.general.section.display": "ማሳያ",
   "settings.general.row.language.title": "ቋንቋ",
   "settings.general.row.language.description": "የማሳያ ቋንቋውን ለOpenCode",
+  "settings.general.row.externalDirectory.title": "Ask before accessing folders outside the project",
+  "settings.general.row.externalDirectory.description":
+    "When off, the agent can use folders outside the project without asking (applies to all projects)",
   "settings.general.row.shell.title": "ተርሚናል ሼል",
   "settings.general.row.shell.description": "ሼል በተርሚናል እና ወኪል መሳሪያዎች ጥቅም ላይ የዋለ",
   "settings.general.row.shell.autoDefault": "ራስ-ሰር (ነባሪ)",

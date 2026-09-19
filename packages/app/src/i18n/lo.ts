@@ -1105,6 +1105,9 @@ export const dict = {
   "settings.general.section.display": "ຈໍສະແດງຜົນ",
   "settings.general.row.language.title": "ພາສາ",
   "settings.general.row.language.description": "ປ່ຽນພາສາສະແດງສໍາລັບ OpenCode",
+  "settings.general.row.externalDirectory.title": "Ask before accessing folders outside the project",
+  "settings.general.row.externalDirectory.description":
+    "When off, the agent can use folders outside the project without asking (applies to all projects)",
   "settings.general.row.shell.title": "Shell ຂອງເທີມິນອນ",
   "settings.general.row.shell.description": "Shell ທີ່ໃຊ້ໂດຍເຄື່ອງໃຊ້ປາຍທາງ ແລະຕົວແທນ",
   "settings.general.row.shell.autoDefault": "ອັດຕະໂນມັດ (ຄ່າເລີ່ມຕົ້ນ)",

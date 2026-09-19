@@ -16,6 +16,7 @@ import {
   terminalInput,
   useSettings,
 } from "@/context/settings"
+import { externalDirectoryAsks, externalDirectoryPatch } from "@/utils/external-directory-permission"
 import { playSoundById, SOUND_OPTIONS } from "@/utils/sound"
 import { createSoundPreviewController, type ShellOption } from "./general-controller-behavior"
 
@@ -45,6 +46,20 @@ export function createPermissionScopeController(sessionID: Accessor<string | und
       if (!id || !dir) return
       if (checked) return permission.enableAutoAccept(id, dir)
       permission.disableAutoAccept(id, dir)
+    },
+  }
+}
+
+export function createExternalDirectorySettingsController() {
+  const serverSync = useServerSync()
+  const asking = createMemo(() => externalDirectoryAsks(serverSync().data.config.permission))
+
+  return {
+    asking,
+    pending: () => serverSync().data.reload === "pending",
+    set: (checked: boolean) => {
+      if (checked === asking()) return
+      void serverSync().updateConfig(externalDirectoryPatch(serverSync().data.config.permission, checked))
     },
   }
 }
@@ -168,6 +183,7 @@ export function createSoundSettingsController() {
 }
 
 export type PermissionScopeController = ReturnType<typeof createPermissionScopeController>
+export type ExternalDirectorySettingsController = ReturnType<typeof createExternalDirectorySettingsController>
 export type ShellSettingsController = ReturnType<typeof createShellSettingsController>
 export type AppearanceSettingsController = ReturnType<typeof createAppearanceSettingsController>
 export type SoundSettingsController = ReturnType<typeof createSoundSettingsController>

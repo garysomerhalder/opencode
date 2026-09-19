@@ -1123,6 +1123,9 @@ export const dict = {
   "settings.general.section.display": "မျက်နှာပြင်",
   "settings.general.row.language.title": "ဘာသာစကား",
   "settings.general.row.language.description": "OpenCode အတွက် ဖော်ပြသည့် ဘာသာစကားကို ပြောင်းပါ။",
+  "settings.general.row.externalDirectory.title": "Ask before accessing folders outside the project",
+  "settings.general.row.externalDirectory.description":
+    "When off, the agent can use folders outside the project without asking (applies to all projects)",
   "settings.general.row.shell.title": "Terminal Shell",
   "settings.general.row.shell.description": "terminal နှင့် agent tools မှအသုံးပြုသော Shell",
   "settings.general.row.shell.autoDefault": "အလိုအလျောက် (ပုံသေ)",

@@ -1119,6 +1119,9 @@ export const dict = {
   "settings.general.section.display": "Ekran",
   "settings.general.row.language.title": "Dil",
   "settings.general.row.language.description": "OpenCode üçün ekran dilini dəyişdirin",
+  "settings.general.row.externalDirectory.title": "Ask before accessing folders outside the project",
+  "settings.general.row.externalDirectory.description":
+    "When off, the agent can use folders outside the project without asking (applies to all projects)",
   "settings.general.row.shell.title": "Terminal qabığı",
   "settings.general.row.shell.description": "Terminal və agent alətləri tərəfindən istifadə edilən qabıq",
   "settings.general.row.shell.autoDefault": "Avtomatik (Standart)",

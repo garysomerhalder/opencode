@@ -1117,6 +1117,9 @@ export const dict = {
   "settings.general.section.display": "Дисплей",
   "settings.general.row.language.title": "език",
   "settings.general.row.language.description": "Променете езика на дисплея за OpenCode",
+  "settings.general.row.externalDirectory.title": "Ask before accessing folders outside the project",
+  "settings.general.row.externalDirectory.description":
+    "When off, the agent can use folders outside the project without asking (applies to all projects)",
   "settings.general.row.shell.title": "Терминал shell",
   "settings.general.row.shell.description": "Shell използвани от инструментите на терминала и агента",
   "settings.general.row.shell.autoDefault": "Автоматично (по подразбиране)",

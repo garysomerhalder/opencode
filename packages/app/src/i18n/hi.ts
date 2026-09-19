@@ -1118,6 +1118,9 @@ export const dict = {
   "settings.general.section.display": "प्रदर्शन",
   "settings.general.row.language.title": "भाषा",
   "settings.general.row.language.description": "OpenCode के लिए प्रदर्शन भाषा बदलें",
+  "settings.general.row.externalDirectory.title": "Ask before accessing folders outside the project",
+  "settings.general.row.externalDirectory.description":
+    "When off, the agent can use folders outside the project without asking (applies to all projects)",
   "settings.general.row.shell.title": "टर्मिनल शेल",
   "settings.general.row.shell.description": "शेल का उपयोग टर्मिनल और एजेंट टूल द्वारा किया जाता है",
   "settings.general.row.shell.autoDefault": "स्वतः (डिफ़ॉल्ट)",

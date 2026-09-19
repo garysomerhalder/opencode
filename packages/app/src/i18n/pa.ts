@@ -1116,6 +1116,9 @@ export const dict = {
   "settings.general.section.display": "ڈسپلے",
   "settings.general.row.language.title": "بولی",
   "settings.general.row.language.description": "OpenCode لئی ڈسپلے دی بولی بدلو",
+  "settings.general.row.externalDirectory.title": "Ask before accessing folders outside the project",
+  "settings.general.row.externalDirectory.description":
+    "When off, the agent can use folders outside the project without asking (applies to all projects)",
   "settings.general.row.shell.title": "شیل",
   "settings.general.row.shell.description": "Shell ٹرمینل تے ایجنٹ ٹولز دے ذریعہ استعمال کیتا جاندا اے",
   "settings.general.row.shell.autoDefault": "آٹو (پہلے توں طے شدہ)",

@@ -1110,6 +1110,9 @@ export const dict = {
   "settings.general.section.display": "ჩვენება",
   "settings.general.row.language.title": "ენა",
   "settings.general.row.language.description": "შეცვალეთ ჩვენების ენა OpenCode",
+  "settings.general.row.externalDirectory.title": "Ask before accessing folders outside the project",
+  "settings.general.row.externalDirectory.description":
+    "When off, the agent can use folders outside the project without asking (applies to all projects)",
   "settings.general.row.shell.title": "ტერმინალის გარსი",
   "settings.general.row.shell.description": "Shell გამოიყენება ტერმინალის და აგენტის ხელსაწყოების მიერ",
   "settings.general.row.shell.autoDefault": "ავტომატური (ნაგულისხმევი)",

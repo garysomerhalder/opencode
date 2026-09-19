@@ -1114,6 +1114,9 @@ export const dict = {
   "settings.general.section.display": "Ekrani",
   "settings.general.row.language.title": "Gjuha",
   "settings.general.row.language.description": "Ndryshoni gjuhën e ekranit për OpenCode",
+  "settings.general.row.externalDirectory.title": "Ask before accessing folders outside the project",
+  "settings.general.row.externalDirectory.description":
+    "When off, the agent can use folders outside the project without asking (applies to all projects)",
   "settings.general.row.shell.title": "Predha e terminalit",
   "settings.general.row.shell.description": "Predha e përdorur nga terminali dhe mjetet e agjentit",
   "settings.general.row.shell.autoDefault": "Auto (e parazgjedhur)",

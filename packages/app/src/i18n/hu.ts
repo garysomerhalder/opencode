@@ -1120,6 +1120,9 @@ export const dict = {
   "settings.general.section.display": "Kijelző",
   "settings.general.row.language.title": "Nyelv",
   "settings.general.row.language.description": "Módosítsa a OpenCode kijelző nyelvét",
+  "settings.general.row.externalDirectory.title": "Ask before accessing folders outside the project",
+  "settings.general.row.externalDirectory.description":
+    "When off, the agent can use folders outside the project without asking (applies to all projects)",
   "settings.general.row.shell.title": "Terminál shellje",
   "settings.general.row.shell.description": "A terminál és az ügynökeszközök által használt shell",
   "settings.general.row.shell.autoDefault": "Automatikus (alapértelmezett)",

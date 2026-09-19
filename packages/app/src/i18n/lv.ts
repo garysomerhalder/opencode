@@ -1116,6 +1116,9 @@ export const dict = {
   "settings.general.section.display": "Displejs",
   "settings.general.row.language.title": "Valoda",
   "settings.general.row.language.description": "Mainīt OpenCode saskarnes valodu",
+  "settings.general.row.externalDirectory.title": "Ask before accessing folders outside the project",
+  "settings.general.row.externalDirectory.description":
+    "When off, the agent can use folders outside the project without asking (applies to all projects)",
   "settings.general.row.shell.title": "Termināļa čaula",
   "settings.general.row.shell.description": "Čaula, ko izmanto terminālis un aģenta rīki",
   "settings.general.row.shell.autoDefault": "Automātiski (noklusējums)",

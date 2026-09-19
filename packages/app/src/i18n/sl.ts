@@ -1115,6 +1115,9 @@ export const dict = {
   "settings.general.section.display": "Zaslon",
   "settings.general.row.language.title": "Jezik",
   "settings.general.row.language.description": "Spremenite jezik prikaza za OpenCode",
+  "settings.general.row.externalDirectory.title": "Ask before accessing folders outside the project",
+  "settings.general.row.externalDirectory.description":
+    "When off, the agent can use folders outside the project without asking (applies to all projects)",
   "settings.general.row.shell.title": "Končna lupina",
   "settings.general.row.shell.description": "Lupina, ki jo uporabljajo terminalska in agentska orodja",
   "settings.general.row.shell.autoDefault": "Samodejno (privzeto)",

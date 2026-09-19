@@ -1201,6 +1201,9 @@ export const dict = {
   "sidebar.empty.description": "프로젝트를 열어 시작하세요",
 
   "settings.general.section.advanced": "고급",
+  "settings.general.row.externalDirectory.title": "Ask before accessing folders outside the project",
+  "settings.general.row.externalDirectory.description":
+    "When off, the agent can use folders outside the project without asking (applies to all projects)",
   "settings.general.row.shell.title": "터미널 셸",
   "settings.general.row.shell.description":
     "터미널에서 사용할 셸을 선택하세요. 호환되는 셸은 에이전트 도구 호출에도 사용됩니다.",

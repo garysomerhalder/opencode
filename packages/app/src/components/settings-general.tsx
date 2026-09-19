@@ -28,6 +28,7 @@ import {
   useSettings,
 } from "@/context/settings"
 import { decode64 } from "@/utils/base64"
+import { externalDirectoryAsks, externalDirectoryPatch } from "@/utils/external-directory-permission"
 import { playSoundById, SOUND_OPTIONS } from "@/utils/sound"
 import { ExternalLink } from "./external-link"
 import { SettingsList } from "./settings-list"
@@ -156,6 +157,11 @@ export const SettingsGeneral: Component = () => {
 
   const autoOption = { id: "auto", value: "", label: language.t("settings.general.row.shell.autoDefault") }
   const currentShell = createMemo(() => serverSync().data.config.shell ?? "")
+  const askExternalDirectory = createMemo(() => externalDirectoryAsks(serverSync().data.config.permission))
+  const setAskExternalDirectory = (checked: boolean) => {
+    if (checked === askExternalDirectory()) return
+    void serverSync().updateConfig(externalDirectoryPatch(serverSync().data.config.permission, checked))
+  }
 
   const shellOptions = createMemo<ShellSelectOption[]>(() => {
     const list = shells.latest
@@ -322,6 +328,19 @@ export const SettingsGeneral: Component = () => {
         >
           <div data-action="settings-auto-accept-permissions">
             <Switch checked={accepting()} disabled={!dir()} onChange={toggleAccept} />
+          </div>
+        </SettingsRow>
+
+        <SettingsRow
+          title={language.t("settings.general.row.externalDirectory.title")}
+          description={language.t("settings.general.row.externalDirectory.description")}
+        >
+          <div data-action="settings-external-directory">
+            <Switch
+              checked={askExternalDirectory()}
+              disabled={serverSync().data.reload === "pending"}
+              onChange={setAskExternalDirectory}
+            />
           </div>
         </SettingsRow>
 

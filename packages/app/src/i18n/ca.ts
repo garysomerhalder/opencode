@@ -1120,6 +1120,9 @@ export const dict = {
   "settings.general.section.display": "Mostra",
   "settings.general.row.language.title": "Llengua",
   "settings.general.row.language.description": "Canvia l'idioma de visualització per a OpenCode",
+  "settings.general.row.externalDirectory.title": "Ask before accessing folders outside the project",
+  "settings.general.row.externalDirectory.description":
+    "When off, the agent can use folders outside the project without asking (applies to all projects)",
   "settings.general.row.shell.title": "Carcassa terminal",
   "settings.general.row.shell.description": "Shell utilitzat pel terminal i les eines d'agent",
   "settings.general.row.shell.autoDefault": "Automàtic (per defecte)",

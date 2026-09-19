@@ -1115,6 +1115,9 @@ export const dict = {
   "settings.general.section.display": "Visning",
   "settings.general.row.language.title": "Språk",
   "settings.general.row.language.description": "Ändra visningsspråket för OpenCode",
+  "settings.general.row.externalDirectory.title": "Ask before accessing folders outside the project",
+  "settings.general.row.externalDirectory.description":
+    "When off, the agent can use folders outside the project without asking (applies to all projects)",
   "settings.general.row.shell.title": "Terminalskal",
   "settings.general.row.shell.description": "Skal som används av terminalen och agentverktygen",
   "settings.general.row.shell.autoDefault": "Auto (standard)",

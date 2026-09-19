@@ -1108,6 +1108,9 @@ export const dict = {
   "settings.general.section.display": "نمایش",
   "settings.general.row.language.title": "زبان",
   "settings.general.row.language.description": "زبان نمایش را برای OpenCode تغییر دهید",
+  "settings.general.row.externalDirectory.title": "Ask before accessing folders outside the project",
+  "settings.general.row.externalDirectory.description":
+    "When off, the agent can use folders outside the project without asking (applies to all projects)",
   "settings.general.row.shell.title": "پوسته ترمینال",
   "settings.general.row.shell.description": "پوسته مورد استفاده ترمینال و ابزار عامل",
   "settings.general.row.shell.autoDefault": "خودکار (پیش‌فرض)",

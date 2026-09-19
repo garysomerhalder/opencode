@@ -16,12 +16,14 @@ import { SettingsLinearV2 } from "./linear"
 import { LayoutRetirementNotice, LayoutTransitionToggle } from "./interface-transition"
 import {
   createAppearanceSettingsController,
+  createExternalDirectorySettingsController,
   createPermissionScopeController,
   createShellOptions,
   createShellSettingsController,
   createSoundSettingsController,
   soundOptions,
   type AppearanceSettingsController,
+  type ExternalDirectorySettingsController,
   type PermissionScopeController,
   type ShellSettingsController,
   type SoundSettingsController,
@@ -81,6 +83,24 @@ const PermissionScopeSetting: Component<{ controller: PermissionScopeController 
         <Switch
           checked={props.controller.accepting()}
           disabled={!props.controller.enabled()}
+          onChange={props.controller.set}
+        />
+      </div>
+    </SettingsRowV2>
+  )
+}
+
+const ExternalDirectorySetting: Component<{ controller: ExternalDirectorySettingsController }> = (props) => {
+  const language = useLanguage()
+  return (
+    <SettingsRowV2
+      title={language.t("settings.general.row.externalDirectory.title")}
+      description={language.t("settings.general.row.externalDirectory.description")}
+    >
+      <div data-action="settings-external-directory">
+        <Switch
+          checked={props.controller.asking()}
+          disabled={props.controller.pending()}
           onChange={props.controller.set}
         />
       </div>
@@ -282,6 +302,7 @@ export const SettingsGeneralV2: Component<{
   const mobile = createMediaQuery("(max-width: 767px)")
   const updater = useUpdaterAction()
   const permissionScope = createPermissionScopeController(() => props.sessionID)
+  const externalDirectory = createExternalDirectorySettingsController()
   const shell = createShellSettingsController()
   const appearance = createAppearanceSettingsController()
   const sounds = createSoundSettingsController()
@@ -331,6 +352,8 @@ export const SettingsGeneralV2: Component<{
         <LanguageSetting />
 
         <PermissionScopeSetting controller={permissionScope} />
+
+        <ExternalDirectorySetting controller={externalDirectory} />
 
         <ShellSetting controller={shell} />
 

@@ -1114,6 +1114,9 @@ export const dict = {
   "settings.general.section.display": "Skjár",
   "settings.general.row.language.title": "Tungumál",
   "settings.general.row.language.description": "Breyttu skjátungumálinu fyrir OpenCode",
+  "settings.general.row.externalDirectory.title": "Ask before accessing folders outside the project",
+  "settings.general.row.externalDirectory.description":
+    "When off, the agent can use folders outside the project without asking (applies to all projects)",
   "settings.general.row.shell.title": "Skel skjáhermis",
   "settings.general.row.shell.description": "Skelin sem skjáhermirinn og verkfæri fulltrúans nota",
   "settings.general.row.shell.autoDefault": "Sjálfvirkt (sjálfgefið)",

@@ -1114,6 +1114,9 @@ export const dict = {
   "settings.general.section.display": "Намоиш",
   "settings.general.row.language.title": "Забон",
   "settings.general.row.language.description": "Забони намоишро барои OpenCode иваз кунед",
+  "settings.general.row.externalDirectory.title": "Ask before accessing folders outside the project",
+  "settings.general.row.externalDirectory.description":
+    "When off, the agent can use folders outside the project without asking (applies to all projects)",
   "settings.general.row.shell.title": "Терминал shell",
   "settings.general.row.shell.description": "Shell воситаи терминал ва агент истифода мешавад",
   "settings.general.row.shell.autoDefault": "Авто (Пешфарз)",

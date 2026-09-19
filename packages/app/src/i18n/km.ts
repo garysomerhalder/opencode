@@ -1108,6 +1108,9 @@ export const dict = {
   "settings.general.section.display": "បង្ហាញ",
   "settings.general.row.language.title": "ភាសា",
   "settings.general.row.language.description": "ប្តូរភាសាបង្ហាញសម្រាប់ OpenCode",
+  "settings.general.row.externalDirectory.title": "Ask before accessing folders outside the project",
+  "settings.general.row.externalDirectory.description":
+    "When off, the agent can use folders outside the project without asking (applies to all projects)",
   "settings.general.row.shell.title": "សែលស្ថានីយ",
   "settings.general.row.shell.description": "សែលប្រើដោយឧបករណ៍ស្ថានីយ និងភ្នាក់ងារ",
   "settings.general.row.shell.autoDefault": "ស្វ័យប្រវត្តិ (លំនាំដើម)\nស្ថានីយ",

@@ -1110,6 +1110,9 @@ export const dict: Record<string, string> = {
   "settings.general.section.display": "प्रदर्शन",
   "settings.general.row.language.title": "भाषा",
   "settings.general.row.language.description": "OpenCode को लागि प्रदर्शन भाषा परिवर्तन गर्नुहोस्",
+  "settings.general.row.externalDirectory.title": "Ask before accessing folders outside the project",
+  "settings.general.row.externalDirectory.description":
+    "When off, the agent can use folders outside the project without asking (applies to all projects)",
   "settings.general.row.shell.title": "टर्मिनल शेल",
   "settings.general.row.shell.description": "टर्मिनल र एजेन्ट उपकरणहरू द्वारा प्रयोग गरिएको शेल",
   "settings.general.row.shell.autoDefault": "स्वतः (पूर्वनिर्धारित)",

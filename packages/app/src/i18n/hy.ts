@@ -1118,6 +1118,9 @@ export const dict = {
   "settings.general.section.display": "Ցուցադրել",
   "settings.general.row.language.title": "Լեզու",
   "settings.general.row.language.description": "Փոխել ցուցադրման լեզուն OpenCode",
+  "settings.general.row.externalDirectory.title": "Ask before accessing folders outside the project",
+  "settings.general.row.externalDirectory.description":
+    "When off, the agent can use folders outside the project without asking (applies to all projects)",
   "settings.general.row.shell.title": "Տերմինալի Shell",
   "settings.general.row.shell.description": "Shell-ն օգտագործվում է տերմինալի և գործակալի գործիքների կողմից",
   "settings.general.row.shell.autoDefault": "Ավտոմատ (կանխադրված)",

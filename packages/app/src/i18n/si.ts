@@ -1107,6 +1107,9 @@ export const dict: Record<string, string> = {
   "settings.general.section.display": "ප්රදර්ශනය කරන්න",
   "settings.general.row.language.title": "භාෂාව",
   "settings.general.row.language.description": "OpenCode සඳහා සංදර්ශක භාෂාව වෙනස් කරන්න",
+  "settings.general.row.externalDirectory.title": "Ask before accessing folders outside the project",
+  "settings.general.row.externalDirectory.description":
+    "When off, the agent can use folders outside the project without asking (applies to all projects)",
   "settings.general.row.shell.title": "පර්යන්ත ෂෙල්",
   "settings.general.row.shell.description": "පර්යන්තය සහ නියෝජිත මෙවලම් භාවිතා කරන ෂෙල්",
   "settings.general.row.shell.autoDefault": "ස්වයංක්‍රීය (පෙරනිමි)",

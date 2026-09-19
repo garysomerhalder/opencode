@@ -1126,6 +1126,9 @@ export const dict = {
   "settings.general.section.display": "Ekranas",
   "settings.general.row.language.title": "Kalba",
   "settings.general.row.language.description": "Pakeiskite OpenCode ekrano kalbą",
+  "settings.general.row.externalDirectory.title": "Ask before accessing folders outside the project",
+  "settings.general.row.externalDirectory.description":
+    "When off, the agent can use folders outside the project without asking (applies to all projects)",
   "settings.general.row.shell.title": "Terminalo apvalkalas",
   "settings.general.row.shell.description": "Terminalo ir agento įrankių naudojamas apvalkalas",
   "settings.general.row.shell.autoDefault": "Automatinis (numatytasis)",

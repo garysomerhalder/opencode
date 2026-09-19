@@ -1111,6 +1111,9 @@ export const dict = {
   "settings.general.section.display": "Ekran",
   "settings.general.row.language.title": "Dil",
   "settings.general.row.language.description": "OpenCode üçin displeý dilini üýtgediň",
+  "settings.general.row.externalDirectory.title": "Ask before accessing folders outside the project",
+  "settings.general.row.externalDirectory.description":
+    "When off, the agent can use folders outside the project without asking (applies to all projects)",
   "settings.general.row.shell.title": "Terminal shell-i",
   "settings.general.row.shell.description": "Terminal we agent gurallary tarapyndan ulanylýan shell",
   "settings.general.row.shell.autoDefault": "Awto (Bellenilen)",

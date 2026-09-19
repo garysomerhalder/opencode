@@ -1110,6 +1110,9 @@ export const dict = {
   "settings.general.section.display": "Paparan",
   "settings.general.row.language.title": "Bahasa",
   "settings.general.row.language.description": "Tukar bahasa paparan untuk OpenCode",
+  "settings.general.row.externalDirectory.title": "Ask before accessing folders outside the project",
+  "settings.general.row.externalDirectory.description":
+    "When off, the agent can use folders outside the project without asking (applies to all projects)",
   "settings.general.row.shell.title": "Shell terminal",
   "settings.general.row.shell.description": "Shell yang digunakan oleh terminal dan alat ejen",
   "settings.general.row.shell.autoDefault": "Auto (Lalai)",
