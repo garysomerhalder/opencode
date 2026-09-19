@@ -23,8 +23,10 @@ export type GoalLoopDeps = {
   onEvent?: (event: GoalLoopEvent) => void
   persist?: (state: GoalLoopState | null) => void
   persistLast?: (input: GoalLoopStartInput) => void
-  /** How long a busy session may go without progress (or one tool may run) before it counts as one error. */
+  /** How long a busy session may go without progress before it counts as one error. */
   waitTimeoutMs?: number
+  /** Hard cap on one tool call that keeps producing output; past it the call counts as one error. */
+  maxToolRunMs?: number
   /** How often a busy session's newest message is re-read to look for progress. */
   progressCheckMs?: number
   startTimeoutMs?: number
@@ -44,6 +46,7 @@ export type GoalLoopDeps = {
 export const DEFAULT_COMPLETION_MARKER = "GOAL_COMPLETE"
 const DEFAULT_WAIT_TIMEOUT_MS = 15 * 60 * 1000
 const DEFAULT_PROGRESS_CHECK_MS = 10 * 1000
+const DEFAULT_MAX_TOOL_RUN_MS = 60 * 60 * 1000
 const DEFAULT_MAX_CONSECUTIVE_ERRORS = 3
 const DEFAULT_MAX_CONSECUTIVE_ABORTS = 5
 const DEFAULT_ABORT_BACKOFF_MS = 5 * 1000
@@ -189,6 +192,7 @@ export function createGoalLoop(deps: GoalLoopDeps) {
   const randomID = deps.randomID ?? (() => crypto.randomUUID())
   const waitTimeoutMs = deps.waitTimeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS
   const progressCheckMs = deps.progressCheckMs ?? DEFAULT_PROGRESS_CHECK_MS
+  const maxToolRunMs = deps.maxToolRunMs ?? DEFAULT_MAX_TOOL_RUN_MS
   const startTimeoutMs = deps.startTimeoutMs ?? EXECUTION_START_TIMEOUT_MS
   const pollIntervalMs = deps.pollIntervalMs ?? ACTIVE_POLL_INTERVAL_MS
   const maxConsecutiveErrors = deps.maxConsecutiveErrors ?? DEFAULT_MAX_CONSECUTIVE_ERRORS
@@ -322,7 +326,8 @@ export function createGoalLoop(deps: GoalLoopDeps) {
         progressAt: number
         checkedAt: number | null
         fingerprint: string | null
-        tool: { id: string; name: string; since: number } | null
+        tool: { id: string; name: string; since: number; noted: number } | null
+        // quarters of waitTimeoutMs of quiet already reported
         noted: number
       } | null,
       sentAt: now(),
@@ -377,9 +382,10 @@ export function createGoalLoop(deps: GoalLoopDeps) {
           track.sawBusy = true
           track.delay = pollIntervalMs
           // A long turn is fine as long as it moves. Only a busy session whose
-          // newest message stops changing for waitTimeoutMs counts as stalled,
-          // and a single tool call gets at most waitTimeoutMs, so a hung
-          // command that keeps printing cannot hold the loop forever.
+          // newest message stops changing for waitTimeoutMs counts as stalled
+          // (a silent hung command included). A tool whose output keeps
+          // changing is progress, but only up to maxToolRunMs, so a command
+          // that prints forever cannot hold the loop forever.
           const watch = (track.watch ??= {
             progressAt: now(),
             checkedAt: null,
@@ -390,7 +396,9 @@ export function createGoalLoop(deps: GoalLoopDeps) {
           if (watch.checkedAt === null || now() - watch.checkedAt >= progressCheckMs) {
             watch.checkedAt = now()
             const progress = progressOf(await sessionMessages(server, sessionID))
-            if (progress.tool?.id !== watch.tool?.id) watch.tool = progress.tool && { ...progress.tool, since: now() }
+            if (progress.tool?.id !== watch.tool?.id) {
+              watch.tool = progress.tool && { ...progress.tool, since: now(), noted: 0 }
+            }
             if (progress.fingerprint !== watch.fingerprint) {
               const gap = now() - watch.progressAt
               if (watch.fingerprint !== null && gap * 4 >= waitTimeoutMs) {
@@ -398,33 +406,39 @@ export function createGoalLoop(deps: GoalLoopDeps) {
               }
               watch.fingerprint = progress.fingerprint
               watch.progressAt = now()
-              // a still-running tool keeps the milestones it already reported
-              watch.noted = watch.tool ? Math.floor((4 * (now() - watch.tool.since)) / waitTimeoutMs) : 0
+              watch.noted = 0
             }
           }
           const quiet = now() - watch.progressAt
           const toolAge = watch.tool ? now() - watch.tool.since : 0
-          if (quiet < waitTimeoutMs && toolAge < waitTimeoutMs) {
-            // Report a long quiet stretch at each quarter of the timeout, not every poll.
-            const milestone = Math.floor((4 * Math.max(quiet, toolAge)) / waitTimeoutMs)
-            if (milestone > watch.noted) {
-              watch.noted = milestone
-              note(
-                watch.tool && toolAge > quiet
-                  ? `working (${watch.tool.name} running for ${seconds(toolAge)}s)`
-                  : `working (last progress ${seconds(quiet)}s ago)`,
-              )
+          if (quiet < waitTimeoutMs && toolAge < maxToolRunMs) {
+            // Report a long quiet stretch or a long-running tool at each quarter
+            // of its limit, not every poll.
+            const quietMilestone = Math.floor((4 * quiet) / waitTimeoutMs)
+            const toolMilestone = Math.floor((4 * toolAge) / maxToolRunMs)
+            if (quietMilestone > watch.noted) {
+              watch.noted = quietMilestone
+              note(`working (last progress ${seconds(quiet)}s ago)`)
+            }
+            if (watch.tool && toolMilestone > watch.tool.noted) {
+              watch.tool.noted = toolMilestone
+              note(`working (${watch.tool.name} running for ${seconds(toolAge)}s)`)
             }
             continue
           }
           const stall =
-            watch.tool && toolAge >= waitTimeoutMs
-              ? `${watch.tool.name} has been running for ${seconds(toolAge)}s without finishing`
-              : `session made no progress for ${seconds(quiet)}s`
-          // the next stall window starts now
+            quiet >= waitTimeoutMs
+              ? `${watch.tool?.name ?? "session"} made no progress for ${seconds(quiet)}s`
+              : `${watch.tool?.name} has been running for ${seconds(toolAge)}s, past the ${seconds(maxToolRunMs)}s limit`
+          // the next stall window starts now; a tool that hit the hard cap
+          // gets a fresh window too, so it fails after maxConsecutiveErrors
+          // windows instead of on every poll
           watch.progressAt = now()
           watch.noted = 0
-          if (watch.tool) watch.tool.since = now()
+          if (watch.tool && toolAge >= maxToolRunMs) {
+            watch.tool.since = now()
+            watch.tool.noted = 0
+          }
           throw new Error(stall)
         }
         track.watch = null

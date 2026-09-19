@@ -771,53 +771,110 @@ describe("goal loop resilience", () => {
     expect(events.filter((e) => e.type === "iteration").length).toBeLessThanOrEqual(8)
   })
 
-  test("a tool stuck running past the wait timeout counts as a stall even while its output streams", async () => {
+  test("a tool that streams output past maxToolRunMs counts as a stall naming the tool", async () => {
     const events: GoalLoopEvent[] = []
     const fake = fakeServer("ses_hung", () => ({ reply: { text: "working" }, busyFor: 1_000_000 }))
-    const hung = { at: 0 }
-    fake.onPoll(() => {
-      const message = fake.activeMessage()
-      if (!message) return
-      const last = message.parts.at(-1) as { state?: { status: string; metadata: { output: string } } } | undefined
-      if (last?.state?.status === "running") {
-        // the command keeps printing but never exits
-        last.state.metadata.output += "."
-        return
-      }
-      if (message.parts.length < 5) {
-        message.parts.push({
-          id: `prt_${message.parts.length}`,
-          type: "tool",
-          tool: "bash",
-          state: { status: "completed", time: { start: 1, end: 2 } },
-        })
-        return
-      }
-      hung.at = Date.now()
-      message.parts.push({
-        id: "prt_hung",
-        type: "tool",
-        tool: "bash",
-        state: { status: "running", time: { start: 3 }, metadata: { output: "" } },
-      })
-    })
+    const tool = longTool(fake, { streaming: true })
     const loop = createGoalLoop({
       getServer: async () => server,
       fetchImpl: fake.fetchImpl,
       onEvent: (e) => events.push(e),
       pollIntervalMs: 2,
-      waitTimeoutMs: 120,
+      waitTimeoutMs: 80,
+      maxToolRunMs: 300,
       progressCheckMs: 0,
       maxConsecutiveErrors: 1,
     })
-    await loop.start({ directory: "/repo", goal: "hung command" })
+    await loop.start({ directory: "/repo", goal: "command that never exits" })
     await waitFor(() => loop.status() === null, 3000)
     const failed = events.at(-1)
     if (failed?.type !== "failed") throw new Error("expected failed event")
     expect(failed.state.reason).toContain("bash")
-    expect(hung.at).toBeGreaterThan(0)
-    expect(Date.now() - hung.at).toBeGreaterThanOrEqual(120)
+    expect(failed.state.reason).toContain("limit")
+    expect(tool.startedAt).toBeGreaterThan(0)
+    // it outlived several quiet timeouts because its output kept changing
+    expect(Date.now() - tool.startedAt).toBeGreaterThanOrEqual(300)
     // the loop interrupted the wedged session when it gave up
     expect(fake.running()).toBe(false)
   })
+
+  test("a tool streaming output past the wait timeout but under maxToolRunMs is not an error", async () => {
+    const events: GoalLoopEvent[] = []
+    const fake = fakeServer("ses_build", () => ({ reply: { text: "working" }, busyFor: 1_000_000 }))
+    const tool = longTool(fake, { streaming: true })
+    const loop = createGoalLoop({
+      getServer: async () => server,
+      fetchImpl: fake.fetchImpl,
+      onEvent: (e) => events.push(e),
+      pollIntervalMs: 2,
+      waitTimeoutMs: 100,
+      maxToolRunMs: 10_000,
+      progressCheckMs: 0,
+      maxConsecutiveErrors: 1,
+    })
+    await loop.start({ directory: "/repo", goal: "long cargo build" })
+    await waitFor(() => tool.startedAt > 0)
+    // six quiet timeouts of one streaming command
+    await waitFor(() => Date.now() - tool.startedAt > 600 || loop.status() === null, 3000)
+    expect(loop.status()?.status).toBe("running")
+    expect(events.map((e) => e.type)).not.toContain("failed")
+    expect(events.some((e) => (e.state.reason ?? "").includes("error"))).toBe(false)
+    expect(events.filter((e) => e.type === "iteration").length).toBeLessThan(3)
+    await loop.stop()
+  })
+
+  test("a silent running tool stalls after the wait timeout, long before maxToolRunMs", async () => {
+    const events: GoalLoopEvent[] = []
+    const fake = fakeServer("ses_silent", () => ({ reply: { text: "working" }, busyFor: 1_000_000 }))
+    const tool = longTool(fake, { streaming: false })
+    const loop = createGoalLoop({
+      getServer: async () => server,
+      fetchImpl: fake.fetchImpl,
+      onEvent: (e) => events.push(e),
+      pollIntervalMs: 2,
+      waitTimeoutMs: 100,
+      maxToolRunMs: 60_000,
+      progressCheckMs: 0,
+      maxConsecutiveErrors: 1,
+    })
+    await loop.start({ directory: "/repo", goal: "silent hang" })
+    await waitFor(() => loop.status() === null, 3000)
+    const failed = events.at(-1)
+    if (failed?.type !== "failed") throw new Error("expected failed event")
+    expect(failed.state.reason).toContain("bash made no progress")
+    expect(Date.now() - tool.startedAt).toBeGreaterThanOrEqual(100)
+  })
 })
+
+// Streams a few finished tool calls into the running turn, then starts one
+// bash call that never exits. With `streaming` its output grows on every poll,
+// like a long build; without it the command is silent.
+function longTool(fake: ReturnType<typeof fakeServer>, options: { streaming: boolean }) {
+  const tool = { startedAt: 0 }
+  fake.onPoll(() => {
+    const message = fake.activeMessage()
+    if (!message) return
+    const last = message.parts.at(-1) as { state?: { status: string; metadata: { output: string } } } | undefined
+    if (last?.state?.status === "running") {
+      if (options.streaming) last.state.metadata.output += "."
+      return
+    }
+    if (message.parts.length < 5) {
+      message.parts.push({
+        id: `prt_${message.parts.length}`,
+        type: "tool",
+        tool: "bash",
+        state: { status: "completed", time: { start: 1, end: 2 } },
+      })
+      return
+    }
+    tool.startedAt = Date.now()
+    message.parts.push({
+      id: "prt_long",
+      type: "tool",
+      tool: "bash",
+      state: { status: "running", time: { start: 3 }, metadata: { output: "" } },
+    })
+  })
+  return tool
+}
