@@ -444,7 +444,14 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2000): Promise<void
   }
 }
 
-type Reply = { text: string; aborted?: boolean }
+type Reply = {
+  text: string
+  aborted?: boolean
+  // info.error of a failed turn, e.g. a provider APIError
+  error?: { name: string; data: Record<string, unknown> }
+  // tokens.total the turn reports
+  tokens?: number
+}
 type Turn = { startAfter: number; busyFor: number; reply: Reply; message?: { info: Record<string, unknown>; parts: unknown[] } }
 type TurnPlan = { reply: Reply; busyFor?: number; startAfter?: number }
 
@@ -467,6 +474,9 @@ function fakeServer(sessionID: string, plan: (index: number) => TurnPlan) {
     statusPolls: 0,
     violations: 0,
     outage: null as ((poll: number) => Response | "refuse" | null) | null,
+    // status polls the session stays busy after a summarize
+    summaryBusy: 0,
+    summaries: [] as { body: unknown; beforePrompt: number }[],
   }
 
   function admit(text: string, turn: TurnPlan) {
@@ -486,10 +496,18 @@ function fakeServer(sessionID: string, plan: (index: number) => TurnPlan) {
     begin(turn)
     if (!turn.message) return
     if (turn.reply.aborted) turn.message.info["error"] = { name: "MessageAbortedError", data: { message: "Aborted" } }
+    if (turn.reply.error) turn.message.info["error"] = turn.reply.error
+    turn.message.info["tokens"] = tokens(turn.reply.tokens ?? 0)
+    turn.message.info["providerID"] = "opencode-go"
+    turn.message.info["modelID"] = "muse-spark-1.3-contributor"
     turn.message.parts.push({ type: "text", text: turn.reply.text })
   }
 
   function poll(): boolean {
+    if (state.summaryBusy > 0) {
+      state.summaryBusy -= 1
+      return true
+    }
     while (state.current) {
       if (state.current.startAfter > 0) {
         state.current.startAfter -= 1
@@ -519,8 +537,30 @@ function fakeServer(sessionID: string, plan: (index: number) => TurnPlan) {
       return json(poll() ? { [sessionID]: { type: "busy" } } : {})
     }
     if (url.pathname === "/session" && method === "POST") return json({ id: sessionID })
+    if (url.pathname === `/session/${sessionID}/summarize` && method === "POST") {
+      if (state.current || state.summaryBusy > 0) state.violations += 1
+      state.summaries.push({ body: JSON.parse(String(init?.body)), beforePrompt: state.loopTurns })
+      // like opencode: a compaction user message, then the summary turn
+      messages.push({
+        info: { id: `msg_${String(++state.ids).padStart(4, "0")}`, role: "user" },
+        parts: [{ type: "compaction", auto: false }],
+      })
+      messages.push({
+        info: {
+          id: `msg_${String(++state.ids).padStart(4, "0")}`,
+          role: "assistant",
+          summary: true,
+          tokens: tokens(700_000),
+          providerID: "opencode-go",
+          modelID: "muse-spark-1.3-contributor",
+        },
+        parts: [{ type: "text", text: "summary of the work so far" }],
+      })
+      state.summaryBusy = 2
+      return json(true)
+    }
     if (url.pathname === `/session/${sessionID}/prompt_async` && method === "POST") {
-      if (state.current) state.violations += 1
+      if (state.current || state.summaryBusy > 0) state.violations += 1
       const body = JSON.parse(String(init?.body)) as { parts: { text: string }[] }
       admit(body.parts[0]?.text ?? "", plan(state.loopTurns++))
       return json({})
@@ -547,7 +587,36 @@ function fakeServer(sessionID: string, plan: (index: number) => TurnPlan) {
       state.outage = fn
     },
     external: admit,
+    summaries: () => state.summaries,
+    // history of a reused session: one finished assistant turn of `total` tokens
+    seed: (total: number) => {
+      messages.push({ info: { id: `msg_${String(++state.ids).padStart(4, "0")}`, role: "user" }, parts: [] })
+      messages.push({
+        info: {
+          id: `msg_${String(++state.ids).padStart(4, "0")}`,
+          role: "assistant",
+          tokens: tokens(total),
+          providerID: "opencode-go",
+          modelID: "muse-spark-1.3-contributor",
+        },
+        parts: [{ type: "text", text: "earlier work" }],
+      })
+    },
   }
+}
+
+function tokens(total: number) {
+  return { total, input: 0, output: 0, reasoning: 0, cache: { read: total, write: 0 } }
+}
+
+const providerError400 = {
+  name: "APIError",
+  data: {
+    message:
+      "Error from provider (Console Go): Upstream request failed: [invalid_request_error] The request contains invalid parameters.",
+    statusCode: 400,
+    isRetryable: false,
+  },
 }
 
 describe("goal loop resilience", () => {
@@ -875,6 +944,111 @@ describe("goal loop resilience", () => {
     expect(failed.state.reason).toContain("bash made no progress")
     expect(Date.now() - tool.startedAt).toBeGreaterThanOrEqual(100)
   })
+})
+
+// These tests only end on a loop outcome, so a generous deadline costs nothing
+// on a fast host and keeps a CPU-starved one from timing out mid-run.
+const SLOW_HOST_MS = 15_000
+
+describe("goal loop failed turns and context size", () => {
+  test(
+    "an errored turn does not advance the iteration, and three in a row fail the loop",
+    async () => {
+      const events: GoalLoopEvent[] = []
+      // Turn 0 works; every later turn fails at the provider with 0 tokens.
+      const fake = fakeServer("ses_err", (index) =>
+        index === 0
+          ? { reply: { text: "working", tokens: 50_000 } }
+          : { reply: { text: "", error: { name: "UnknownError", data: { message: "provider exploded" } } } },
+      )
+      const loop = createGoalLoop({
+        getServer: async () => server,
+        fetchImpl: fake.fetchImpl,
+        onEvent: (e) => events.push(e),
+        pollIntervalMs: 2,
+        retryBackoffMs: 1,
+      })
+      await loop.start({ directory: "/repo", goal: "keeps failing", maxIterations: 10 })
+      await waitFor(() => loop.status() === null, SLOW_HOST_MS)
+      const failed = events.at(-1)
+      if (failed?.type !== "failed") throw new Error(`expected failed event, got ${failed?.type}`)
+      expect(failed.state.reason).toContain("provider exploded")
+      // only turn 0 completed an iteration; the failed turns resent step 2
+      expect(failed.state.iteration).toBe(2)
+      expect(events.filter((e) => (e.state.reason ?? "").startsWith("recovered from a failed turn")).length).toBe(2)
+      // first prompt, the continue after turn 0, two retries of that continue
+      expect(fake.prompts()).toBe(4)
+      expect(fake.summaries()).toHaveLength(0)
+      expect(fake.violations()).toBe(0)
+    },
+    SLOW_HOST_MS + 5_000,
+  )
+
+  test(
+    "a large context is summarized before the next continue",
+    async () => {
+      const events: GoalLoopEvent[] = []
+      const fake = fakeServer("ses_big", (index) =>
+        index === 0
+          ? { reply: { text: "working", tokens: 700_000 } }
+          : { reply: { text: "done\nGOAL_COMPLETE", tokens: 90_000 } },
+      )
+      const model = { providerID: "opencode-go", modelID: "muse-spark-1.3-contributor" }
+      const loop = createGoalLoop({
+        getServer: async () => server,
+        fetchImpl: fake.fetchImpl,
+        onEvent: (e) => events.push(e),
+        pollIntervalMs: 2,
+        maxConsecutiveErrors: 1,
+      })
+      await loop.start({ directory: "/repo", goal: "big session", model })
+      await waitFor(() => loop.status() === null, SLOW_HOST_MS)
+      expect(events.at(-1)?.type).toBe("completed")
+      expect(fake.summaries()).toEqual([{ body: model, beforePrompt: 1 }])
+      expect(events.some((e) => e.state.reason === "compacted the session at 700000 tokens")).toBe(true)
+      // the summary turn is not a loop turn: one continue, and not while busy
+      expect(fake.prompts()).toBe(2)
+      expect(fake.violations()).toBe(0)
+    },
+    SLOW_HOST_MS + 5_000,
+  )
+
+  test(
+    "a non-retryable 400 on a large context compacts once and recovers",
+    async () => {
+      const events: GoalLoopEvent[] = []
+      // A reused session already at 1,016,515 tokens: its next two requests fail
+      // with the provider's opaque 400, then the compacted session works again.
+      const fake = fakeServer("ses_400", (index) =>
+        index < 2
+          ? { reply: { text: "", error: providerError400 } }
+          : { reply: { text: "done\nGOAL_COMPLETE", tokens: 80_000 } },
+      )
+      fake.seed(1_016_515)
+      const loop = createGoalLoop({
+        getServer: async () => server,
+        fetchImpl: fake.fetchImpl,
+        onEvent: (e) => events.push(e),
+        pollIntervalMs: 2,
+        retryBackoffMs: 1,
+      })
+      await loop.start({ directory: "/repo", goal: "overflowed session", sessionID: "ses_400" })
+      await waitFor(() => loop.status() === null, SLOW_HOST_MS)
+      expect(events.at(-1)?.type).toBe("completed")
+      // no model on the input: the session's own model is used
+      expect(fake.summaries()).toEqual([
+        { body: { providerID: "opencode-go", modelID: "muse-spark-1.3-contributor" }, beforePrompt: 1 },
+      ])
+      const reasons = events.map((e) => e.state.reason ?? "")
+      expect(reasons).toContain("compacted the session at 1016515 tokens after a failed turn")
+      // the 400 after compaction is an ordinary error, not a second compaction
+      expect(reasons.some((r) => r.startsWith("recovered from a failed turn (1 of 3)"))).toBe(true)
+      expect(events.at(-1)?.state.iteration).toBe(1)
+      expect(fake.prompts()).toBe(3)
+      expect(fake.violations()).toBe(0)
+    },
+    SLOW_HOST_MS + 5_000,
+  )
 })
 
 // Streams a few finished tool calls into the running turn, then starts one

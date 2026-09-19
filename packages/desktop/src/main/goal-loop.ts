@@ -41,6 +41,8 @@ export type GoalLoopDeps = {
   /** First retry wait after a failed request; doubles per attempt. */
   retryBackoffMs?: number
   maxBackoffMs?: number
+  /** Context size (tokens of the last successful turn) above which the session is summarized before the next continue. */
+  compactAtTokens?: number
 }
 
 export const DEFAULT_COMPLETION_MARKER = "GOAL_COMPLETE"
@@ -53,6 +55,7 @@ const DEFAULT_ABORT_BACKOFF_MS = 5 * 1000
 const DEFAULT_OUTAGE_TOLERANCE_MS = 2 * 60 * 1000
 const DEFAULT_RETRY_BACKOFF_MS = 1000
 const DEFAULT_MAX_BACKOFF_MS = 30 * 1000
+const DEFAULT_COMPACT_AT_TOKENS = 600_000
 const HISTORY_LIMIT = 20
 const ACTIVE_POLL_INTERVAL_MS = 2000
 const EXECUTION_START_TIMEOUT_MS = 30 * 1000
@@ -61,7 +64,19 @@ const EXECUTION_START_TIMEOUT_MS = 30 * 1000
 // 429). The loop retries these with backoff instead of counting an error.
 class TransientError extends Error {}
 
-type SessionMessage = { id: string | null; role: unknown; aborted: boolean; raw: unknown }
+type SessionMessage = {
+  id: string | null
+  role: unknown
+  aborted: boolean
+  // set when the turn ended with an error other than an abort
+  error: { message: string; statusCode: number | null; retryable: boolean } | null
+  // context size the turn ran with (tokens.total), null when not reported
+  tokens: number | null
+  // a compaction summary
+  summary: boolean
+  model: GoalLoopModel | null
+  raw: unknown
+}
 
 function authHeader(server: GoalLoopServer): Record<string, string> {
   if (!server.username && !server.password) return {}
@@ -133,14 +148,55 @@ function parseMessages(payload: unknown): SessionMessage[] {
     .filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null)
     .map((item) => {
       const info = (item["info"] ?? item) as Record<string, unknown>
-      const error = (info["error"] ?? {}) as { name?: unknown; data?: { message?: unknown } }
+      const error = (info["error"] ?? {}) as {
+        name?: unknown
+        data?: { message?: unknown; statusCode?: unknown; isRetryable?: unknown }
+      }
+      const aborted = error.name === "MessageAbortedError" || error.data?.message === "Aborted"
       return {
         id: typeof info["id"] === "string" ? info["id"] : null,
         role: info["role"] ?? item["type"],
-        aborted: error.name === "MessageAbortedError" || error.data?.message === "Aborted",
+        aborted,
+        error:
+          !aborted && typeof error.name === "string"
+            ? {
+                message: typeof error.data?.message === "string" ? error.data.message : error.name,
+                statusCode: typeof error.data?.statusCode === "number" ? error.data.statusCode : null,
+                retryable: error.data?.isRetryable === true,
+              }
+            : null,
+        tokens: tokensOf(info["tokens"]),
+        summary: info["summary"] === true,
+        model:
+          typeof info["providerID"] === "string" && typeof info["modelID"] === "string"
+            ? { providerID: info["providerID"], modelID: info["modelID"] }
+            : null,
         raw: item,
       }
     })
+}
+
+function tokensOf(value: unknown): number | null {
+  const tokens = (value ?? {}) as {
+    total?: unknown
+    input?: unknown
+    output?: unknown
+    cache?: { read?: unknown; write?: unknown }
+  }
+  if (typeof tokens.total === "number" && tokens.total > 0) return tokens.total
+  const sum = [tokens.input, tokens.output, tokens.cache?.read, tokens.cache?.write]
+    .filter((n): n is number => typeof n === "number")
+    .reduce((acc, n) => acc + n, 0)
+  return sum > 0 ? sum : null
+}
+
+// Context the session is known to carry: the newest assistant turn that did
+// not fail. A summary means the session was just compacted. null when unknown.
+function contextOf(messages: SessionMessage[]): { id: string | null; tokens: number } | null {
+  const last = messages.findLast((message) => message.role === "assistant" && !message.error && !message.aborted)
+  if (!last) return null
+  if (last.summary) return { id: last.id, tokens: 0 }
+  return last.tokens === null ? null : { id: last.id, tokens: last.tokens }
 }
 
 // Assistant output of the latest turn: everything after the last user message.
@@ -214,6 +270,7 @@ export function createGoalLoop(deps: GoalLoopDeps) {
   const outageToleranceMs = deps.outageToleranceMs ?? DEFAULT_OUTAGE_TOLERANCE_MS
   const retryBackoffMs = deps.retryBackoffMs ?? DEFAULT_RETRY_BACKOFF_MS
   const maxBackoffMs = deps.maxBackoffMs ?? DEFAULT_MAX_BACKOFF_MS
+  const compactAtTokens = deps.compactAtTokens ?? DEFAULT_COMPACT_AT_TOKENS
 
   let active: GoalLoopState | null = null
   let stopped = false
@@ -352,6 +409,10 @@ export function createGoalLoop(deps: GoalLoopDeps) {
       // the session is observed idle with nothing queued
       owed: null as string | null,
       delay: 0,
+      // id of the turn whose context size last triggered a compaction
+      compactedFor: undefined as string | null | undefined,
+      // a failed turn already triggered a compaction in this error streak
+      overflowCompacted: false,
     }
 
     const send = async (text: string) => {
@@ -360,6 +421,52 @@ export function createGoalLoop(deps: GoalLoopDeps) {
       track.owed = null
       track.sawBusy = false
       track.sentAt = now()
+    }
+
+    // Sends the owed continue, summarizing the session first when its last
+    // successful turn ran with more than compactAtTokens of context. A session
+    // left to grow toward the model's window starts failing every request.
+    const sendOwed = async (messages: SessionMessage[]) => {
+      const text = track.owed
+      if (text === null) return
+      const context = contextOf(messages)
+      if (context && context.tokens > compactAtTokens && context.id !== track.compactedFor) {
+        track.compactedFor = context.id
+        await compact(messages, `compacted the session at ${context.tokens} tokens`)
+        if (!alive()) return
+      }
+      await send(text)
+    }
+
+    // POST /summarize, then wait for the session to be idle. The summary turn
+    // becomes the baseline so it is never mistaken for a loop turn. Returns
+    // false when no model is known to summarize with.
+    const compact = async (messages: SessionMessage[], reason: string) => {
+      const model = input.model ?? messages.findLast((message) => message.model !== null)?.model
+      if (!model) return false
+      await request(server, `/session/${sessionID}/summarize?directory=${encodeURIComponent(directory)}`, {
+        method: "POST",
+        body: JSON.stringify({ providerID: model.providerID, modelID: model.modelID }),
+      })
+      const since = now()
+      while (await sessionBusy(server, sessionID)) {
+        if (now() - since >= waitTimeoutMs)
+          throw new Error(`session still busy ${seconds(now() - since)}s after compaction`)
+        await sleep(pollIntervalMs)
+        if (!alive()) return true
+      }
+      const after = await sessionMessages(server, sessionID)
+      track.lastAssistantID = after.findLast((message) => message.role === "assistant")?.id ?? track.lastAssistantID
+      track.sawBusy = false
+      note(reason)
+      return true
+    }
+
+    // The continue prompt for the current iteration, resent after a failed turn.
+    const retryContinue = () => {
+      const current = active
+      if (!current) return null
+      return continuePromptText(current.goal, current.completionMarker, current.iteration, current.maxIterations)
     }
 
     // Advances the iteration counter and returns the continue prompt text, or
@@ -477,7 +584,7 @@ export function createGoalLoop(deps: GoalLoopDeps) {
         const newTurn = track.sawBusy || (latest?.id != null && latest.id !== track.lastAssistantID)
         if (!newTurn) {
           if (track.owed !== null) {
-            await send(track.owed)
+            await sendOwed(messages)
             continue
           }
           track.delay = pollIntervalMs
@@ -489,7 +596,6 @@ export function createGoalLoop(deps: GoalLoopDeps) {
 
         track.sawBusy = false
         track.lastAssistantID = latest?.id ?? track.lastAssistantID
-        track.errors = 0
         const current = active
         if (!current) return
         if (completionReached(turnText(messages), current.completionMarker)) {
@@ -497,6 +603,7 @@ export function createGoalLoop(deps: GoalLoopDeps) {
           return
         }
         if (latest?.aborted) {
+          track.errors = 0
           track.aborts += 1
           if (track.aborts >= maxConsecutiveAborts) {
             finish("failed", `turn aborted ${track.aborts} times in a row`)
@@ -511,10 +618,38 @@ export function createGoalLoop(deps: GoalLoopDeps) {
           continue
         }
         track.aborts = 0
+        if (latest?.error) {
+          // A failed turn (provider error, 0 tokens) is not an iteration: resend
+          // the same step. A non-retryable 400 on a large or unknown context is
+          // most likely an overflowed window, so compact once before counting it.
+          const context = contextOf(messages)
+          const overflow =
+            latest.error.statusCode === 400 &&
+            !latest.error.retryable &&
+            (context === null || context.tokens > compactAtTokens)
+          track.owed ??= retryContinue()
+          if (track.owed === null) return
+          if (overflow && !track.overflowCompacted) {
+            track.overflowCompacted = true
+            const size = context === null ? "an unknown number of" : String(context.tokens)
+            if (await compact(messages, `compacted the session at ${size} tokens after a failed turn`)) continue
+          }
+          track.errors += 1
+          if (track.errors >= maxConsecutiveErrors) {
+            await interruptQuietly(server, sessionID)
+            finish("failed", `turn failed ${track.errors} times in a row: ${latest.error.message}`)
+            return
+          }
+          note(`recovered from a failed turn (${track.errors} of ${maxConsecutiveErrors}): ${latest.error.message}`)
+          track.delay = Math.min(retryBackoffMs * 2 ** (track.errors - 1), maxBackoffMs)
+          continue
+        }
+        track.errors = 0
+        track.overflowCompacted = false
         // a continue still owed from an earlier abort or failed send covers this turn too
-        const text = track.owed ?? nextContinue()
-        if (text === null) return
-        await send(text)
+        track.owed ??= nextContinue()
+        if (track.owed === null) return
+        await sendOwed(messages)
       } catch (error) {
         if (!alive()) return
         const message = error instanceof Error ? error.message : String(error)
