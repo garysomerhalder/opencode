@@ -1,4 +1,5 @@
-import { Component, createSignal, startTransition } from "solid-js"
+import { Component, createSignal, Show, startTransition } from "solid-js"
+import { activeBrand } from "@/brand"
 import { Dialog } from "@opencode-ai/ui/dialog"
 import { Tabs } from "@opencode-ai/ui/tabs"
 import { Icon } from "@opencode-ai/ui/icon"
@@ -70,6 +71,9 @@ export const DialogSettings: Component<{ defaultValue?: string }> = (props) => {
             <div class="flex flex-col gap-1 pl-1 py-1 text-12-medium text-text-weak">
               <span>{language.t("app.name.desktop")}</span>
               <span class="text-11-regular">v{platform.version}</span>
+              <Show when={activeBrand()}>
+                <span class="text-11-regular">{language.t("brand.credit")}</span>
+              </Show>
             </div>
           </div>
         </Tabs.List>

@@ -7,6 +7,7 @@ import { File } from "@opencode-ai/session-ui/file"
 import { Font } from "@opencode-ai/ui/font"
 import { Splash } from "@opencode-ai/ui/logo"
 import { ThemeProvider } from "@opencode-ai/ui/theme/context"
+import { activeBrand } from "@/brand"
 import { MetaProvider } from "@solidjs/meta"
 import {
   type BaseRouterProps,
@@ -421,6 +422,7 @@ export function AppBaseProviders(
     <MetaProvider>
       <Font />
       <ThemeProvider
+        defaultTheme={activeBrand()?.defaultTheme}
         onThemeApplied={(_, mode, scheme) => {
           void window.api?.setTitlebar?.({ mode, scheme })
         }}

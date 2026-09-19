@@ -137,8 +137,11 @@ const sansFallback = 'ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFon
 const terminalFallback =
   '"JetBrainsMono Nerd Font Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace'
 
-const monoBase = monoFallback
-const sansBase = sansFallback
+// Brand hook: a theme can supply its own default faces through --brand-font-sans/--brand-font-mono
+// (the Legatus theme does, in packages/desktop/src/renderer/styles.css). When they are not set,
+// the var() fallback keeps the upstream first family, so the stacks are unchanged.
+const monoBase = monoFallback.replace(/^ui-monospace/, "var(--brand-font-mono, ui-monospace)")
+const sansBase = sansFallback.replace(/^ui-sans-serif/, "var(--brand-font-sans, ui-sans-serif)")
 const terminalBase = terminalFallback
 
 function input(font: string | undefined) {
