@@ -774,7 +774,7 @@ describe("goal loop resilience", () => {
   test("a tool that streams output past maxToolRunMs counts as a stall naming the tool", async () => {
     const events: GoalLoopEvent[] = []
     const fake = fakeServer("ses_hung", () => ({ reply: { text: "working" }, busyFor: 1_000_000 }))
-    const tool = longTool(fake, { streaming: true })
+    const tool = longTool(fake, { output: "growing" })
     const loop = createGoalLoop({
       getServer: async () => server,
       fetchImpl: fake.fetchImpl,
@@ -801,7 +801,7 @@ describe("goal loop resilience", () => {
   test("a tool streaming output past the wait timeout but under maxToolRunMs is not an error", async () => {
     const events: GoalLoopEvent[] = []
     const fake = fakeServer("ses_build", () => ({ reply: { text: "working" }, busyFor: 1_000_000 }))
-    const tool = longTool(fake, { streaming: true })
+    const tool = longTool(fake, { output: "growing" })
     const loop = createGoalLoop({
       getServer: async () => server,
       fetchImpl: fake.fetchImpl,
@@ -823,10 +823,41 @@ describe("goal loop resilience", () => {
     await loop.stop()
   })
 
+  test("shell output pinned at the 30k preview length still counts as progress up to maxToolRunMs", async () => {
+    const events: GoalLoopEvent[] = []
+    const fake = fakeServer("ses_tail", () => ({ reply: { text: "working" }, busyFor: 1_000_000 }))
+    const tool = longTool(fake, { output: "sliding" })
+    const loop = createGoalLoop({
+      getServer: async () => server,
+      fetchImpl: fake.fetchImpl,
+      onEvent: (e) => events.push(e),
+      pollIntervalMs: 2,
+      waitTimeoutMs: 80,
+      maxToolRunMs: 600,
+      progressCheckMs: 0,
+      maxConsecutiveErrors: 1,
+    })
+    await loop.start({ directory: "/repo", goal: "cargo build with a long log" })
+    await waitFor(() => tool.startedAt > 0)
+    // several quiet timeouts in, the sliding tail is still read as progress
+    await waitFor(() => Date.now() - tool.startedAt > 320 || loop.status() === null, 3000)
+    expect(loop.status()?.status).toBe("running")
+    expect(events.some((e) => (e.state.reason ?? "").includes("error"))).toBe(false)
+    // then the hard cap ends it, naming the tool
+    await waitFor(() => loop.status() === null, 3000)
+    const failed = events.at(-1)
+    if (failed?.type !== "failed") throw new Error("expected failed event")
+    expect(failed.state.reason).toContain("bash")
+    expect(failed.state.reason).toContain("limit")
+    expect(Date.now() - tool.startedAt).toBeGreaterThanOrEqual(600)
+    // the output length never moved, only its content did
+    expect([...tool.outputLengths]).toEqual([30_005])
+  })
+
   test("a silent running tool stalls after the wait timeout, long before maxToolRunMs", async () => {
     const events: GoalLoopEvent[] = []
     const fake = fakeServer("ses_silent", () => ({ reply: { text: "working" }, busyFor: 1_000_000 }))
-    const tool = longTool(fake, { streaming: false })
+    const tool = longTool(fake, { output: "silent" })
     const loop = createGoalLoop({
       getServer: async () => server,
       fetchImpl: fake.fetchImpl,
@@ -847,16 +878,25 @@ describe("goal loop resilience", () => {
 })
 
 // Streams a few finished tool calls into the running turn, then starts one
-// bash call that never exits. With `streaming` its output grows on every poll,
-// like a long build; without it the command is silent.
-function longTool(fake: ReturnType<typeof fakeServer>, options: { streaming: boolean }) {
-  const tool = { startedAt: 0 }
+// bash call that never exits. Its output on every poll is:
+// - "growing": one more char, like a short streaming command;
+// - "sliding": a new line, kept the way the shell tool keeps metadata.output
+//   ("...\n\n" + the last 30k chars), so its length never changes;
+// - "silent": unchanged.
+function longTool(fake: ReturnType<typeof fakeServer>, options: { output: "growing" | "sliding" | "silent" }) {
+  const tool = { startedAt: 0, outputLengths: new Set<number>() }
+  const log = { text: "x".repeat(40_000), lines: 0 }
   fake.onPoll(() => {
     const message = fake.activeMessage()
     if (!message) return
     const last = message.parts.at(-1) as { state?: { status: string; metadata: { output: string } } } | undefined
     if (last?.state?.status === "running") {
-      if (options.streaming) last.state.metadata.output += "."
+      if (options.output === "growing") last.state.metadata.output += "."
+      if (options.output === "sliding") {
+        log.text = (log.text + `   Compiling crate_${++log.lines} v0.1.0\n`).slice(-40_000)
+        last.state.metadata.output = "...\n\n" + log.text.slice(-30_000)
+      }
+      tool.outputLengths.add(last.state.metadata.output.length)
       return
     }
     if (message.parts.length < 5) {
@@ -873,7 +913,11 @@ function longTool(fake: ReturnType<typeof fakeServer>, options: { streaming: boo
       id: "prt_long",
       type: "tool",
       tool: "bash",
-      state: { status: "running", time: { start: 3 }, metadata: { output: "" } },
+      state: {
+        status: "running",
+        time: { start: 3 },
+        metadata: { output: options.output === "sliding" ? "...\n\n" + log.text.slice(-30_000) : "" },
+      },
     })
   })
   return tool

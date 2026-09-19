@@ -149,6 +149,19 @@ function turnText(messages: SessionMessage[]): string {
   return extractAssistantText(messages.slice(start).map((message) => message.raw))
 }
 
+// Length plus an FNV-1a hash of the last 256 chars. Length alone misses
+// streaming shell output: the shell tool keeps only a sliding 30k-char tail
+// in metadata.output, so a long build's output stops growing but keeps changing.
+function contentSignature(value: unknown): string {
+  if (typeof value !== "string") return ""
+  const tail = value.slice(-256)
+  const hash = Array.from(tail).reduce(
+    (acc, char) => Math.imul(acc ^ (char.codePointAt(0) ?? 0), 0x01000193) >>> 0,
+    0x811c9dc5,
+  )
+  return `${value.length}:${hash.toString(16)}`
+}
+
 function seconds(ms: number): number {
   return Math.round(ms / 1000)
 }
@@ -177,8 +190,8 @@ function progressOf(messages: SessionMessage[]) {
       state.status,
       time.start,
       time.end,
-      typeof text === "string" ? text.length : 0,
-      typeof output === "string" ? output.length : 0,
+      contentSignature(text),
+      contentSignature(output),
     ].join("|"),
     tool: running
       ? { id: `${last?.id}:${String(part["id"] ?? part["callID"])}`, name: String(part["tool"] ?? "tool") }
