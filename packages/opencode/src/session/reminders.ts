@@ -8,6 +8,7 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { PartID } from "./schema"
 import { MessageV2 } from "./message-v2"
 import { Session } from "./session"
+import { HarnessNote } from "./harness-note"
 import PROMPT_PLAN from "./prompt/plan.txt"
 import BUILD_SWITCH from "./prompt/build-switch.txt"
 import PLAN_MODE from "./prompt/plan-mode.txt"
@@ -20,7 +21,9 @@ export const apply = Effect.fn("SessionReminders.apply")(function* (input: {
   const flags = yield* RuntimeFlags.Service
   const fsys = yield* FSUtil.Service
   const sessions = yield* Session.Service
-  const userMessage = input.messages.findLast((msg) => msg.info.role === "user")
+  // Plan reminders belong to the prompt the user sent, not to a reminder the
+  // accuracy harness injected into the turn that is already running.
+  const userMessage = HarnessNote.lastRealUser(input.messages)
   if (!userMessage) return input.messages
 
   if (!flags.experimentalPlanMode) {

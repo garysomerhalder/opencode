@@ -188,6 +188,10 @@ export const Info = Schema.Struct({
             description:
               "Add the shared autonomy section to every request's system prompt (default true). Autonomous/headless runs also get the no-questions addendum.",
           }),
+          autonomy_when_no_question_tool: Schema.optional(Schema.Boolean).annotate({
+            description:
+              "Also treat a turn as autonomous when no question tool is available (default false). Off by default because a user who disables the question tool is still at the keyboard; turn it on for scripted fleets where nothing can answer.",
+          }),
           runaway_guard: Schema.optional(Schema.Boolean).annotate({
             description:
               "Detect repeated tool actions, results and error families across steps and inject one strategy reminder per turn (default true). Replaces the doom_loop permission ask.",

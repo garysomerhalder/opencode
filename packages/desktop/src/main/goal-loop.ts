@@ -205,9 +205,9 @@ function contextOf(messages: SessionMessage[]): { id: string | null; tokens: num
 }
 
 /**
- * A harness note: an all-synthetic user message the server injected into a
- * running turn (a runaway-guard or task-completion reminder). Recognised by the
- * `accuracy_reminder` marker on its synthetic text part.
+ * A harness note: a user message the server injected into a running turn (a
+ * runaway-guard or task-completion reminder, a background-task wake). It
+ * carries `reminder` parts instead of text.
  */
 export function isHarnessNote(item: unknown): boolean {
   if (typeof item !== "object" || item === null) return false
@@ -217,17 +217,9 @@ export function isHarnessNote(item: unknown): boolean {
   if (role !== "user") return false
   const parts = record["parts"] ?? info["parts"] ?? record["content"]
   if (!Array.isArray(parts) || parts.length === 0) return false
-  return parts.some((part) => {
-    if (typeof part !== "object" || part === null) return false
-    const entry = part as Record<string, unknown>
-    if (entry["type"] !== "text" || entry["synthetic"] !== true) return false
-    const metadata = entry["metadata"]
-    return (
-      typeof metadata === "object" &&
-      metadata !== null &&
-      typeof (metadata as Record<string, unknown>)["accuracy_reminder"] === "string"
-    )
-  })
+  return parts.every(
+    (part) => typeof part === "object" && part !== null && (part as Record<string, unknown>)["type"] === "reminder",
+  )
 }
 
 // Assistant output of the latest turn: everything after the last real user

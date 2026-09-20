@@ -231,6 +231,14 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
             text: "What did we do so far?",
           })
         }
+        // A reminder the harness injected into the running turn. The model
+        // reads it as user-role text; clients render it as a system note.
+        if (part.type === "reminder" && part.text !== "") {
+          userMessage.parts.push({
+            type: "text",
+            text: part.text,
+          })
+        }
         if (part.type === "subtask") {
           userMessage.parts.push({
             type: "text",

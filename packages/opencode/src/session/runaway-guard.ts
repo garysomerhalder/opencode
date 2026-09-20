@@ -39,13 +39,6 @@ export function create(input?: { threshold?: number }): State {
   return { threshold, reminded: false, actions: new Map(), results: new Map(), errors: new Map() }
 }
 
-/** Reset every streak, e.g. after an abort or a compaction. */
-export function clear(state: State) {
-  state.actions.clear()
-  state.results.clear()
-  state.errors.clear()
-}
-
 const ERROR_CATEGORIES: ReadonlyArray<{ name: string; pattern: RegExp }> = [
   { name: "timeout", pattern: /timeout|timed out|deadline exceeded/ },
   { name: "rate_limit", pattern: /rate.?limit|too many requests|\b429\b/ },
@@ -85,49 +78,66 @@ function rejected(part: SessionV1.ToolPart) {
   return /rejected permission|denied permission|permission denied by/i.test(part.state.error ?? "")
 }
 
-interface Observation {
-  readonly actions: Map<string, string>
-  readonly results: Map<string, string>
-  readonly errors: Map<string, string>
+/** One fingerprint seen in a step: which tool made it, and how many times. */
+interface Seen {
+  readonly tool: string
+  count: number
 }
 
-/** Keys seen in this step, each mapped to the tool that produced it. */
+interface Observation {
+  readonly actions: Map<string, Seen>
+  readonly results: Map<string, Seen>
+  readonly errors: Map<string, Seen>
+}
+
+function see(into: Map<string, Seen>, key: string, tool: string) {
+  const existing = into.get(key)
+  if (existing) existing.count += 1
+  else into.set(key, { tool, count: 1 })
+}
+
+/**
+ * Fingerprints seen in this step, with how often each occurred. Counting
+ * occurrences rather than steps is what lets the guard catch the case the old
+ * doom_loop ask caught: the same call repeated inside a single assistant
+ * message.
+ */
 function project(parts: ReadonlyArray<SessionV1.ToolPart>): Observation {
-  const actions = new Map<string, string>()
-  const results = new Map<string, string>()
-  const errors = new Map<string, string>()
+  const actions = new Map<string, Seen>()
+  const results = new Map<string, Seen>()
+  const errors = new Map<string, Seen>()
   for (const part of parts) {
     if (part.metadata?.providerExecuted) continue
     if (part.state.status === "pending" || part.state.status === "running") continue
     if (rejected(part)) continue
     const tool = part.tool
     const input = "input" in part.state ? part.state.input : undefined
-    actions.set(`${tool}${SEP}action${SEP}${digest(stable(input))}`, tool)
+    see(actions, `${tool}${SEP}action${SEP}${digest(stable(input))}`, tool)
     if (part.state.status === "error") {
-      errors.set(`${tool}${SEP}error${SEP}${errorCategory(part.state.error ?? "")}`, tool)
+      see(errors, `${tool}${SEP}error${SEP}${errorCategory(part.state.error ?? "")}`, tool)
       continue
     }
     if (part.state.status === "completed") {
       const output = typeof part.state.output === "string" ? part.state.output : ""
       if (output.trim().length === 0) continue
-      results.set(`${tool}${SEP}result${SEP}${digest(output.trim())}`, tool)
+      see(results, `${tool}${SEP}result${SEP}${digest(output.trim())}`, tool)
     }
   }
   return { actions, results, errors }
 }
 
-function bump(previous: Map<string, number>, current: Map<string, string>) {
+function bump(previous: Map<string, number>, current: Map<string, Seen>) {
   const next = new Map<string, number>()
-  for (const key of current.keys()) next.set(key, (previous.get(key) ?? 0) + 1)
+  for (const [key, seen] of current) next.set(key, (previous.get(key) ?? 0) + seen.count)
   return next
 }
 
-function peak(counts: Map<string, number>, tools: Map<string, string>, threshold: number) {
+function peak(counts: Map<string, number>, seen: Map<string, Seen>, threshold: number) {
   let best: { key: string; tool: string; occurrences: number } | undefined
   for (const [key, occurrences] of counts) {
     if (occurrences < threshold) continue
     if (best && best.occurrences >= occurrences) continue
-    best = { key, tool: tools.get(key) ?? "tool", occurrences }
+    best = { key, tool: seen.get(key)?.tool ?? "tool", occurrences }
   }
   return best
 }
@@ -163,9 +173,15 @@ export function observe(state: State, parts: ReadonlyArray<SessionV1.ToolPart>):
 }
 
 function text(kind: Kind, tool: string, occurrences: number, family?: string) {
+  // "other" means the errors did not match a known family, so they may be
+  // unrelated: say only what is true, that the same tool keeps failing.
+  const failure =
+    family === "other"
+      ? `The \`${tool}\` tool has failed ${occurrences} times in a row.`
+      : `The \`${tool}\` tool has failed ${occurrences} times in a row with the same kind of error (${family}).`
   const body =
     kind === "error"
-      ? `The \`${tool}\` tool has failed ${occurrences} times in a row with the same kind of error (${family}). ` +
+      ? `${failure} ` +
         `Do not retry the same route unchanged. Work out the cause, change one thing on purpose or take a different route, ` +
         `and if nothing is left to try, report the blocker. This one failing route does not mean the whole task failed.`
       : kind === "action"

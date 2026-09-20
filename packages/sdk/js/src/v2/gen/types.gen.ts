@@ -625,6 +625,23 @@ export type CompactionPart = {
   tail_start_id?: string
 }
 
+export type ReminderPart = {
+  id: string
+  sessionID: string
+  messageID: string
+  type: "reminder"
+  kind: string
+  text: string
+  label?: string
+  time?: {
+    start: number
+    end?: number
+  }
+  metadata?: {
+    [key: string]: unknown
+  }
+}
+
 export type Part =
   | TextPart
   | SubtaskPart
@@ -638,6 +655,7 @@ export type Part =
   | AgentPart
   | RetryPart
   | CompactionPart
+  | ReminderPart
 
 export type Prompt = {
   text: string
@@ -2031,6 +2049,7 @@ export type Config = {
     mcp_timeout?: number
     accuracy?: {
       autonomy_prompt?: boolean
+      autonomy_when_no_question_tool?: boolean
       runaway_guard?: boolean
       runaway_guard_threshold?: number
       todo_reminder?: boolean

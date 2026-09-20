@@ -8,6 +8,7 @@ import { DEFAULT_INTERVAL } from "./todo-reminder"
 
 export interface Settings {
   readonly autonomyPrompt: boolean
+  readonly autonomyWhenNoQuestionTool: boolean
   readonly runawayGuard: boolean
   readonly runawayGuardThreshold: number
   readonly todoReminder: boolean
@@ -18,6 +19,7 @@ export function settings(config: ConfigV1.Info): Settings {
   const accuracy = config.experimental?.accuracy ?? {}
   return {
     autonomyPrompt: accuracy.autonomy_prompt !== false,
+    autonomyWhenNoQuestionTool: accuracy.autonomy_when_no_question_tool === true,
     runawayGuard: accuracy.runaway_guard !== false,
     runawayGuardThreshold: Math.max(2, Math.trunc(accuracy.runaway_guard_threshold ?? DEFAULT_THRESHOLD)),
     todoReminder: accuracy.todo_reminder !== false,
@@ -28,16 +30,25 @@ export function settings(config: ConfigV1.Info): Settings {
 /**
  * Whether this turn runs without anyone to answer a question.
  *
- * Two signals, either is enough:
- *  - the caller said so (`autonomous: true` on prompt/prompt_async, carried on
- *    the user message) — the desktop goal loop sets this, because its prompts
- *    run inside a client that does have a question tool but no human;
- *  - the `question` tool is not available for this step at all, which is the
- *    case for `opencode run` without --interactive, for clients that do not
- *    expose it, and for subagents.
+ * The signal that counts is the caller saying so: `autonomous: true` on
+ * prompt/prompt_async, carried on the user message. The desktop goal loop sets
+ * it, because its prompts run inside a client that does have a question tool
+ * but no human.
+ *
+ * A missing `question` tool is NOT treated as "nobody is watching" by default:
+ * a user who denies the tool to stop being interrupted is still at the keyboard,
+ * and should not silently be told never to ask. Opting in with
+ * `experimental.accuracy.autonomy_when_no_question_tool` turns the absence of
+ * the tool into the second signal — useful for scripted `opencode run` fleets,
+ * where nothing can answer anyway.
  */
-export function autonomous(input: { autonomous?: boolean; questionAvailable: boolean }) {
-  return input.autonomous === true || !input.questionAvailable
+export function autonomous(input: {
+  autonomous?: boolean
+  questionAvailable: boolean
+  inferFromMissingQuestionTool?: boolean
+}) {
+  if (input.autonomous === true) return true
+  return input.inferFromMissingQuestionTool === true && !input.questionAvailable
 }
 
 export * as Accuracy from "./accuracy"

@@ -36,10 +36,10 @@ function harnessNote(id: string, kind = "runaway_guard") {
     info: { id, role: "user" },
     parts: [
       {
-        type: "text",
+        type: "reminder",
+        kind,
+        label: "Runaway guard",
         text: "<system-reminder>[runaway guard] change approach</system-reminder>",
-        synthetic: true,
-        metadata: { accuracy_reminder: kind },
       },
     ],
   }

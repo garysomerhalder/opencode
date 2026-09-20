@@ -33,6 +33,7 @@ import { NamedError } from "@opencode-ai/core/util/error"
 import { SessionProcessor } from "./processor"
 import { Todo } from "./todo"
 import { Accuracy } from "./accuracy"
+import { HarnessNote } from "./harness-note"
 import { RunawayGuard } from "./runaway-guard"
 import { TodoReminder } from "./todo-reminder"
 import PROMPT_AUTONOMY from "./prompt/autonomy.txt"
@@ -102,14 +103,10 @@ function formatMcpResourceBytes(value: number) {
 /**
  * A user message the harness wrote itself (runaway guard or todo reminder). It
  * belongs to the turn that is already running: it is not a new user prompt and
- * not a turn boundary.
+ * not a turn boundary. Re-exported from {@link HarnessNote} so existing callers
+ * keep working; new code should use the module directly.
  */
-export function isHarnessNote(message: SessionV1.WithParts | undefined) {
-  if (!message || message.info.role !== "user") return false
-  return message.parts.some(
-    (part) => part.type === "text" && part.synthetic === true && typeof part.metadata?.accuracy_reminder === "string",
-  )
-}
+export const isHarnessNote = HarnessNote.isNote
 
 function isOrphanedInterruptedTool(part: SessionV1.ToolPart) {
   // cleanup() marks abandoned tool_use blocks this way after retries/aborts.
@@ -1126,25 +1123,18 @@ const layer = Layer.effect(
         const note = Effect.fn("SessionPrompt.harnessNote")(function* (input: {
           user: SessionV1.User
           kind: string
+          label: string
           texts: string[]
         }) {
-          const msg: SessionV1.User = {
-            ...input.user,
-            id: MessageID.ascending(),
-            time: { created: Date.now() },
-          }
-          yield* sessions.updateMessage(msg)
-          yield* sessions.updatePart({
-            id: PartID.ascending(),
-            messageID: msg.id,
-            sessionID,
-            type: "text",
+          const built = HarnessNote.build({
+            user: input.user,
+            kind: input.kind,
+            label: input.label,
             text: input.texts.join("\n\n"),
-            synthetic: true,
-            metadata: { accuracy_reminder: input.kind },
-            time: { start: Date.now(), end: Date.now() },
           })
-          return msg
+          yield* sessions.updateMessage(built.info)
+          yield* sessions.updatePart(built.part)
+          return built.info
         })
 
         while (true) {
@@ -1189,7 +1179,10 @@ const layer = Layer.effect(
             }
             // Stopped with todos still open: remind once and keep going. The
             // budget lives in todoState (once per turn) and the marker on the
-            // last user message makes it survive a restarted loop.
+            // turn's own user message makes it survive a restarted loop. Look
+            // that message up by id: `msgs` comes from filterCompacted, which
+            // reorders for model consumption, so findLast is not the same thing
+            // as "the message this turn is answering".
             if (
               todoState &&
               !orphan &&
@@ -1197,12 +1190,12 @@ const layer = Layer.effect(
               !lastAssistant.error &&
               structured === undefined &&
               lastUser.format?.type !== "json_schema" &&
-              !isHarnessNote(msgs.findLast((msg) => msg.info.role === "user"))
+              !isHarnessNote(msgs.find((msg) => msg.info.id === lastUser.id))
             ) {
               const reminder = TodoReminder.onStop(todoState, yield* todoSummary())
               if (reminder) {
                 yield* Effect.logInfo("todo reminder", { "session.id": sessionID, ...reminder.log })
-                yield* note({ user: lastUser, kind: "todo_continue", texts: [reminder.text] })
+                yield* note({ user: lastUser, kind: "todo_continue", label: "Task completion", texts: [reminder.text] })
                 continue
               }
             }
@@ -1302,7 +1295,10 @@ const layer = Layer.effect(
             .pipe(Effect.onInterrupt(() => finalizeInterruptedAssistant))
 
           const outcome: "break" | "continue" = yield* Effect.gen(function* () {
-            const lastUserMsg = msgs.findLast((m) => m.info.role === "user")
+            // The @agent exemption belongs to the prompt the user actually
+            // sent, so skip harness notes: a reminder mid-turn must not change
+            // which tools the task gate allows.
+            const lastUserMsg = HarnessNote.lastRealUser(msgs)
             const bypassAgentCheck = lastUserMsg?.parts.some((p) => p.type === "agent") ?? false
             const promptOps = yield* ops()
 
@@ -1354,7 +1350,11 @@ const layer = Layer.effect(
               !Permission.disabled(["question"], Permission.merge(agent.permission, session.permission ?? [])).has(
                 "question",
               )
-            const autonomous = Accuracy.autonomous({ autonomous: lastUser.autonomous, questionAvailable })
+            const autonomous = Accuracy.autonomous({
+              autonomous: lastUser.autonomous,
+              questionAvailable,
+              inferFromMissingQuestionTool: accuracy.autonomyWhenNoQuestionTool,
+            })
             const system = [
               ...env,
               ...(accuracy.autonomyPrompt
@@ -1419,10 +1419,12 @@ const layer = Layer.effect(
               // inside the processor; the todo reminder is time-based on steps.
               const texts: string[] = []
               const kinds: string[] = []
+              const labels: string[] = []
               if (handle.reminder) {
                 yield* Effect.logInfo("runaway guard", { "session.id": sessionID, ...handle.reminder.log })
                 texts.push(handle.reminder.text)
                 kinds.push("runaway_guard")
+                labels.push("Runaway guard")
               }
               if (todoState) {
                 const reminder = TodoReminder.periodic(todoState, yield* todoSummary(), step)
@@ -1430,9 +1432,11 @@ const layer = Layer.effect(
                   yield* Effect.logInfo("todo reminder", { "session.id": sessionID, ...reminder.log })
                   texts.push(reminder.text)
                   kinds.push("todo_periodic")
+                  labels.push("Task completion")
                 }
               }
-              if (texts.length > 0) yield* note({ user: lastUser, kind: kinds.join("+"), texts })
+              if (texts.length > 0)
+                yield* note({ user: lastUser, kind: kinds.join("+"), label: labels.join(" + "), texts })
             }
             if (result === "compact") {
               yield* compaction.create({

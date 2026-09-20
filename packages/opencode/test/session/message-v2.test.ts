@@ -112,6 +112,30 @@ function basePart(messageID: string, id: string) {
 }
 
 describe("session.message-v2.toModelMessage", () => {
+  test("a harness reminder reaches the model as user text", async () => {
+    const input: SessionV1.WithParts[] = [
+      {
+        info: userInfo("m-note"),
+        parts: [
+          {
+            ...basePart("m-note", "p1"),
+            type: "reminder",
+            kind: "runaway_guard",
+            label: "Runaway guard",
+            text: "<system-reminder>[runaway guard] change approach</system-reminder>",
+          },
+        ] as SessionV1.Part[],
+      },
+    ]
+
+    expect(await MessageV2.toModelMessages(input, model)).toStrictEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "<system-reminder>[runaway guard] change approach</system-reminder>" }],
+      },
+    ])
+  })
+
   test("filters out messages with no parts", async () => {
     const input: SessionV1.WithParts[] = [
       {

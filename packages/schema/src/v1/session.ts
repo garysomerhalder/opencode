@@ -201,6 +201,35 @@ export const CompactionPart = Schema.Struct({
 }).annotate({ identifier: "CompactionPart" })
 export type CompactionPart = Types.DeepMutable<Schema.Schema.Type<typeof CompactionPart>>
 
+/**
+ * A reminder the harness injected into a turn that is already running: a
+ * runaway-guard nudge, a task-completion reminder, a background-task wake.
+ *
+ * It rides on a user message so the model reads it as user-role content, but it
+ * is NOT the user speaking. It has its own part type for that reason: anything
+ * that switches on part type — model conversion, undo, renderers — gets one
+ * explicit arm, instead of every "last user message" reader having to remember
+ * to filter a flag on a text part.
+ */
+export const ReminderPart = Schema.Struct({
+  ...partBase,
+  type: Schema.Literal("reminder"),
+  /** Which reminder this is, e.g. "runaway_guard", "todo_continue", "wake". */
+  kind: Schema.String,
+  /** What the model reads. */
+  text: Schema.String,
+  /** Short label for clients that show a system note, e.g. "Runaway guard". */
+  label: Schema.optional(Schema.String),
+  time: Schema.optional(
+    Schema.Struct({
+      start: NonNegativeInt,
+      end: Schema.optional(NonNegativeInt),
+    }),
+  ),
+  metadata: Schema.optional(Schema.Record(Schema.String, Schema.Any)),
+}).annotate({ identifier: "ReminderPart" })
+export type ReminderPart = Types.DeepMutable<Schema.Schema.Type<typeof ReminderPart>>
+
 export const SubtaskPart = Schema.Struct({
   ...partBase,
   type: Schema.Literal("subtask"),
@@ -373,6 +402,7 @@ export const Part = Schema.Union([
   AgentPart,
   RetryPart,
   CompactionPart,
+  ReminderPart,
 ]).annotate({ discriminator: "type", identifier: "Part" })
 export type Part =
   | TextPart
@@ -387,6 +417,7 @@ export type Part =
   | AgentPart
   | RetryPart
   | CompactionPart
+  | ReminderPart
 
 const AssistantErrorSchema = Schema.Union([
   AuthError.EffectSchema,

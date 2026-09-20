@@ -207,18 +207,14 @@ const session = Effect.fn("test.session")(function* () {
   })
 })
 
-/** Synthetic harness notes: all-synthetic user messages with an accuracy marker. */
+/** Harness notes: user messages carrying a reminder part. */
 const notes = Effect.fn("test.notes")(function* (sessionID: string) {
   const sessions = yield* Session.Service
   const msgs = yield* sessions.messages({ sessionID: sessionID as any })
   return msgs
     .filter((msg) => msg.info.role === "user")
     .flatMap((msg) =>
-      msg.parts.flatMap((part) =>
-        part.type === "text" && part.synthetic && typeof part.metadata?.accuracy_reminder === "string"
-          ? [{ kind: part.metadata.accuracy_reminder as string, text: part.text }]
-          : [],
-      ),
+      msg.parts.flatMap((part) => (part.type === "reminder" ? [{ kind: part.kind, text: part.text }] : [])),
     )
 })
 
@@ -260,18 +256,37 @@ it.instance("autonomous prompts get the headless section even with a question to
   }),
 )
 
-it.instance("a session that denies the question tool is treated as headless", () =>
+const noQuestionTool = Effect.fn("test.noQuestionTool")(function* () {
+  const sessions = yield* Session.Service
+  return yield* sessions.create({
+    title: "No question tool",
+    permission: [
+      { permission: "*", pattern: "*", action: "allow" },
+      { permission: "question", pattern: "*", action: "deny" },
+    ],
+  })
+})
+
+it.instance("denying the question tool does not by itself make a turn autonomous", () =>
   Effect.gen(function* () {
+    // Someone who turns the question tool off to stop being interrupted is
+    // still sitting at the keyboard: they must not be told never to ask.
     const { llm } = yield* useConfig()
     const prompt = yield* SessionPrompt.Service
-    const sessions = yield* Session.Service
-    const chat = yield* sessions.create({
-      title: "Headless",
-      permission: [
-        { permission: "*", pattern: "*", action: "allow" },
-        { permission: "question", pattern: "*", action: "deny" },
-      ],
-    })
+    const chat = yield* noQuestionTool()
+    yield* llm.text("done")
+    yield* prompt.prompt({ sessionID: chat.id, agent: "build", parts: [{ type: "text", text: "hi" }] })
+    const hits = yield* llm.hits
+    expect(systemOf(hits[0]!)).toContain("Working autonomously")
+    expect(systemOf(hits[0]!)).not.toContain("This run is autonomous")
+  }),
+)
+
+it.instance("opting in makes a missing question tool the second autonomy signal", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useConfig({ autonomy_when_no_question_tool: true })
+    const prompt = yield* SessionPrompt.Service
+    const chat = yield* noQuestionTool()
     yield* llm.text("done")
     yield* prompt.prompt({ sessionID: chat.id, agent: "build", parts: [{ type: "text", text: "hi" }] })
     const hits = yield* llm.hits
@@ -310,6 +325,10 @@ it.instance(
       expect(injected[0]!.text).toContain("[runaway guard]")
       const hits = yield* llm.hits
       expect(JSON.stringify(hits.at(-1)!.body)).toContain("[runaway guard]")
+      // A reminder, never a permission ask: nothing answers permissions in a
+      // headless run, so an ask would leave the turn hanging.
+      const permission = yield* Permission.Service
+      expect(yield* permission.list()).toHaveLength(0)
     }),
   20000,
 )
@@ -328,6 +347,12 @@ it.instance(
     }),
   20000,
 )
+
+// The intra-message case the doom_loop ask used to catch — the same call three
+// times inside one assistant message — is covered in runaway-guard.test.ts.
+// The scripted LLM here streams every tool call into slot index 0, so a reply
+// with several calls arrives merged into one; a multi-call reply hangs this
+// harness with the guard on and off alike, so it proves nothing either way.
 
 // C. todo completion
 

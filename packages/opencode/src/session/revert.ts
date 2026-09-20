@@ -5,6 +5,7 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { Snapshot } from "../snapshot"
 import { Storage } from "@/storage/storage"
 import { Session } from "./session"
+import { HarnessNote } from "./harness-note"
 import { MessageV2 } from "./message-v2"
 import { SessionID, MessageID, PartID } from "./schema"
 import { SessionRunState } from "./run-state"
@@ -44,7 +45,10 @@ const layer = Layer.effect(
       let rev: Session.Info["revert"]
       const patches: Snapshot.Patch[] = []
       for (const msg of all) {
-        if (msg.info.role === "user") lastUser = msg.info
+        // Harness notes (runaway guard, task completion) are written by the
+        // harness into a running turn. Reverting to one would keep the user's
+        // own prompt and every edit made before the reminder.
+        if (msg.info.role === "user" && !HarnessNote.isNote(msg)) lastUser = msg.info
         const remaining = []
         for (const part of msg.parts) {
           if (rev) {

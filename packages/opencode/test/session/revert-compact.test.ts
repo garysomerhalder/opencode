@@ -680,4 +680,42 @@ describe("revert + compact workflow", () => {
       { git: true },
     ),
   )
+
+  it.live(
+    "reverts to the user's own message, not a reminder the harness injected",
+    provideTmpdirInstance(
+      (dir) =>
+        Effect.gen(function* () {
+          const session = yield* Session.Service
+          const revert = yield* SessionRevert.Service
+
+          const info = yield* session.create({})
+          const sid = info.id
+
+          const real = yield* user(sid)
+          yield* text(sid, real.id, "add the feature")
+          const first = yield* assistant(sid, real.id, dir)
+          yield* tool(sid, first.id)
+
+          // The accuracy harness continued the turn with a reminder of its own.
+          const note = yield* user(sid)
+          yield* session.updatePart({
+            id: PartID.ascending(),
+            messageID: note.id,
+            sessionID: sid,
+            type: "reminder",
+            kind: "todo_continue",
+            label: "Task completion",
+            text: "<system-reminder>[task completion] finish your todos</system-reminder>",
+          })
+          const second = yield* assistant(sid, note.id, dir)
+          yield* tool(sid, second.id)
+
+          yield* revert.revert({ sessionID: sid, messageID: second.id })
+
+          expect((yield* session.get(sid)).revert?.messageID).toBe(real.id)
+        }),
+      { git: true },
+    ),
+  )
 })

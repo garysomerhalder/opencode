@@ -61,6 +61,24 @@ describe("runaway guard", () => {
     expect(observe(state, step())).toBeUndefined()
   })
 
+  test("identical calls inside one step count individually", () => {
+    // This is the case the doom_loop permission ask used to catch: the model
+    // emits the same call three times in a single assistant message.
+    const state = RunawayGuard.create({ threshold: 3 })
+    const call = () => tool({ tool: "bash", args: { command: "bun test" }, output: "same" })
+    const reminder = observe(state, [call(), call(), call()])
+    expect(reminder).toBeDefined()
+    expect(reminder!.kind).toBe("action")
+    expect(reminder!.log.occurrences).toBe(3)
+  })
+
+  test("two in one step plus one in the next reaches the threshold", () => {
+    const state = RunawayGuard.create({ threshold: 3 })
+    const call = () => tool({ tool: "grep", args: { pattern: "x" }, output: `o${Math.random()}` })
+    expect(observe(state, [call(), call()])).toBeUndefined()
+    expect(observe(state, [call()])?.log.occurrences).toBe(3)
+  })
+
   test("a repeat interrupted by a different action does not trigger", () => {
     const state = RunawayGuard.create({ threshold: 3 })
     const same = () => [tool({ tool: "read", args: { filePath: "/a" }, output: `a${Math.random()}` })]
@@ -117,6 +135,26 @@ describe("runaway guard", () => {
     expect(reminder!.text).not.toContain(secret)
     expect(reminder!.log.fingerprint).not.toContain(secret)
     expect(JSON.stringify(reminder!.log)).not.toContain(secret)
+  })
+
+  test("an uncategorised error never carries its text into the reminder or the log", () => {
+    // The error branch is the one that can leak: the message is provider text,
+    // and an unmatched message falls into the literal "other" bucket rather
+    // than into a key built from the text itself.
+    const state = RunawayGuard.create({ threshold: 2 })
+    const secret = "postgres://admin:hunter2@db.internal/prod"
+    const step = () => [
+      tool({ tool: "bash", args: { command: "migrate" }, error: `migration refused for ${secret}` }),
+    ]
+    observe(state, step())
+    const reminder = observe(state, step())
+    expect(reminder?.kind).toBe("error")
+    // Unmatched errors may be unrelated, so the wording claims no family.
+    expect(reminder!.text).toContain("has failed 2 times in a row.")
+    expect(reminder!.text).not.toContain("same kind of error")
+    expect(reminder!.text).not.toContain(secret)
+    expect(reminder!.text).not.toContain("hunter2")
+    expect(JSON.stringify(reminder!.log)).not.toContain("hunter2")
   })
 
   test("a step with no tool calls clears the streak", () => {
