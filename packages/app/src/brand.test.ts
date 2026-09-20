@@ -54,21 +54,44 @@ describe("brandDictionary", () => {
     expect(missing).toEqual([])
   })
 
-  test("leaves server, CLI, upstream services and docs mentions alone", () => {
+  test("leaves the WSL binary, upstream services and upstream docs alone", () => {
+    // Each of these is allow-listed in brand-surface.ts with the reason it stays: someone else's
+    // binary, someone else's service, or a link whose destination really is upstream.
     const out = brandDictionary(base, LEGATUS)
     for (const key of [
-      "dialog.server.description",
       "wsl.onboarding.installOpencode",
       "wsl.onboarding.step.opencode",
       "provider.connect.opencodeZen.line1",
       "dialog.model.unpaid.freeModels.title",
       "desktop.menu.documentation",
       "error.page.report.prefix",
-      "error.chain.mcpFailed",
       "desktop.wsl.error.installOpencode",
     ]) {
       expect(out[key]).toBe(base[key])
       expect(out[key]).toContain("OpenCode")
+    }
+    // The project config file the app really reads, named in lower case.
+    expect(out["dialog.plugins.empty"]).toBe(base["dialog.plugins.empty"])
+    expect(out["dialog.plugins.empty"]).toContain("opencode.json")
+  })
+
+  test("rebrands copy that names this app, not a third party", () => {
+    const out = brandDictionary(base, LEGATUS)
+    // The app's own server, its own MCP support, and the three WSL strings that name the app
+    // rather than the binary it installs.
+    expect(out["dialog.server.description"]).toBe("Switch which Legatus server this app connects to.")
+    expect(out["error.chain.mcpFailed"]).toContain("Legatus does not support MCP authentication yet")
+    expect(out["wsl.onboarding.wslUnavailable.description"]).toBe("Legatus could not verify WSL on this machine.")
+    expect(out["wsl.onboarding.windowsRestartRequired"]).toContain("reopen Legatus")
+    expect(out["wsl.onboarding.wslNotInstalled.description"]).toContain("before Legatus can add a WSL server")
+    for (const key of [
+      "dialog.server.description",
+      "error.chain.mcpFailed",
+      "wsl.onboarding.wslUnavailable.description",
+      "wsl.onboarding.windowsRestartRequired",
+      "wsl.onboarding.wslNotInstalled.description",
+    ]) {
+      expect(out[key]).not.toContain("OpenCode")
     }
   })
 

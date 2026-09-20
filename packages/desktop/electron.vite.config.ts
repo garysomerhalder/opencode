@@ -17,9 +17,15 @@ const channel = (() => {
 // the upstream brand without code changes. Brand only: ids, paths and names are unaffected.
 const brand = process.env.OPENCODE_BRAND ?? "legatus"
 const brandDefine = { "import.meta.env.VITE_OPENCODE_BRAND": JSON.stringify(brand) }
+const brandModule = (name: string) => fileURLToPath(new URL(`./src/renderer/brand/${name}`, import.meta.url))
 const brandAlias =
   brand === "legatus"
-    ? { "@opencode-ai/ui/logo": fileURLToPath(new URL("./src/renderer/brand/logo.tsx", import.meta.url)) }
+    ? {
+        "@opencode-ai/ui/logo": brandModule("logo.tsx"),
+        // The new-session hero. Upstream's is letterform paths spelling the product name, so it
+        // has to be swapped as a module; there is no string to rebrand.
+        "@opencode-ai/ui/v2/wordmark-v2": brandModule("wordmark-v2.tsx"),
+      }
     : undefined
 
 const nodePtyPkg =`@lydell/node-pty-${process.platform}-${process.arch}`

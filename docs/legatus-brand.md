@@ -47,7 +47,16 @@ How each place was found: `grep -rn "OpenCode"` over `packages/desktop/src`,
 | `packages/ui/src/theme/brand/legatus.ts` (new) + `legatus.test.ts` | `legatusTheme(tokens)` maps tokens to a `DesktopTheme`. Tests: navy `#0A0E14` background, green `#4ADE80` primary/accent, no brand red in the theme, it resolves through `resolveThemeVariant` for v1 and v2, and the committed JSON equals the function output. | theme system read first |
 | `packages/ui/src/theme/themes/legatus.json` (new) | Generated output. The `import.meta.glob("./themes/*.json")` registry picks it up with no registry edit. | `context.tsx` glob |
 | `packages/ui/src/theme/context.tsx`, `default-themes.ts` | Add the display name "Legatus" and a `legatusTheme` export (one line each, same pattern as the other themes). | name map |
-| `packages/desktop/electron.vite.config.ts` | The brand define (main and renderer), and a renderer alias `@opencode-ai/ui/logo` → `src/renderer/brand/logo.tsx`. The upstream logo file is untouched. | Vite config |
+| `packages/desktop/electron.vite.config.ts` | The brand define (main and renderer), and renderer aliases `@opencode-ai/ui/logo` → `src/renderer/brand/logo.tsx` and `@opencode-ai/ui/v2/wordmark-v2` → `src/renderer/brand/wordmark-v2.tsx`. Both upstream files are untouched. | Vite config |
+| `packages/desktop/src/renderer/brand/wordmark-v2.tsx` (new) | The new-session hero. Upstream draws the word `opencode` in letterform paths, which no string switch can reach — the first pass of this brand layer left it in place, so the window said Legatus while the first screen said opencode. Draws the official Legatus lockup (Brand API `logo-full-white-svg`) with upstream's watermark treatment unchanged. | brand surface gate |
+| `packages/app/src/brand-surface.ts`, `brand-surface.test.ts` (new) | The gate. See "The surface gate" below. | — |
+| `packages/app/src/brand-icon.ts` (new) | The Legatus mark as a data URI, for OS notifications. Upstream points those at `https://opencode.ai/favicon-96x96-v3.png`, which shows the upstream mark *and* fetches it from upstream on every notification. | gate, source pass |
+| `packages/app/src/components/windows-app-menu.tsx` | The Windows app-menu heading was the hard-coded JSX text `OpenCode`. Now `activeBrand()?.productName`. | gate, markup text |
+| `packages/app/src/entry.tsx`, `packages/desktop/src/renderer/index.tsx` | OS notification icon follows the brand. | gate, source pass |
+| `packages/desktop/src/main/logging.ts` | "Export logs" wrote `opencode-debug-<stamp>.zip` into the user's Downloads folder. Now uses `brand.filePrefix`. | gate, source pass |
+| `packages/ui/src/brand.ts`, `env.d.ts` (new) | Minimal brand switch for `packages/ui`, which cannot import the app's (app depends on ui). The gate asserts the two agree, so the copy cannot drift. | — |
+| `packages/ui/src/components/favicon.tsx` | `apple-mobile-web-app-title` (the iOS home-screen name) follows the brand. | gate, source pass |
+| `packages/ui/src/theme/context.tsx` | The theme picker listed upstream's default palette as "OpenCode". With the brand on it reads "Classic"; the theme **id** stays `opencode` because it is persisted and referenced by config. | gate, source pass |
 | `packages/desktop/src/renderer/brand/logo.tsx` (new) | `Mark`, `Splash` and `Logo`, with the same exports and props as `@opencode-ai/ui/logo`, drawn from the official icon mark (Brand API `logo-icon-svg`) and the flat horizontal lockup. The fill follows the theme icon colors, which gives the official white or black mono variants. This covers the loading splash, the connection-error splash, the session-empty mark, the error page and the legacy home wordmark. | `grep "@opencode-ai/ui/logo"` |
 | `packages/desktop/src/renderer/fonts/*` (new) | Space Grotesk (variable 300–700) and Space Mono 400/700, woff2, latin subset, with `OFL.txt`. They are bundled by Vite; nothing is loaded from a CDN at runtime. | |
 | `packages/desktop/src/renderer/styles.css` | `@font-face` rules and, under `:root[data-theme="legatus"]`, the `--brand-font-*` and `--v2-font-family-sans` variables. The rule is unlayered, so it beats the `@layer theme` defaults. | empty file, already imported |
@@ -88,6 +97,46 @@ team", and the "OpenCode does not support MCP authentication" note (server behav
 - **Needs `predev` (runs at `bun dev` start):** icons, because `copy-icons` fills `resources/icons`.
 - The theme default applies only where no theme was ever picked (`opencode-theme-id` is unset in
   that profile's localStorage). If a theme was picked before, choose "Legatus" in Settings → Appearance.
+
+## The surface gate
+
+The acceptance bar is that a user driving the Legatus build never meets the string "OpenCode" or
+the opencode mark anywhere in the product. That is not something a review can hold — the first
+version of this layer got the window title right and left the word `opencode` drawn across the
+whole new-session screen — so it is a test: `packages/app/src/brand-surface.test.ts`, over
+`packages/app/src/brand-surface.ts`.
+
+It has two passes and an allow-list.
+
+1. **Dictionaries.** Every key of every locale of every shipped dictionary (app, ui, desktop
+   renderer, desktop native), after `brandDictionary(dict, LEGATUS)`. **Every locale, not just
+   English**: translators put the product name where English does not. That pass is the only
+   reason `home.providerTip` (German only) and `settings.updates.toast.latest.title` (four
+   locales) were found at all.
+2. **Source literals and markup text.** Every string literal *and* every JSX/HTML text node in
+   `packages/{app,ui,desktop}/src`, plus `index.html`. Markup text matters as much as literals:
+   the hard-coded `OpenCode` in the Windows app menu was a JSX text node, and a literals-only
+   scan walks straight past it.
+
+Whole categories are excluded **structurally**, each with its reason in the module header: import
+and export specifiers, comment lines, lines that read the brand switch (their upstream literal is
+the switch-*off* value and must stay), the i18n directories (pass 1 covers them properly), tests,
+Storybook stories, and the brand layer's own two files.
+
+Everything else that survives has to be in `ALLOWLIST` with a reason, or the gate fails. Entries
+are grouped so a reviewer reads ~15 reasons rather than 140 lines, and three meta-tests keep the
+list honest: every entry carries a reason, no entry is duplicated, and **no entry is stale** — an
+allowance that no longer matches anything fails the build.
+
+### What the gate cannot see
+
+- **Artwork.** A wordmark is letterform paths; no regex reads it. The upstream wordmark and logo
+  are swapped as whole modules by `electron.vite.config.ts`, and the test asserts the aliases
+  exist, that each replacement exports what the module it replaces exports, that the hero draws
+  the Legatus lockup, and that upstream's wordmark is left untouched for the brand-off build.
+- **Text fetched at runtime.** The "what's new" highlights come from upstream's
+  `changelog.json`. They are upstream's own release notes, so they name upstream, and nothing in
+  this repo can rewrite them.
 
 ## Keeping it mergeable with upstream
 

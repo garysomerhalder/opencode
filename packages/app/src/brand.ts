@@ -8,7 +8,11 @@
  *
  * This is a brand layer only: it never touches app ids, data paths, storage keys, package or
  * CLI names. See docs/legatus-brand.md.
+ *
+ * `brand-surface.ts` is the gate that keeps it honest: it fails the build if any user-visible
+ * surface still says OpenCode with the brand on, unless the case is allow-listed with a reason.
  */
+import { LEGATUS_ICON_DATA_URI } from "./brand-icon"
 
 export type Brand = {
   id: string
@@ -16,6 +20,10 @@ export type Brand = {
   appNames: { dev: string; beta: string; prod: string }
   defaultTheme: string
   upstreamName: string
+  /** Image URL for OS notifications, and anywhere else that needs the mark as a URL. */
+  notificationIcon: string
+  /** Prefix for files the app writes into the user's folders (the debug-log export). */
+  filePrefix: string
   messages: Record<string, string>
 }
 
@@ -25,6 +33,8 @@ export const LEGATUS: Brand = {
   appNames: { dev: "Legatus Dev", beta: "Legatus Beta", prod: "Legatus" },
   defaultTheme: "legatus",
   upstreamName: "OpenCode",
+  notificationIcon: LEGATUS_ICON_DATA_URI,
+  filePrefix: "legatus",
   messages: {
     "brand.credit": "Built on OpenCode",
   },
@@ -34,15 +44,18 @@ export type BrandMessages = { "brand.credit": string }
 
 /**
  * i18n keys where "OpenCode" names *this app*. Every key not listed here is left alone on
- * purpose, including the OpenCode server, the `opencode` CLI installed into WSL, the OpenCode
- * Zen/Go services, upstream docs, upstream bug reports and server behavior notes.
- * A new upstream key therefore shows "OpenCode" until it is added here, which is the safe way
- * to fail.
+ * purpose: the `opencode` CLI installed into WSL, the OpenCode Zen/Go services, `opencode.json`,
+ * upstream docs and upstream bug reports. Those are third parties, real filenames or truthful
+ * links, and `brand-surface.ts` holds the reason for each one.
+ *
+ * A new upstream key therefore shows "OpenCode" until it is added here — the safe way to fail,
+ * and `brand-surface.test.ts` turns it into a failing test rather than a silent leak.
  */
 export const BRANDED_KEYS: readonly string[] = [
   // app (packages/app/src/i18n)
   "app.name.desktop",
   "help.tabs.introduction",
+  "home.providerTip",
   "provider.connect.apiKey.description",
   "provider.connect.oauth.code.visit.suffix",
   "provider.connect.oauth.auto.visit.suffix",
@@ -53,7 +66,15 @@ export const BRANDED_KEYS: readonly string[] = [
   "settings.general.row.theme.description",
   "settings.updates.row.startup.description",
   "settings.updates.toast.latest.description",
+  "settings.updates.toast.latest.title",
   "toast.update.description",
+  "dialog.server.description",
+  "error.chain.mcpFailed",
+  // The WSL feature installs the upstream `opencode` binary into a distro; those strings name
+  // that binary and stay (see brand-surface.ts). These three name *this app* instead.
+  "wsl.onboarding.wslNotInstalled.description",
+  "wsl.onboarding.wslUnavailable.description",
+  "wsl.onboarding.windowsRestartRequired",
   // native menus and dialogs (packages/app/src/i18n/desktop-native.ts)
   "desktop.menu.app",
   "desktop.menu.ariaLabel",
