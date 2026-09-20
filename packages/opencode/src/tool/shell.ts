@@ -20,6 +20,8 @@ import { Plugin } from "@/plugin"
 import { ChildProcess } from "effect/unstable/process"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { ShellPrompt, type Parameters } from "./shell/prompt"
+import { ShellTasks } from "./shell/tasks"
+import type { WakeOps } from "./wake"
 import { BashArity } from "@/permission/arity"
 
 export { Parameters } from "./shell/prompt"
@@ -344,6 +346,7 @@ export const ShellTool = Tool.define(
     const trunc = yield* Truncate.Service
     const plugin = yield* Plugin.Service
     const flags = yield* RuntimeFlags.Service
+    const tasks = yield* ShellTasks.Service
     const defaultTimeoutMs = flags.bashDefaultTimeoutMs ?? 2 * 60 * 1000
 
     const cygpath = Effect.fn("ShellTool.cygpath")(function* (shell: string, text: string) {
@@ -594,13 +597,168 @@ export const ShellTool = Tool.define(
       }
     })
 
+    /**
+     * The background-capable path. The process is owned by the task registry,
+     * so a command that outlives the yield threshold keeps running instead of
+     * being killed. Modeled on MiniMax Code (MIT).
+     */
+    const runManaged = Effect.fn("ShellTool.runManaged")(function* (
+      input: {
+        shell: string
+        command: string
+        cwd: string
+        env: NodeJS.ProcessEnv
+        timeout?: number
+        background: boolean
+        settings: ShellTasks.Settings
+      },
+      ctx: Tool.Context,
+    ) {
+      const limits = yield* trunc.limits()
+      yield* ctx.metadata({ metadata: { output: "" } })
+
+      const handle = yield* tasks.start({
+        command: cmd(input.shell, input.command, input.cwd, input.env),
+        display: input.command,
+        cwd: input.cwd,
+        sessionID: ctx.sessionID,
+        messageID: ctx.messageID,
+        ...(ctx.callID ? { callID: ctx.callID } : {}),
+        limits,
+        settings: input.settings,
+        onPreview: (text) => ctx.metadata({ metadata: { output: text } }),
+      })
+
+      const abort = Effect.callback<void>((resume) => {
+        if (ctx.abort.aborted) return resume(Effect.void)
+        const handler = () => resume(Effect.void)
+        ctx.abort.addEventListener("abort", handler, { once: true })
+        return Effect.sync(() => ctx.abort.removeEventListener("abort", handler))
+      })
+
+      const settled = (note?: string) =>
+        Effect.gen(function* () {
+          yield* handle.detach
+          const result = yield* handle.result
+          const end = tail(result.raw, limits.maxLines, limits.maxBytes)
+          const cut = result.cut || end.cut
+          const file = result.info.file ?? (cut ? yield* trunc.write(result.raw) : undefined)
+          const body = end.text || "(no output)"
+          const output = [
+            cut && file ? `...output truncated...\n\nFull output saved to: ${file}\n\n${body}` : body,
+            ...(note ? [`\n<shell_metadata>\n${note}\n</shell_metadata>`] : []),
+          ].join("")
+          return {
+            title: input.command,
+            metadata: {
+              output: result.preview || preview(output),
+              exit: result.info.exitCode,
+              truncated: cut,
+              ...(cut && file ? { outputPath: file } : {}),
+            },
+            output,
+          }
+        })
+
+      const receipt = (info: ShellTasks.Info) =>
+        Effect.gen(function* () {
+          yield* handle.detach
+          const result = yield* handle.result
+          const elapsed = Date.now() - info.startedAt
+          const seen = ShellTasks.lastLines(result.raw, 40, 4 * 1024)
+          const output = [
+            `<shell_background task_id="${info.id}" status="running" elapsed_ms="${elapsed}">`,
+            input.background
+              ? "Started in the background. The process keeps running while you continue."
+              : "Still running, so it moved to a background task. The SAME process keeps running; it was not restarted and must not be rerun.",
+            "You will be told automatically when it finishes, with the exit code and output tail. Do not poll in a loop; do other useful work.",
+            `Read new output with shell_output({ task_id: "${info.id}" }) and stop it with shell_stop({ task_id: "${info.id}" }).`,
+            ...(info.file ? [`Output so far is also being written to: ${info.file}`] : []),
+            "Output so far:",
+            seen.length > 0 ? seen : "(no output yet)",
+            "</shell_background>",
+          ].join("\n")
+          return {
+            title: input.command,
+            metadata: {
+              output: result.preview || preview(output),
+              exit: null,
+              truncated: result.cut,
+              background: { taskId: info.id, status: info.status },
+              taskId: info.id,
+            },
+            output,
+          }
+        })
+
+      const race = (yieldAfterMs: number | undefined) =>
+        Effect.raceAll([
+          handle.awaitExit.pipe(Effect.map(() => ({ kind: "exit" as const }))),
+          abort.pipe(Effect.map(() => ({ kind: "abort" as const }))),
+          ...(yieldAfterMs === undefined
+            ? []
+            : [Effect.sleep(`${yieldAfterMs} millis`).pipe(Effect.map(() => ({ kind: "yield" as const })))]),
+          ...(input.timeout === undefined
+            ? []
+            : [Effect.sleep(`${input.timeout + 100} millis`).pipe(Effect.map(() => ({ kind: "timeout" as const })))]),
+        ])
+
+      const first = yield* race(input.background ? 0 : input.settings.yieldAfterMs)
+      if (first.kind === "exit") return yield* settled()
+      if (first.kind === "abort") {
+        yield* handle.kill("cancelled", "stopped")
+        return yield* settled("User aborted the command")
+      }
+      if (first.kind === "timeout") {
+        yield* handle.kill("timed_out", "deadline")
+        return yield* settled(
+          `shell tool terminated command after exceeding timeout ${input.timeout} ms. If this command is expected to take longer and is not waiting for interactive input, retry with a larger timeout value in milliseconds.`,
+        )
+      }
+
+      const ops = ctx.extra?.promptOps as WakeOps | undefined
+      const promoted = yield* handle.promote({
+        ...(ops ? { wake: ops } : {}),
+        ...(ctx.agent ? { agent: ctx.agent } : {}),
+        ...(input.timeout === undefined ? {} : { deadlineMs: input.timeout }),
+      })
+      if (promoted) return yield* receipt(promoted)
+
+      // At the concurrency cap nothing yields: fall back to the old foreground
+      // behavior, including the old timeout message.
+      const fallbackMs = input.timeout ?? defaultTimeoutMs
+      const remaining = Math.max(0, (yield* handle.info).startedAt + fallbackMs - Date.now())
+      const second = yield* Effect.raceAll([
+        handle.awaitExit.pipe(Effect.map(() => ({ kind: "exit" as const }))),
+        abort.pipe(Effect.map(() => ({ kind: "abort" as const }))),
+        Effect.sleep(`${remaining + 100} millis`).pipe(Effect.map(() => ({ kind: "timeout" as const }))),
+      ])
+      const capNote = `${input.settings.maxConcurrent} background shell tasks are already running, so this command could not move to the background. Stop one with shell_stop, then retry.`
+      if (second.kind === "exit") return yield* settled()
+      if (second.kind === "abort") {
+        yield* handle.kill("cancelled", "stopped")
+        return yield* settled("User aborted the command")
+      }
+      yield* handle.kill("timed_out", "deadline")
+      return yield* settled(
+        `shell tool terminated command after exceeding timeout ${fallbackMs} ms. ${capNote}`,
+      )
+    })
+
     return () =>
       Effect.gen(function* () {
         const cfg = yield* config.get()
         const shell = Shell.acceptable(cfg.shell)
         const name = Shell.name(shell)
         const limits = yield* trunc.limits()
-        const prompt = ShellPrompt.render(name, process.platform, limits, defaultTimeoutMs)
+        const settings = ShellTasks.settings(cfg.experimental?.background_shell)
+        const prompt = ShellPrompt.render(
+          name,
+          process.platform,
+          limits,
+          defaultTimeoutMs,
+          settings.enabled ? { yieldAfterMs: settings.yieldAfterMs, maxLifetimeMs: settings.maxLifetimeMs } : undefined,
+        )
         yield* Effect.logInfo("shell tool using shell", { shell })
 
         return {
@@ -615,7 +773,6 @@ export const ShellTool = Tool.define(
               if (params.timeout !== undefined && params.timeout < 0) {
                 throw new Error(`Invalid timeout value: ${params.timeout}. Timeout must be a positive number.`)
               }
-              const timeout = params.timeout ?? defaultTimeoutMs
               const ps = Shell.ps(shell)
               yield* Effect.scoped(
                 Effect.gen(function* () {
@@ -628,13 +785,29 @@ export const ShellTool = Tool.define(
                 }),
               )
 
+              const env = yield* shellEnv(ctx, cwd)
+              if (settings.enabled) {
+                return yield* runManaged(
+                  {
+                    shell,
+                    command: params.command,
+                    cwd,
+                    env,
+                    ...(params.timeout === undefined ? {} : { timeout: params.timeout }),
+                    background: params.background === true,
+                    settings,
+                  },
+                  ctx,
+                )
+              }
+
               return yield* run(
                 {
                   shell,
                   command: params.command,
                   cwd,
-                  env: yield* shellEnv(ctx, cwd),
-                  timeout,
+                  env,
+                  timeout: params.timeout ?? defaultTimeoutMs,
                 },
                 ctx,
               )

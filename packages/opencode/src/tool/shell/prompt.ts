@@ -12,17 +12,34 @@ export type Limits = {
   maxBytes: number
 }
 
-export function parameterSchema() {
-  return Schema.Struct({
+const BackgroundDescription =
+  "Start the command in the background immediately and return a task id. Use it for servers, watchers, and anything you do not need the result of right now. A foreground command that runs long enough moves to the background on its own."
+
+export function parameterSchema(options?: { background?: boolean }) {
+  const base = {
     command: Schema.String.annotate({ description: "The command to execute" }),
     timeout: Schema.optional(PositiveInt).annotate({ description: "Optional timeout in milliseconds" }),
     workdir: Schema.optional(Schema.String).annotate({
       description: `The working directory to run the command in. Defaults to the current directory. Use this instead of 'cd' commands.`,
     }),
+  }
+  if (!options?.background) {
+    // The model never sees `background` when background tasks are disabled, but
+    // the static shape stays the same for callers of this tool.
+    return Schema.Struct(base) as unknown as Schema.Struct<{
+      command: typeof base.command
+      timeout: typeof base.timeout
+      workdir: typeof base.workdir
+      background: Schema.optional<typeof Schema.Boolean>
+    }>
+  }
+  return Schema.Struct({
+    ...base,
+    background: Schema.optional(Schema.Boolean).annotate({ description: BackgroundDescription }),
   })
 }
 
-export const Parameters = parameterSchema()
+export const Parameters = parameterSchema({ background: true })
 export type Parameters = Schema.Schema.Type<typeof Parameters>
 
 function renderPrompt(template: string, values: Record<string, string>) {
@@ -270,9 +287,30 @@ function profile(name: string, platform: NodeJS.Platform, limits: Limits, defaul
   }
 }
 
-export function render(name: string, platform: NodeJS.Platform, limits: Limits, defaultTimeoutMs: number) {
+function backgroundSection(input: { yieldAfterMs: number; maxLifetimeMs: number }) {
+  const seconds = Math.round(input.yieldAfterMs / 1000)
+  const minutes = Math.round(input.maxLifetimeMs / 60000)
+  return [
+    "",
+    "# Long commands",
+    `- A command that is still running after ${seconds}s is NOT killed. The same process keeps running as a background task and you get a task id back with the output so far. Never rerun a command that yielded a task id.`,
+    "- You are told automatically when a background task finishes, with its exit code and output tail. Do not sit in a polling loop waiting for it; do other useful work instead.",
+    "- Read new output with `shell_output` (omit task_id to list this session's tasks) and stop a task with `shell_stop`.",
+    "- Use `background: true` for servers and watchers you want running while you keep working.",
+    `- A background task is terminated after ${minutes} minutes, or earlier by an explicit timeout, by shell_stop, or when its session sits idle with nobody reading it.`,
+    "- Do not raise `timeout` to keep a long command in the foreground; let it yield.",
+  ].join("\n")
+}
+
+export function render(
+  name: string,
+  platform: NodeJS.Platform,
+  limits: Limits,
+  defaultTimeoutMs: number,
+  background?: { yieldAfterMs: number; maxLifetimeMs: number },
+) {
   const selected = profile(name, platform, limits, defaultTimeoutMs)
-  return {
+  const base = {
     description: renderPrompt(DESCRIPTION, {
       intro: selected.intro,
       os: platform,
@@ -286,8 +324,10 @@ export function render(name: string, platform: NodeJS.Platform, limits: Limits, 
       createPrInstruction: selected.createPrInstruction,
       createPrExample: selected.createPrExample,
     }),
-    parameters: parameterSchema(),
+    parameters: parameterSchema({ background: background !== undefined }),
   }
+  if (!background) return base
+  return { ...base, description: base.description + "\n" + backgroundSection(background) }
 }
 
 export * as ShellPrompt from "./prompt"

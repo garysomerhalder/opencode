@@ -29,6 +29,28 @@ const CapabilitiesResponse = Schema.Struct({
   backgroundSubagents: Schema.Boolean,
 }).annotate({ identifier: "ExperimentalCapabilities" })
 
+const ShellTaskInfo = Schema.Struct({
+  id: Schema.String,
+  sessionID: SessionID,
+  command: Schema.String,
+  cwd: Schema.String,
+  status: Schema.Literals(["running", "exited", "stopped", "timed_out", "cancelled"]),
+  pid: Schema.optionalKey(NonNegativeInt),
+  exitCode: Schema.NullOr(Schema.Number),
+  startedAt: NonNegativeInt,
+  endedAt: Schema.optionalKey(NonNegativeInt),
+  bytes: NonNegativeInt,
+  file: Schema.optionalKey(Schema.String),
+  reason: Schema.optionalKey(Schema.String),
+}).annotate({ identifier: "ShellTask" })
+
+const ShellTaskList = Schema.Array(ShellTaskInfo).annotate({ identifier: "ShellTasks" })
+
+export const ShellTaskQuery = Schema.Struct({
+  ...WorkspaceRoutingQueryFields,
+  sessionID: Schema.optional(SessionID),
+})
+
 const ConsoleOrgOption = Schema.Struct({
   accountID: Schema.String,
   accountEmail: Schema.String,
@@ -98,6 +120,8 @@ export const ExperimentalPaths = {
   worktreeReset: "/experimental/worktree/reset",
   session: "/experimental/session",
   sessionBackground: "/experimental/session/:sessionID/background",
+  shellTasks: "/experimental/shell/task",
+  shellTasksStop: "/experimental/shell/task/stop",
   resource: "/experimental/resource",
 } as const
 
@@ -243,6 +267,28 @@ export const ExperimentalApi = HttpApi.make("experimental")
             summary: "Background subagents",
             description:
               "Detach any synchronous subagents currently blocking the session and continue them in the background.",
+          }),
+        ),
+        HttpApiEndpoint.get("shellTasks", ExperimentalPaths.shellTasks, {
+          query: ShellTaskQuery,
+          success: described(ShellTaskList, "Background shell tasks"),
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "experimental.shellTask.list",
+            summary: "List background shell tasks",
+            description:
+              "List the background shell tasks of this instance, or of one session when sessionID is given.",
+          }),
+        ),
+        HttpApiEndpoint.post("shellTasksStop", ExperimentalPaths.shellTasksStop, {
+          query: ShellTaskQuery,
+          success: described(ShellTaskList, "Stopped background shell tasks"),
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "experimental.shellTask.stopAll",
+            summary: "Stop background shell tasks",
+            description:
+              "Stop every running background shell task and kill its process tree, optionally limited to one session.",
           }),
         ),
         HttpApiEndpoint.get("resource", ExperimentalPaths.resource, {

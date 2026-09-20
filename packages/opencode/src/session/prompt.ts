@@ -162,6 +162,9 @@ const layer = Layer.effect(
         cancel: (sessionID: SessionID) => cancel(sessionID),
         resolvePromptParts: (template: string) => resolvePromptParts(template),
         prompt: (input: PromptInput) => prompt(input).pipe(Effect.catch(Effect.die)),
+        // Lets a tool make sure a synthetic message it appended is answered,
+        // even when it landed just as the running turn was finishing.
+        loop: (sessionID: SessionID) => loop({ sessionID }),
       } satisfies TaskPromptOps
     })
 
