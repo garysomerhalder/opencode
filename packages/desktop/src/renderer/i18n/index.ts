@@ -68,6 +68,7 @@ import { dict as desktopSr } from "./sr"
 import { dict as desktopTg } from "./tg"
 import { dict as desktopTk } from "./tk"
 import { dict as desktopUz } from "./uz"
+import { activeBrand, brandDictionary } from "@opencode-ai/app/brand"
 
 export type Locale = DesktopNativeLocale
 
@@ -184,7 +185,7 @@ const state = {
   init: undefined as Promise<Locale> | undefined,
 }
 
-state.dict = build(state.locale)
+state.dict = brandDictionary(build(state.locale), activeBrand())
 
 const translate = i18n.translator(() => state.dict, i18n.resolveTemplate)
 
@@ -202,7 +203,7 @@ export function initI18n(): Promise<Locale> {
     const next = pickLocale(value) ?? state.locale
 
     state.locale = next
-    state.dict = build(next)
+    state.dict = brandDictionary(build(next), activeBrand())
     return next
   })().catch(() => state.locale)
 

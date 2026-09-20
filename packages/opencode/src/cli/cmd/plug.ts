@@ -1,4 +1,5 @@
 import { intro, log, outro, spinner } from "@clack/prompts"
+import { CLI } from "@opencode-ai/core/brand"
 import { Effect } from "effect"
 import type { Argv } from "yargs"
 
@@ -268,7 +269,7 @@ export const PluginListCommand = effectCmd({
 
     if (!origins.length) {
       log.warn("No plugins configured")
-      outro("Add plugins with: opencode plugin add <module>")
+      outro(`Add plugins with: ${CLI} plugin add <module>`)
       return
     }
 

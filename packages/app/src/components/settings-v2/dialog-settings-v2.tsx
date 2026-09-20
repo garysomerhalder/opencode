@@ -1,4 +1,5 @@
-import { Component, createMemo, createSignal, startTransition } from "solid-js"
+import { Component, createMemo, createSignal, Show, startTransition } from "solid-js"
+import { activeBrand } from "@/brand"
 import { Dialog } from "@opencode-ai/ui/v2/dialog-v2"
 import { TabsV2 } from "@opencode-ai/ui/v2/tabs-v2"
 import { Icon } from "@opencode-ai/ui/icon"
@@ -100,6 +101,9 @@ export const DialogSettings: Component<{
             <div class="settings-v2-nav-footer">
               <span>{language.t("app.name.desktop")}</span>
               <span>v{platform.version}</span>
+              <Show when={activeBrand()}>
+                <span>{language.t("brand.credit")}</span>
+              </Show>
             </div>
           </div>
         </TabsV2.List>

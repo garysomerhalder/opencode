@@ -4,6 +4,7 @@ import { createEffect, onMount } from "solid-js"
 import { createStore } from "solid-js/store"
 import { makeEventListener } from "@solid-primitives/event-listener"
 import { createSimpleContext } from "../context/helper"
+import { activeUiBrand } from "../brand"
 import oc2ThemeJson from "./themes/oc-2.json"
 import { resolveThemeVariant, themeToCss } from "./resolve"
 import { resolveThemeVariantV2, themeV2ToCss } from "./v2/resolve"
@@ -44,7 +45,9 @@ function knownThemes() {
 }
 
 const names: Record<string, string> = {
-  "oc-2": "OC-2",
+  // "OC-2" is an OpenCode initialism, invisible to the brand-surface scan. Same treatment as
+  // `opencode` below: the label follows the brand, the persisted id does not.
+  "oc-2": activeUiBrand()?.upstreamThemeNameV2 ?? "OC-2",
   amoled: "AMOLED",
   aura: "Aura",
   ayu: "Ayu",
@@ -60,6 +63,7 @@ const names: Record<string, string> = {
   github: "GitHub",
   gruvbox: "Gruvbox",
   kanagawa: "Kanagawa",
+  legatus: "Legatus",
   "lucent-orng": "Lucent Orng",
   material: "Material",
   matrix: "Matrix",
@@ -69,7 +73,9 @@ const names: Record<string, string> = {
   nord: "Nord",
   "one-dark": "One Dark",
   onedarkpro: "One Dark Pro",
-  opencode: "OpenCode",
+  // Upstream's default palette. The theme id stays `opencode` (it is persisted and referenced by
+  // config), but the label in the theme picker is a product name, so it follows the brand switch.
+  opencode: activeUiBrand()?.upstreamThemeName ?? "OpenCode",
   orng: "Orng",
   "osaka-jade": "Osaka Jade",
   palenight: "Palenight",

@@ -1,4 +1,6 @@
 import { cmd } from "./cmd"
+import { PRODUCT } from "@opencode-ai/core/brand"
+import { USERNAME_DEFAULT } from "@/server/auth"
 import { UI } from "@/cli/ui"
 import { errorMessage } from "@opencode-ai/tui/util/error"
 import { validateSession } from "../tui/validate-session"
@@ -6,7 +8,7 @@ import { ServerAuth } from "@/server/auth"
 
 export const AttachCommand = cmd({
   command: "attach <url>",
-  describe: "attach to a running opencode server",
+  describe: `attach to a running ${PRODUCT} server`,
   builder: (yargs) =>
     yargs
       .positional("url", {
@@ -40,7 +42,7 @@ export const AttachCommand = cmd({
       .option("username", {
         alias: ["u"],
         type: "string",
-        describe: "basic auth username (defaults to OPENCODE_SERVER_USERNAME or 'opencode')",
+        describe: `basic auth username (defaults to OPENCODE_SERVER_USERNAME or '${USERNAME_DEFAULT}')`,
       })
       .option("mini", {
         type: "boolean",

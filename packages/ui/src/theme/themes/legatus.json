@@ -1,0 +1,70 @@
+{
+  "$schema": "https://opencode.ai/desktop-theme.json",
+  "name": "Legatus",
+  "id": "legatus",
+  "light": {
+    "palette": {
+      "neutral": "#F8FAFC",
+      "ink": "#0A0E14",
+      "primary": "#1c763f",
+      "accent": "#1c763f",
+      "success": "#1c763f",
+      "warning": "#c27e19",
+      "error": "#EF4444",
+      "info": "#3B82F6",
+      "interactive": "#1c763f",
+      "diffAdd": "#4ADE80",
+      "diffDelete": "#EF4444"
+    },
+    "overrides": {
+      "text-strong": "#0A0E14",
+      "text-base": "#1C242E",
+      "text-weak": "#64748B",
+      "syntax-comment": "#64748B",
+      "syntax-keyword": "#8B5CF6",
+      "syntax-string": "#1c763f",
+      "syntax-primitive": "#3B82F6",
+      "syntax-property": "#128da5",
+      "syntax-type": "#c27e19",
+      "syntax-constant": "#c27e19"
+    }
+  },
+  "dark": {
+    "palette": {
+      "neutral": "#0A0E14",
+      "ink": "#E2E8F0",
+      "primary": "#4ADE80",
+      "accent": "#4ADE80",
+      "success": "#4ADE80",
+      "warning": "#F59E0B",
+      "error": "#EF4444",
+      "info": "#3B82F6",
+      "interactive": "#4ADE80",
+      "diffAdd": "#4ADE80",
+      "diffDelete": "#EF4444"
+    },
+    "overrides": {
+      "background-base": "#0A0E14",
+      "background-weak": "#111827",
+      "text-strong": "#FFFFFF",
+      "text-base": "#E2E8F0",
+      "text-weak": "#94A3B8",
+      "text-weaker": "#64748B",
+      "syntax-comment": "#64748B",
+      "syntax-keyword": "#8B5CF6",
+      "syntax-string": "#4ADE80",
+      "syntax-primitive": "#3B82F6",
+      "syntax-property": "#06B6D4",
+      "syntax-type": "#F59E0B",
+      "syntax-constant": "#F59E0B"
+    },
+    "v2Overrides": {
+      "v2-background-bg-base": "#0A0E14",
+      "v2-background-bg-deep": "#0F1419",
+      "v2-background-bg-layer-01": "#111827",
+      "v2-background-bg-layer-02": "#1C242E",
+      "v2-text-text-accent": "#4ADE80",
+      "v2-border-border-focus": "#4ADE80"
+    }
+  }
+}

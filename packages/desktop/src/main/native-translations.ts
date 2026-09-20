@@ -5,8 +5,13 @@ import {
   type DesktopNativeBundle,
   type DesktopNativeKey,
 } from "@opencode-ai/app/i18n/desktop-native"
+import { activeBrand, brandDictionary } from "@opencode-ai/app/brand"
 
-let bundle: DesktopNativeBundle = { locale: "en", messages: { ...DESKTOP_NATIVE_ENGLISH } }
+// The renderer sends an already-branded bundle; this only covers menus/dialogs shown before it arrives.
+let bundle: DesktopNativeBundle = {
+  locale: "en",
+  messages: brandDictionary({ ...DESKTOP_NATIVE_ENGLISH }, activeBrand()),
+}
 
 export function setNativeTranslations(next: DesktopNativeBundle) {
   if (

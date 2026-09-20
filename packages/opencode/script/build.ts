@@ -196,6 +196,9 @@ for (const item of targets) {
       OTUI_TREE_SITTER_WORKER_PATH: bunfsRoot + treeSitterWorkerPath,
       OPENCODE_WORKER_PATH: workerPath,
       OPENCODE_CHANNEL: `'${Script.channel}'`,
+      // Brand layer (docs/legatus-brand.md). Default "legatus"; OPENCODE_BRAND=opencode builds
+      // upstream's presentation, unchanged. See packages/core/src/brand.ts.
+      OPENCODE_BRAND: `'${process.env.OPENCODE_BRAND ?? "legatus"}'`,
       OPENCODE_LIBC: item.os === "linux" ? `'${item.abi ?? "glibc"}'` : "",
       ...(item.os === "linux" ? { "process.env.OPENTUI_LIBC": JSON.stringify(item.abi ?? "glibc") } : {}),
     },

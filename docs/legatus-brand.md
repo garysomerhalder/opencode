@@ -1,0 +1,190 @@
+# Legatus brand layer (desktop)
+
+Branch `feat/legatus-brand`. The OpenCode desktop fork shows itself as **Legatus**.
+This changes the brand layer only. No internal identifier changes.
+
+## What does not change
+
+These stay as they are. Two agents' live sessions and the parity oracle depend on them:
+
+- package names (`@opencode-ai/*`), the `opencode` CLI/binary name
+- the Electron app id (`ai.opencode.desktop.dev` / `.beta` / `ai.opencode.desktop`) and the
+  `setAppUserModelId` value
+- the userData folder `%APPDATA%\ai.opencode.desktop.dev`. `src/main/index.ts` sets it
+  explicitly from the app id, not from the app name, so renaming the app does not move it.
+- `~/.config/opencode`, DB file names, `localStorage` keys (`opencode-theme-id`, ...), the server
+  API, and everything under `packages/opencode`
+- `electron-builder.config.ts` `productName` / `appId` / protocol. Changing `productName` changes
+  the NSIS install folder and the Start-menu entry of a packaged build. That is an identity
+  change, not a brand change, so the full-rename shadow build handles it (see `docs/legatus-shadow.md`).
+- `LICENSE` (MIT) stays. About shows a "Built on OpenCode" credit.
+
+## Switch
+
+One build-time switch, `OPENCODE_BRAND` (default `legatus`), is read in
+`packages/desktop/electron.vite.config.ts`. It is injected as `import.meta.env.VITE_OPENCODE_BRAND`
+into both the main and renderer bundles. `OPENCODE_BRAND=opencode bun dev` turns the whole layer
+off without reverting code. Code outside the desktop build (the web app, tests, the server) never
+sees the define, so it keeps the upstream brand.
+
+## File by file
+
+How each place was found: `grep -rn "OpenCode"` over `packages/desktop/src`,
+`packages/app/src` and `packages/ui/src` (i18n dictionaries separately), plus
+`grep "getName|getPath(|setName"` in `src/main` to show that no path comes from the app name.
+
+| File | Change | Found by |
+|---|---|---|
+| `packages/app/src/brand.ts` (new) | The single source of truth: `LEGATUS` constants (product name, app names per channel, default theme id, upstream credit) and `activeBrand()`. `brandDictionary(dict, brand)` rewrites the "OpenCode" **product** mentions in a fixed allow-list of i18n keys (all locales) and adds `brand.credit`. | new |
+| `packages/app/src/brand.test.ts` (new) | Tests first: allow-listed keys are rebranded in `en` and in a non-Latin locale, excluded keys (the OpenCode server/CLI, OpenCode Zen/Go, docs, the MCP limitation, WSL install of the `opencode` CLI) are untouched, the function is idempotent, and it does nothing when no brand is active. | new |
+| `packages/app/package.json` | Adds the export `"./brand"` so the main process can import it. | exports map |
+| `packages/app/src/context/language.tsx` | Passes `base` and each merged locale through `brandDictionary`. Two call sites. | dict loader |
+| `packages/app/src/app.tsx` | `ThemeProvider defaultTheme={activeBrand()?.defaultTheme}`. Legatus is the default when no theme was picked. | `ThemeProvider` usage |
+| `packages/app/src/context/settings.tsx` | The sans/mono fallback stacks start with `var(--brand-font-sans, …)` / `var(--brand-font-mono, …)`. These are only defined while the Legatus theme is active. A font the user picks still wins. | `--font-family-sans` setter |
+| `packages/app/src/components/dialog-settings.tsx`, `settings-v2/dialog-settings-v2.tsx` | Settings footer (the About area on Windows): shows `brand.credit` ("Built on OpenCode") under the version when a brand is active. | `app.name.desktop` usages |
+| `packages/app/src/env.d.ts`, `packages/desktop/src/main/env.d.ts` | Types `VITE_OPENCODE_BRAND`. | |
+| `packages/ui/src/theme/brand/legatus-tokens.ts` (new) | A snapshot of Brand API v1.0.0 color tokens (`/api/brand.css`, fetched 2026-09-19). | Brand API |
+| `packages/ui/src/theme/brand/legatus.ts` (new) + `legatus.test.ts` | `legatusTheme(tokens)` maps tokens to a `DesktopTheme`. Tests: navy `#0A0E14` background, green `#4ADE80` primary/accent, no brand red in the theme, it resolves through `resolveThemeVariant` for v1 and v2, and the committed JSON equals the function output. | theme system read first |
+| `packages/ui/src/theme/themes/legatus.json` (new) | Generated output. The `import.meta.glob("./themes/*.json")` registry picks it up with no registry edit. | `context.tsx` glob |
+| `packages/ui/src/theme/context.tsx`, `default-themes.ts` | Add the display name "Legatus" and a `legatusTheme` export (one line each, same pattern as the other themes). | name map |
+| `packages/desktop/electron.vite.config.ts` | The brand define (main and renderer), and renderer aliases `@opencode-ai/ui/logo` → `src/renderer/brand/logo.tsx` and `@opencode-ai/ui/v2/wordmark-v2` → `src/renderer/brand/wordmark-v2.tsx`. Both upstream files are untouched. | Vite config |
+| `packages/desktop/src/renderer/brand/wordmark-v2.tsx` (new) | The new-session hero. Upstream draws the word `opencode` in letterform paths, which no string switch can reach — the first pass of this brand layer left it in place, so the window said Legatus while the first screen said opencode. Draws the official Legatus lockup (Brand API `logo-full-white-svg`) with upstream's watermark treatment unchanged. | brand surface gate |
+| `packages/app/src/brand-surface.ts`, `brand-surface.test.ts` (new) | The gate. See "The surface gate" below. | — |
+| `packages/app/src/brand-icon.ts` (new) | The Legatus mark as a data URI, for OS notifications. Upstream points those at `https://opencode.ai/favicon-96x96-v3.png`, which shows the upstream mark *and* fetches it from upstream on every notification. | gate, source pass |
+| `packages/app/src/components/windows-app-menu.tsx` | The Windows app-menu heading was the hard-coded JSX text `OpenCode`. Now `activeBrand()?.productName`. | gate, markup text |
+| `packages/app/src/entry.tsx`, `packages/desktop/src/renderer/index.tsx` | OS notification icon follows the brand. | gate, source pass |
+| `packages/desktop/src/main/logging.ts` | "Export logs" wrote `opencode-debug-<stamp>.zip` into the user's Downloads folder. Now uses `brand.filePrefix`. | gate, source pass |
+| `packages/ui/src/brand.ts`, `env.d.ts` (new) | Minimal brand switch for `packages/ui`, which cannot import the app's (app depends on ui). The gate asserts the two agree, so the copy cannot drift. | — |
+| `packages/ui/src/components/favicon.tsx` | `apple-mobile-web-app-title` (the iOS home-screen name) follows the brand. | gate, source pass |
+| `packages/ui/src/theme/context.tsx` | The theme picker listed upstream's default palette as "OpenCode". With the brand on it reads "Classic"; the theme **id** stays `opencode` because it is persisted and referenced by config. | gate, source pass |
+| `packages/desktop/src/renderer/brand/logo.tsx` (new) | `Mark`, `Splash` and `Logo`, with the same exports and props as `@opencode-ai/ui/logo`, drawn from the official icon mark (Brand API `logo-icon-svg`) and the flat horizontal lockup. The fill follows the theme icon colors, which gives the official white or black mono variants. This covers the loading splash, the connection-error splash, the session-empty mark, the error page and the legacy home wordmark. | `grep "@opencode-ai/ui/logo"` |
+| `packages/desktop/src/renderer/fonts/*` (new) | Space Grotesk (variable 300–700) and Space Mono 400/700, woff2, latin subset, with `OFL.txt`. They are bundled by Vite; nothing is loaded from a CDN at runtime. | |
+| `packages/desktop/src/renderer/styles.css` | `@font-face` rules and, under `:root[data-theme="legatus"]`, the `--brand-font-*` and `--v2-font-family-sans` variables. The rule is unlayered, so it beats the `@layer theme` defaults. | empty file, already imported |
+| `packages/desktop/src/renderer/index.html` | `<title>Legatus</title>` (Electron uses it as the window title). | grep |
+| `packages/desktop/src/main/index.ts` | `APP_NAMES` and the dev `app.setName` value come from `LEGATUS.appNames`. `app.setAboutPanelOptions` sets the name, version and credit (macOS/Linux About). `APP_IDS` and `userData` are unchanged. | grep |
+| `packages/desktop/src/main/windows.ts` | `BrowserWindow` `title` = the brand product name. | grep |
+| `packages/desktop/src/main/native-translations.ts` | The initial English native bundle (menus and recovery dialogs, before the renderer sends its bundle) goes through `brandDictionary`. | `DESKTOP_NATIVE_ENGLISH` |
+| `packages/desktop/src/renderer/i18n/index.ts` | The desktop-renderer dictionary (updater dialogs) goes through `brandDictionary`. | grep |
+| `packages/desktop/icons/legatus/*` (new) + `scripts/copy-icons.ts` | App icons generated from the official icon SVG: the white mark on `#0A0E14` with padding, per the Brand API social/favicon spec. Sizes 16–1024 as PNG, `icon.ico` (16/24/32/48/64/128/256), `icon.icns`, and the same file names as `icons/dev`. `copy-icons` uses `icons/legatus` when the brand is active; `icons/{dev,beta,prod}` are untouched. | `predev.ts` → `copy-icons.ts` |
+| `packages/desktop/scripts/legatus-icons.ts` + `legatus-icons-lib.ts` + test (new) | Rebuilds the icon set from the SVG. The ICO/ICNS containers are written by the lib, which is tested. `@resvg/resvg-js` is installed on demand outside the repo (`RESVG_MODULE=…`), not added as a dependency. | |
+| `packages/ui/script/build-legatus-theme.ts` (new) | Regenerates `themes/legatus.json` from the token snapshot. | |
+| `packages/desktop/src/renderer/brand/svg.ts` + `svg.test.ts` (new) | SVG → `{viewBox, inner}` with `currentColor`. The test checks that the flat icon is the official mark shifted by −306 on x, and that `logo.tsx` keeps the same exports as the upstream logo module. | |
+
+As-built notes:
+- The credit string lives in `LEGATUS.messages` (added by `brandDictionary`), not in `en.ts`. The
+  i18n parity test requires every English key in all 60 locales, and a brand-only key should not
+  touch 60 upstream files. Every locale falls back to the English credit.
+- `index.html` `<title>` is fixed at "Legatus". It does not follow `OPENCODE_BRAND` (a static file).
+- The first frame of a cold start still uses the oc-2 background from `oc-theme-preload.js`
+  (#080808 against #0A0E14). The Legatus theme applies once the ThemeProvider mounts, and the
+  theme is not written to `opencode-theme-id` until the user picks one.
+
+Kept on purpose, with "OpenCode" left as is: "OpenCode server" (the server really is opencode),
+WSL "Install/Update OpenCode" (installs the `opencode` CLI), "OpenCode Zen/Go" (upstream paid
+services), "OpenCode Documentation" (links to upstream docs), "report this error to the OpenCode
+team", and the "OpenCode does not support MCP authentication" note (server behavior), and the `opencode` theme's name.
+
+## Hot reload vs restart (after this is merged into the live `dev` checkout)
+
+- **Hot-reloads (renderer, Vite HMR / reload):** i18n branding, the theme JSON, the settings
+  footer credit, the fonts and styles, and the logo component once the alias exists.
+- **Needs a `bun dev` restart (the Vite config is read at startup):** `electron.vite.config.ts`
+  (the brand define and the logo alias). Until that restart, `VITE_OPENCODE_BRAND` is undefined,
+  so the renderer keeps the OpenCode brand. That is safe.
+- **Needs a main-process restart:** `index.ts` (app name, About panel), `windows.ts` (window title
+  for new windows), `native-translations.ts`. electron-vite restarts Electron on main-bundle
+  changes, which drops the window and interrupts the agents. Do this between agent runs.
+- **Needs `predev` (runs at `bun dev` start):** icons, because `copy-icons` fills `resources/icons`.
+- The theme default applies only where no theme was ever picked (`opencode-theme-id` is unset in
+  that profile's localStorage). If a theme was picked before, choose "Legatus" in Settings → Appearance.
+
+## The surface gate
+
+The acceptance bar is that a user driving the Legatus build never meets the string "OpenCode" or
+the opencode mark anywhere in the product. That is not something a review can hold — the first
+version of this layer got the window title right and left the word `opencode` drawn across the
+whole new-session screen — so it is a test: `packages/app/src/brand-surface.test.ts`, over
+`packages/app/src/brand-surface.ts`.
+
+It has two passes and an allow-list.
+
+1. **Dictionaries.** Every key of every locale of every shipped dictionary (app, ui, desktop
+   renderer, desktop native), after `brandDictionary(dict, LEGATUS)`. **Every locale, not just
+   English**: translators put the product name where English does not. That pass is the only
+   reason `home.providerTip` (German only) and `settings.updates.toast.latest.title` (four
+   locales) were found at all.
+2. **Source literals and markup text.** Every string literal *and* every JSX/HTML text node in
+   `packages/{app,ui,desktop}/src`, plus `index.html`. Markup text matters as much as literals:
+   the hard-coded `OpenCode` in the Windows app menu was a JSX text node, and a literals-only
+   scan walks straight past it.
+
+Whole categories are excluded **structurally**, each with its reason in the module header: import
+and export specifiers, comment lines, lines that read the brand switch (their upstream literal is
+the switch-*off* value and must stay), the i18n directories (pass 1 covers them properly), tests,
+Storybook stories, and the brand layer's own two files.
+
+Everything else that survives has to be in `ALLOWLIST` with a reason, or the gate fails. Entries
+are grouped so a reviewer reads ~15 reasons rather than 140 lines, and three meta-tests keep the
+list honest: every entry carries a reason, no entry is duplicated, and **no entry is stale** — an
+allowance that no longer matches anything fails the build.
+
+### The CLI and the TUI
+
+They are a product surface too, and they are reachable without ever leaving the desktop app,
+because it embeds a terminal: a user who has never opened a shell can still be told to run
+`opencode auth login`.
+
+They cannot use `packages/app/src/brand.ts` — they are bundled by Bun, not Vite, and
+`packages/opencode` deliberately does not depend on `packages/app`. So the switch is expressed with
+the seam those builds already use, a bare global that `script/build.ts` and `script/build-node.ts`
+define, with an env fallback for `bun dev`: `packages/core/src/brand.ts`.
+
+Two naming axes, and the difference matters:
+
+| | | |
+|---|---|---|
+| `PRODUCT` / `SHORT` | the product's name and its two-letter form | brand layer — becomes "Legatus" / "LG" |
+| `CLI` | the name the binary is invoked by, for commands the user is told to type | **not** a brand value. The brand layer never renames binaries; the shadow rename owns it (R14). Keeping every printed command on one constant is what makes the two agree — rename the binary and every hint follows, and in a tree where the binary really is `opencode`, the hints still tell the truth. |
+
+So `run Legatus with a message` (product) but `` Run `opencode auth login` `` (binary, whatever it
+is in this tree).
+
+Three copies of the brand identity now exist — `packages/app`, `packages/ui`, `packages/core` —
+because no package is a dependency of all three (app depends on ui and core; ui depends on
+neither; core depends on nothing). They are pinned to each other by `brand-surface.test.ts`.
+
+### What the gate cannot see
+
+- **Artwork.** A wordmark is letterform paths or half-block glyphs; no regex reads it. There are
+  five: the desktop hero, the TUI home screen, the CLI's TTY logo, the CLI's piped banner and the
+  session epilogue — plus the splash badge, which is a single letter and so is art *and* an
+  initialism. The desktop one is swapped as a module by `electron.vite.config.ts`; the four
+  terminal ones now all come from `packages/tui/src/logo.ts`, which reads the brand. (One of them
+  was an inline copy in `util/presentation.ts`, quietly still spelling "opencode".) The test
+  asserts the aliases exist, that the art module is brand-switched, that nobody re-inlines a
+  copy, and that upstream's glyphs are still there for the brand-off build.
+- **Initialisms.** "OC" is OpenCode, and `/opencode/i` cannot see it. The terminal title
+  (`OC | <session>`) and the `oc-2` theme label had to be found by reading, not scanning, and are
+  listed in the brand rather than discovered by it.
+- **Text fetched at runtime.** The "what's new" highlights come from upstream's
+  `changelog.json`. They are upstream's own release notes, so they name upstream, and nothing in
+  this repo can rewrite them.
+
+## Keeping it mergeable with upstream
+
+- The logic lives in 3 new modules (`app/src/brand.ts`, `ui/src/theme/brand/*`,
+  `desktop/src/renderer/brand/logo.tsx`) and new asset folders. Upstream files get only 1–3
+  line hooks, all of which call into those modules.
+- No upstream English string, i18n key, logo file or icon file is edited. The rebrand is a
+  transform over the dictionaries, so upstream copy changes merge cleanly. A new upstream key
+  that says "OpenCode" stays "OpenCode" until someone adds it to the allow-list. That is the safe
+  failure: it shows the old name and never mislabels the server.
+- The theme is a new JSON file plus one name line, the same shape as the other 37 themes.
+
+## Rollback
+
+- Runtime: build with `OPENCODE_BRAND=opencode` → upstream brand, no code change.
+- Code: `git revert` the implementation commit(s) on this branch, or don't merge it. No data
+  migration exists to undo, because no path, id, key or file name changed. The only persistent
+  side effect is a `localStorage` theme cache (`opencode-theme-css-*`) for the Legatus theme,
+  which is ignored once another theme is picked.

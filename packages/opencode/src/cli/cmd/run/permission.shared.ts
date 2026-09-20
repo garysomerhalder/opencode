@@ -14,6 +14,7 @@
 // permissionInfo() extracts display info (icon, title, lines, diff) from
 // the request, delegating to tool.ts for tool-specific formatting.
 import type { PermissionRequest } from "@opencode-ai/sdk/v2"
+import { PRODUCT } from "@opencode-ai/core/brand"
 import type { PermissionReply } from "./types"
 import { toolPath, toolPermissionInfo } from "./tool"
 
@@ -125,11 +126,11 @@ export function permissionInfo(request: PermissionRequest): PermissionInfo {
 
 export function permissionAlwaysLines(request: PermissionRequest): string[] {
   if (request.always.length === 1 && request.always[0] === "*") {
-    return [`This will allow ${request.permission} until OpenCode is restarted.`]
+    return [`This will allow ${request.permission} until ${PRODUCT} is restarted.`]
   }
 
   return [
-    "This will allow the following patterns until OpenCode is restarted.",
+    `This will allow the following patterns until ${PRODUCT} is restarted.`,
     ...request.always.map((item) => `- ${item}`),
   ]
 }

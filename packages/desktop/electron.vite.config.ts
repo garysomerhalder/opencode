@@ -2,6 +2,7 @@ import { sentryVitePlugin } from "@sentry/vite-plugin"
 import { defineConfig } from "electron-vite"
 import appPlugin from "@opencode-ai/app/vite"
 import * as fs from "node:fs/promises"
+import { fileURLToPath } from "node:url"
 
 const OPENCODE_SERVER_DIST = "../opencode/dist/node"
 
@@ -12,7 +13,22 @@ const channel = (() => {
   return "dev"
 })()
 
-const nodePtyPkg = `@lydell/node-pty-${process.platform}-${process.arch}`
+// Brand layer switch (docs/legatus-brand.md). Default "legatus"; OPENCODE_BRAND=opencode restores
+// the upstream brand without code changes. Brand only: ids, paths and names are unaffected.
+const brand = process.env.OPENCODE_BRAND ?? "legatus"
+const brandDefine = { "import.meta.env.VITE_OPENCODE_BRAND": JSON.stringify(brand) }
+const brandModule = (name: string) => fileURLToPath(new URL(`./src/renderer/brand/${name}`, import.meta.url))
+const brandAlias =
+  brand === "legatus"
+    ? {
+        "@opencode-ai/ui/logo": brandModule("logo.tsx"),
+        // The new-session hero. Upstream's is letterform paths spelling the product name, so it
+        // has to be swapped as a module; there is no string to rebrand.
+        "@opencode-ai/ui/v2/wordmark-v2": brandModule("wordmark-v2.tsx"),
+      }
+    : undefined
+
+const nodePtyPkg =`@lydell/node-pty-${process.platform}-${process.arch}`
 
 const sentry =
   process.env.SENTRY_AUTH_TOKEN && process.env.SENTRY_ORG && process.env.SENTRY_PROJECT
@@ -35,6 +51,7 @@ export default defineConfig({
   main: {
     define: {
       "import.meta.env.OPENCODE_CHANNEL": JSON.stringify(channel),
+      ...brandDefine,
     },
     build: {
       rollupOptions: {
@@ -92,6 +109,8 @@ const require = __cjs_mod__.createRequire(import.meta.url);
   },
   renderer: {
     plugins: [appPlugin, sentry],
+    define: brandDefine,
+    resolve: { alias: brandAlias },
     publicDir: "../../../app/public",
     root: "src/renderer",
     build: {

@@ -23,6 +23,9 @@ await Bun.build({
     OPENCODE_MODELS_DEV: generated.modelsData,
     OPENCODE_VERSION: `'${Script.version}'`,
     OPENCODE_CHANNEL: `'${Script.channel}'`,
+    // Brand layer (docs/legatus-brand.md). Default "legatus"; OPENCODE_BRAND=opencode builds
+    // upstream's presentation, unchanged. See packages/core/src/brand.ts.
+    OPENCODE_BRAND: `'${process.env.OPENCODE_BRAND ?? "legatus"}'`,
   },
   files: {
     "opencode-web-ui.gen.ts": "",
