@@ -233,10 +233,11 @@ export const TaskTool = Tool.define(
       ) {
         const currentParent = yield* sessions.get(ctx.sessionID)
         yield* SessionWake.deliver({
+          sessions,
           ops,
           sessionID: ctx.sessionID,
-          agent: currentParent.agent ?? ctx.agent,
-          ...(variant ? { variant } : {}),
+          kind: "subagent_result",
+          label: state === "completed" ? "background subagent finished" : "background subagent failed",
           text: renderOutput({
             sessionID: nextSession.id,
             state,

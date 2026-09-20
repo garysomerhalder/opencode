@@ -46,6 +46,9 @@ import { SystemPrompt } from "../../src/session/system"
 import { Shell } from "@opencode-ai/core/shell"
 import { Snapshot } from "../../src/snapshot"
 import { ToolRegistry } from "@/tool/registry"
+import { ShellTasks } from "@/tool/shell/tasks"
+import { HarnessNote } from "@/session/harness-note"
+import { ChildProcess } from "effect/unstable/process"
 import { Truncate } from "@/tool/truncate"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { Ripgrep } from "@opencode-ai/core/ripgrep"
@@ -207,6 +210,7 @@ const promptRoot = LayerNode.group([
   SystemPrompt.node,
   CrossSpawnSpawner.node,
   RuntimeFlags.node,
+  ShellTasks.node,
 ])
 
 function makePrompt(input?: { mcpInstructions?: MCP.ServerInstructions[]; processor?: "blocking" }) {
@@ -2509,4 +2513,87 @@ noLLMServer.instance(
       }
     }),
   30_000,
+)
+
+
+// The background-task wake against the real prompt ops rather than a stub: the
+// note is persisted, the real session loop answers it, and the model sees it as
+// user-role content. The registry-level tests in test/tool/shell-tasks.test.ts
+// prove which branch the registry takes; this one proves the delivery.
+it.instance(
+  "a finished background shell task wakes the session through the real prompt ops",
+  () =>
+    Effect.gen(function* () {
+      const { dir, llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const tasks = yield* ShellTasks.Service
+      const chat = yield* sessions.create({
+        title: "background wake",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+
+      yield* llm.text("starting the build")
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        parts: [{ type: "text", text: "run the build" }],
+      })
+      const before = yield* sessions.get(chat.id)
+
+      // The reply the woken turn will produce.
+      yield* llm.text("the build finished")
+
+      const handle = yield* tasks.start({
+        command: ChildProcess.make(process.execPath, ["-e", "require('fs').writeSync(1, 'BUILD OK')"], {
+          cwd: dir,
+          stdin: "ignore",
+        }),
+        display: "build",
+        cwd: dir,
+        sessionID: chat.id,
+        messageID: MessageID.ascending(),
+        limits: { maxLines: 2000, maxBytes: 50 * 1024 },
+        settings: { ...ShellTasks.DEFAULTS, enabled: true, yieldAfterMs: 50, sweepMs: 5_000 },
+      })
+      yield* handle.promote({ wake: { loop: (id) => prompt.loop({ sessionID: id }) } })
+      yield* handle.awaitExit
+
+      const woken = yield* pollWithTimeout(
+        Effect.gen(function* () {
+          const messages = yield* sessions.messages({ sessionID: chat.id })
+          const note = messages.find((message) => HarnessNote.isNote(message))
+          if (!note) return undefined
+          const reply = messages.find(
+            (message) =>
+              message.info.role === "assistant" &&
+              message.info.parentID === note.info.id &&
+              message.parts.some((part) => part.type === "text" && part.text.length > 0),
+          )
+          return reply ? { note, reply, messages } : undefined
+        }),
+        "the finished background task never woke the session",
+        "30 seconds",
+      )
+
+      // It travels as a reminder part, so nothing that reads the user's own
+      // text can mistake it for something the user said.
+      expect(HarnessNote.kind(woken.note.parts)).toBe("background_shell")
+      expect(woken.note.parts.every((part) => part.type === "reminder")).toBe(true)
+      expect(HarnessNote.lastRealUser(woken.messages)?.info.id).not.toBe(woken.note.info.id)
+
+      // The real loop answered it, and the model was given the note's text.
+      expect(
+        woken.reply.parts.some((part) => part.type === "text" && part.text.includes("the build finished")),
+      ).toBe(true)
+      const last = (yield* llm.hits).at(-1)
+      expect(JSON.stringify(last?.body)).toContain("background-shell-finished")
+      expect(JSON.stringify(last?.body)).toContain("BUILD OK")
+
+      // Waking a session moves neither its agent nor its model.
+      const after = yield* sessions.get(chat.id)
+      expect(after.agent).toBe(before.agent)
+      expect(after.model).toEqual(before.model)
+    }),
+  60_000,
 )

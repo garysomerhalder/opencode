@@ -9,12 +9,17 @@ import { ShellOutputTool, ShellStopTool } from "../../src/tool/shell/tools"
 import { testInstanceStoreLayer } from "../fixture/fixture"
 import { Agent } from "../../src/agent/agent"
 import { Truncate } from "@/tool/truncate"
-import { SessionID, MessageID } from "../../src/session/schema"
+import { SessionID, MessageID, PartID } from "../../src/session/schema"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { SessionStatus } from "@/session/status"
+import { Session } from "@/session/session"
+import { SessionProjector } from "@opencode-ai/core/session/projector"
+import { HarnessNote } from "@/session/harness-note"
+import { ModelV2 } from "@opencode-ai/core/model"
+import { ProviderV2 } from "@opencode-ai/core/provider"
 import { Plugin } from "../../src/plugin"
 import { testEffect } from "../lib/effect"
 import { Tool } from "@/tool/tool"
@@ -33,6 +38,8 @@ const layer = Layer.mergeAll(
       RuntimeFlags.node,
       EventV2Bridge.node,
       SessionStatus.node,
+      Session.node,
+      SessionProjector.node,
       ShellTasks.node,
     ]),
   ),
@@ -42,28 +49,68 @@ const it = testEffect(layer)
 
 const sessionID = SessionID.make("ses_bg")
 
-const wakes = () => {
-  const prompts: string[] = []
+/**
+ * Stubs only the session loop. The note is written through the real Session
+ * service, so the assertions below read what was persisted.
+ */
+const wakes = (sessions: Session.Interface) => {
+  const loops: string[] = []
   const ops: WakeOps = {
-    prompt: (input) =>
-      Effect.sync(() => {
-        prompts.push(input.parts.map((part) => part.text).join(""))
-        return { info: { id: "msg_wake", role: "user" }, parts: [] } as unknown as SessionV1.WithParts
+    loop: (id) =>
+      Effect.gen(function* () {
+        loops.push(id)
+        const messages = yield* sessions
+          .messages({ sessionID: SessionID.make(id) })
+          .pipe(Effect.catchCause(() => Effect.succeed([])))
+        const newest = messages.filter((message) => HarnessNote.isNote(message)).at(-1)
+        return {
+          info: { id: "msg_reply", role: "assistant", parentID: newest?.info.id },
+          parts: [],
+        } as unknown as SessionV1.WithParts
       }),
-    loop: () =>
-      Effect.sync(
-        () =>
-          ({
-            info: { id: "msg_reply", role: "assistant", parentID: "msg_wake" },
-            parts: [],
-          }) as unknown as SessionV1.WithParts,
-      ),
   }
-  return { prompts, ops }
+  return { loops, ops }
 }
 
-const context = (input: { abort?: AbortSignal; ops?: WakeOps } = {}): Tool.Context => ({
-  sessionID,
+/** The text of every harness note in a session, newest last. */
+const noteTexts = (sessionID: SessionID) =>
+  Effect.gen(function* () {
+    const sessions = yield* Session.Service
+    const messages = yield* sessions.messages({ sessionID }).pipe(Effect.catchCause(() => Effect.succeed([])))
+    return messages
+      .filter((message) => HarnessNote.isNote(message))
+      .map((message) =>
+        message.parts.map((part) => (part.type === "reminder" ? part.text : "")).join(""),
+      )
+  })
+
+/** A session with one real user message, which is what a note copies. */
+const seedSession = () =>
+  Effect.gen(function* () {
+    const sessions = yield* Session.Service
+    const session = yield* sessions.create({ title: "background shell", agent: "build" })
+    const user: SessionV1.User = {
+      id: MessageID.ascending(),
+      role: "user",
+      sessionID: session.id,
+      time: { created: Date.now() },
+      agent: "build",
+      model: { providerID: ProviderV2.ID.make("some-provider"), modelID: ModelV2.ID.make("some-model") },
+    }
+    yield* sessions.updateMessage(user)
+    yield* sessions.updatePart({
+      id: PartID.ascending(),
+      messageID: user.id,
+      sessionID: session.id,
+      type: "text",
+      text: "run it",
+      time: { start: Date.now(), end: Date.now() },
+    })
+    return session
+  })
+
+const context = (input: { abort?: AbortSignal; ops?: WakeOps; sessionID?: SessionID } = {}): Tool.Context => ({
+  sessionID: input.sessionID ?? sessionID,
   messageID: MessageID.make("msg_bg"),
   callID: "call_bg",
   agent: "build",
@@ -141,14 +188,16 @@ it.instance(
   () =>
     cleanly(
       Effect.gen(function* () {
-        const wake = wakes()
+        const sessions = yield* Session.Service
+        const session = yield* seedSession()
+        const wake = wakes(sessions)
         const tasks = yield* ShellTasks.Service
         const tool = yield* shell()
         const result = yield* tool.execute(
           {
             command: say(["early"], { later: ["late"], delayMs: 3000 }),
           },
-          context({ ops: wake.ops }),
+          context({ ops: wake.ops, sessionID: session.id }),
         )
 
         expect(result.output).toContain("<shell_background")
@@ -158,25 +207,27 @@ it.instance(
         const id = taskId(result.output)
         expect(id).toBeTruthy()
 
-        const started = yield* tasks.get(sessionID, id!)
+        const started = yield* tasks.get(session.id, id!)
         expect(started?.status).toBe("running")
         expect(alive(started!.pid!)).toBe(true)
 
         // No reads: the agent is meant to be told on its own that this finished.
-        const exited = yield* waitForStatus(id!, "exited")
+        const exited = yield* waitForStatus(id!, "exited", 30_000, session.id)
         expect(exited?.exitCode).toBe(0)
         // The same process produced the rest of its output: it was not restarted.
         expect(exited?.pid).toBe(started?.pid)
 
         yield* Effect.sleep("1500 millis")
-        expect(wake.prompts.length).toBe(1)
-        expect(wake.prompts[0]).toContain("<background-shell-finished>")
-        expect(wake.prompts[0]).toContain('exit_code="0"')
-        expect(wake.prompts[0]).toContain("early")
-        expect(wake.prompts[0]).toContain("late")
+        const written = yield* noteTexts(session.id)
+        expect(written.length).toBe(1)
+        expect(written[0]).toContain("<background-shell-finished>")
+        expect(written[0]).toContain('exit_code="0"')
+        expect(written[0]).toContain("early")
+        expect(written[0]).toContain("late")
+        expect(wake.loops).toEqual([session.id])
 
         const reader = yield* output()
-        const full = yield* reader.execute({ task_id: id!, since: 0 }, context())
+        const full = yield* reader.execute({ task_id: id!, since: 0 }, context({ sessionID: session.id }))
         expect(full.output).toContain("early")
         expect(full.output).toContain("late")
         expect(full.output).toContain("status=exited")
@@ -186,16 +237,16 @@ it.instance(
   90_000,
 )
 
-const waitForStatus = (id: string, status: ShellTasks.Status, timeoutMs = 30_000) =>
+const waitForStatus = (id: string, status: ShellTasks.Status, timeoutMs = 30_000, owner = sessionID) =>
   Effect.gen(function* () {
     const tasks = yield* ShellTasks.Service
     const deadline = Date.now() + timeoutMs
     while (Date.now() < deadline) {
-      const info = yield* tasks.get(sessionID, id)
+      const info = yield* tasks.get(owner, id)
       if (info?.status === status) return info
       yield* Effect.sleep("50 millis")
     }
-    return yield* tasks.get(sessionID, id)
+    return yield* tasks.get(owner, id)
   })
 
 it.instance(
@@ -203,20 +254,23 @@ it.instance(
   () =>
     cleanly(
       Effect.gen(function* () {
-        const wake = wakes()
+        const sessions = yield* Session.Service
+        const session = yield* seedSession()
+        const wake = wakes(sessions)
         const tool = yield* shell()
         const reader = yield* output()
         const result = yield* tool.execute(
           { command: say(["quick"], { holdMs: 2500 }), background: true },
-          context({ ops: wake.ops }),
+          context({ ops: wake.ops, sessionID: session.id }),
         )
         const id = taskId(result.output)!
-        const finished = yield* reader.execute({ task_id: id, since: 0, wait_ms: 20_000 }, context())
+        const owner = context({ sessionID: session.id })
+        const finished = yield* reader.execute({ task_id: id, since: 0, wait_ms: 20_000 }, owner)
         expect(finished.output).toContain("quick")
-        yield* waitForStatus(id, "exited")
-        yield* reader.execute({ task_id: id }, context())
+        yield* reader.execute({ task_id: id, wait_ms: 20_000 }, owner)
+        yield* waitForStatus(id, "exited", 30_000, session.id)
         yield* Effect.sleep("1500 millis")
-        expect(wake.prompts.length).toBe(0)
+        expect(yield* noteTexts(session.id)).toEqual([])
       }),
     ),
   settle(),

@@ -495,24 +495,16 @@ const layer = Layer.effect(
             Effect.gen(function* () {
               const first = items[0]
               if (!first?.wake) return
-              // Read the agent and model the session is on NOW, not the ones the
-              // command was started under. A user who switched to another agent
-              // while the command ran must not be switched back by a message
-              // they did not send: createUserMessage persists any difference
-              // onto the session row.
-              const current = yield* sessions
-                .get(first.info.sessionID)
-                .pipe(Effect.catchCause(() => Effect.succeed(undefined)))
-              const variant =
-                current?.model?.variant && current.model.variant !== "default" ? current.model.variant : undefined
+              // The note copies the session's real user message, so it runs with
+              // that turn's agent, model and system prompt and writes nothing to
+              // the session row: a user who switched agents while the command ran
+              // cannot be switched back by a message they did not send.
               yield* SessionWake.deliver({
+                sessions,
                 ops: first.wake,
                 sessionID: first.info.sessionID,
-                ...(current?.agent ? { agent: current.agent } : {}),
-                ...(current?.model
-                  ? { model: { providerID: current.model.providerID, modelID: current.model.id } }
-                  : {}),
-                ...(variant ? { variant } : {}),
+                kind: "background_shell",
+                label: items.length === 1 ? "background command finished" : `${items.length} background commands finished`,
                 text: wakeText(items.map((item) => ({ info: item.info, tail: item.tail }))),
               }).pipe(Effect.ignore)
             }),

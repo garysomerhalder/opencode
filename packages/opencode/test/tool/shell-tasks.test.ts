@@ -8,12 +8,13 @@ import { Config } from "@/config/config"
 import { ShellTasks } from "../../src/tool/shell/tasks"
 import { TestInstance, testInstanceStoreLayer } from "../fixture/fixture"
 import { Truncate } from "@/tool/truncate"
-import { SessionID, MessageID } from "../../src/session/schema"
+import { SessionID, MessageID, PartID } from "../../src/session/schema"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { ProjectV2 } from "@opencode-ai/core/project"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { Session } from "@/session/session"
+import { HarnessNote } from "@/session/harness-note"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { FSUtil } from "@opencode-ai/core/fs-util"
@@ -99,53 +100,81 @@ const waitFor = <A>(self: Effect.Effect<A>, predicate: (value: A) => boolean, ti
     return yield* self
   })
 
-type Recorded = {
-  text: string
-  noReply: boolean
-  agent?: string
-  variant?: string
-  model?: { providerID: string; modelID: string }
-}
-
 /**
- * A stand-in for the session prompt ops. `unanswered` makes the first N loops
- * return an assistant that answers some earlier message, which is exactly the
- * case the wake retry exists for.
+ * Only the session loop is stubbed here; the note itself is written through the
+ * real Session service and read back from the session, so these assertions are
+ * about persisted state rather than about a fake. `unanswered` makes the first
+ * N loops return an assistant that answers some earlier message, which is
+ * exactly the case the wake retry exists for.
  */
-const recorder = (options: { unanswered?: number } = {}) => {
-  const prompts: Recorded[] = []
+const recorder = (sessions: Session.Interface, options: { unanswered?: number } = {}) => {
   const loops: string[] = []
   let unanswered = options.unanswered ?? 0
   const ops: WakeOps = {
-    prompt: (input) =>
-      Effect.sync(() => {
-        prompts.push({
-          text: input.parts.map((part) => part.text).join(""),
-          noReply: input.noReply === true,
-          ...(input.agent ? { agent: input.agent } : {}),
-          ...(input.variant ? { variant: input.variant } : {}),
-          ...(input.model ? { model: { providerID: input.model.providerID, modelID: input.model.modelID } } : {}),
-        })
-        return { info: { id: "msg_wake", role: "user" }, parts: [] } as unknown as SessionV1.WithParts
-      }),
     loop: (id) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
         loops.push(id)
-        if (unanswered > 0) {
-          unanswered--
-          return {
-            info: { id: "msg_reply", role: "assistant", parentID: "msg_older" },
-            parts: [],
-          } as unknown as SessionV1.WithParts
-        }
+        const messages = yield* sessions
+          .messages({ sessionID: SessionID.make(id) })
+          .pipe(Effect.catchCause(() => Effect.succeed([])))
+        const newest = messages.filter((message) => HarnessNote.isNote(message)).at(-1)
+        const parentID = unanswered-- > 0 ? "msg_older" : newest?.info.id
         return {
-          info: { id: "msg_reply", role: "assistant", parentID: "msg_wake" },
+          info: { id: "msg_reply", role: "assistant", parentID },
           parts: [],
         } as unknown as SessionV1.WithParts
       }),
   }
-  return { prompts, loops, ops }
+  return { loops, ops }
 }
+
+/** The harness notes a session has accumulated, newest last. */
+const notes = (sessionID: SessionID) =>
+  Effect.gen(function* () {
+    const sessions = yield* Session.Service
+    const messages = yield* sessions.messages({ sessionID }).pipe(Effect.catchCause(() => Effect.succeed([])))
+    return messages
+      .filter((message) => HarnessNote.isNote(message))
+      .map((message) => ({
+      id: message.info.id,
+      agent: message.info.role === "user" ? message.info.agent : undefined,
+      model: message.info.role === "user" ? message.info.model : undefined,
+      kind: HarnessNote.kind(message.parts),
+      text: message.parts
+        .filter((part) => part.type === "reminder")
+        .map((part) => (part.type === "reminder" ? part.text : ""))
+        .join(""),
+    }))
+  })
+
+/** A session with one real user message for a note to copy. */
+const seedSession = (input: { agent?: string; variant?: string } = {}) =>
+  Effect.gen(function* () {
+    const sessions = yield* Session.Service
+    const session = yield* sessions.create({ title: "wake target", ...(input.agent ? { agent: input.agent } : {}) })
+    const user: SessionV1.User = {
+      id: MessageID.ascending(),
+      role: "user",
+      sessionID: session.id,
+      time: { created: Date.now() },
+      agent: input.agent ?? "build",
+      model: {
+        providerID: ProviderV2.ID.make("some-provider"),
+        modelID: ModelV2.ID.make("some-model"),
+        ...(input.variant ? { variant: input.variant } : {}),
+      },
+    }
+    yield* sessions.updateMessage(user)
+    yield* sessions.updatePart({
+      id: PartID.ascending(),
+      messageID: user.id,
+      sessionID: session.id,
+      type: "text",
+      text: "run the build",
+      time: { start: Date.now(), end: Date.now() },
+    })
+    return session
+  })
 
 it.instance(
   "keeps the same process running after it is promoted, and reads its output incrementally",
@@ -187,37 +216,42 @@ it.instance(
 )
 
 it.instance(
-  "wakes the session once when a task finishes, and answers the message it appended",
+  "appends one harness note when a task finishes, and answers it",
   () =>
     Effect.gen(function* () {
-      const wake = recorder()
-      const handle = yield* start({ code: "require('fs').writeSync(1, 'done\\n')" })
+      const sessions = yield* Session.Service
+      const wake = recorder(sessions)
+      const session = yield* seedSession()
+      const handle = yield* start({ code: "require('fs').writeSync(1, 'done\\n')", session: session.id })
       yield* handle.promote({ wake: wake.ops })
       yield* handle.awaitExit
       yield* Effect.sleep("900 millis")
-      expect(wake.prompts.length).toBe(1)
-      expect(wake.prompts[0].noReply).toBe(true)
-      expect(wake.prompts[0].text).toContain("<background-shell-finished>")
-      expect(wake.prompts[0].text).toContain('status="exited"')
-      expect(wake.prompts[0].text).toContain('exit_code="0"')
-      expect(wake.prompts[0].text).toContain("done")
-      expect(wake.loops).toEqual([sessionID])
+      const written = yield* notes(session.id)
+      expect(written.length).toBe(1)
+      expect(written[0].kind).toBe("background_shell")
+      expect(written[0].text).toContain("<background-shell-finished>")
+      expect(written[0].text).toContain('status="exited"')
+      expect(written[0].text).toContain('exit_code="0"')
+      expect(written[0].text).toContain("done")
+      expect(wake.loops).toEqual([session.id])
     }),
   30_000,
 )
 
 it.instance(
-  "runs the session loop again when the appended message went unanswered",
+  "runs the session loop again when the note went unanswered",
   () =>
     Effect.gen(function* () {
-      const wake = recorder({ unanswered: 1 })
-      const handle = yield* start({ code: "require('fs').writeSync(1, 'retry\\n')" })
+      const sessions = yield* Session.Service
+      const wake = recorder(sessions, { unanswered: 1 })
+      const session = yield* seedSession()
+      const handle = yield* start({ code: "require('fs').writeSync(1, 'retry\\n')", session: session.id })
       yield* handle.promote({ wake: wake.ops })
       yield* handle.awaitExit
       yield* Effect.sleep("900 millis")
-      expect(wake.prompts.length).toBe(1)
-      // First loop answered an older message, so the wake ran the loop again.
-      expect(wake.loops).toEqual([sessionID, sessionID])
+      expect((yield* notes(session.id)).length).toBe(1)
+      // The first run answered an older message, so the wake ran the loop again.
+      expect(wake.loops).toEqual([session.id, session.id])
     }),
   30_000,
 )
@@ -226,8 +260,10 @@ it.instance(
   "gives up after three attempts instead of looping forever",
   () =>
     Effect.gen(function* () {
-      const wake = recorder({ unanswered: 99 })
-      const handle = yield* start({ code: "require('fs').writeSync(1, 'nope\\n')" })
+      const sessions = yield* Session.Service
+      const wake = recorder(sessions, { unanswered: 99 })
+      const session = yield* seedSession()
+      const handle = yield* start({ code: "require('fs').writeSync(1, 'nope\\n')", session: session.id })
       yield* handle.promote({ wake: wake.ops })
       yield* handle.awaitExit
       yield* Effect.sleep("900 millis")
@@ -237,26 +273,28 @@ it.instance(
 )
 
 it.instance(
-  "wakes with the agent and model the session is on now, not the ones it started under",
+  "carries the session's agent, model and variant onto the note, and changes neither",
   () =>
     Effect.gen(function* () {
       const sessions = yield* Session.Service
-      const wake = recorder()
-      const session = yield* sessions.create({ title: "wake target", agent: "build" })
-      yield* sessions.setAgentModel({
-        sessionID: session.id,
-        agent: "plan",
-        model: { id: ModelV2.ID.make("some-model"), providerID: ProviderV2.ID.make("some-provider"), variant: "thinking" },
-        time: Date.now(),
-      })
+      const wake = recorder(sessions)
+      const session = yield* seedSession({ agent: "plan", variant: "thinking" })
+      const before = yield* sessions.get(session.id)
       const handle = yield* start({ code: "require('fs').writeSync(1, 'switched\\n')", session: session.id })
       yield* handle.promote({ wake: wake.ops })
       yield* handle.awaitExit
       yield* Effect.sleep("900 millis")
-      expect(wake.prompts.length).toBe(1)
-      expect(wake.prompts[0].agent).toBe("plan")
-      expect(wake.prompts[0].variant).toBe("thinking")
-      expect(wake.prompts[0].model).toEqual({ providerID: "some-provider", modelID: "some-model" })
+      const written = yield* notes(session.id)
+      expect(written.length).toBe(1)
+      expect(written[0].agent).toBe("plan")
+      expect(String(written[0].model?.providerID)).toBe("some-provider")
+      expect(String(written[0].model?.modelID)).toBe("some-model")
+      expect(written[0].model?.variant).toBe("thinking")
+      // Appending a note writes nothing to the session row, so the agent and
+      // model the user is on cannot be moved by a message they did not send.
+      const after = yield* sessions.get(session.id)
+      expect(after.agent).toBe(before.agent)
+      expect(after.model).toEqual(before.model)
     }),
   30_000,
 )
@@ -290,24 +328,29 @@ it.instance(
   () =>
     Effect.gen(function* () {
       const tasks = yield* ShellTasks.Service
-      const stopped = recorder()
-      const stopping = yield* start({ code: "setInterval(() => {}, 1000)" })
+      const sessions = yield* Session.Service
+      const session = yield* seedSession()
+      const stopped = recorder(sessions)
+      const stopping = yield* start({ code: "setInterval(() => {}, 1000)", session: session.id })
       yield* stopping.promote({ wake: stopped.ops })
-      yield* tasks.stop(sessionID, stopping.id)
+      yield* tasks.stop(session.id, stopping.id)
       yield* Effect.sleep("900 millis")
-      expect(stopped.prompts.length).toBe(0)
+      expect((yield* notes(session.id)).length).toBe(0)
 
-      const observed = recorder()
-      const quick = yield* start({ code: "setTimeout(() => require('fs').writeSync(1, 'hi\\n'), 400)" })
+      const observed = recorder(sessions)
+      const quick = yield* start({
+        code: "setTimeout(() => require('fs').writeSync(1, 'hi\\n'), 400)",
+        session: session.id,
+      })
       yield* quick.promote({ wake: observed.ops })
       // A read that is already waiting when the task ends sees the terminal
       // state first, so the agent has the result and there is nothing to wake
       // it for. Waiting first also keeps this off the batch timer's heels.
-      yield* tasks.read(sessionID, quick.id, { offset: 0, waitMs: 20_000 })
-      const read = yield* tasks.read(sessionID, quick.id, { waitMs: 20_000 })
+      yield* tasks.read(session.id, quick.id, { offset: 0, waitMs: 20_000 })
+      const read = yield* tasks.read(session.id, quick.id, { waitMs: 20_000 })
       expect(read?.info.status).toBe("exited")
       yield* Effect.sleep("900 millis")
-      expect(observed.prompts.length).toBe(0)
+      expect((yield* notes(session.id)).length).toBe(0)
     }),
   30_000,
 )
@@ -382,16 +425,23 @@ it.instance(
   "terminates a task at the lifetime cap and wakes the session",
   () =>
     Effect.gen(function* () {
-      const wake = recorder()
-      const handle = yield* start({ code: "setInterval(() => {}, 1000)", settings: { maxLifetimeMs: 500 } })
+      const sessions = yield* Session.Service
+      const session = yield* seedSession()
+      const wake = recorder(sessions)
+      const handle = yield* start({
+        code: "setInterval(() => {}, 1000)",
+        settings: { maxLifetimeMs: 500 },
+        session: session.id,
+      })
       yield* handle.promote({ wake: wake.ops })
       const info = yield* handle.awaitExit
       expect(info.status).toBe("timed_out")
       expect(info.reason).toBe("lifetime")
       expect(alive(info.pid!)).toBe(false)
       yield* Effect.sleep("900 millis")
-      expect(wake.prompts.length).toBe(1)
-      expect(wake.prompts[0].text).toContain('status="timed_out"')
+      const written = yield* notes(session.id)
+      expect(written.length).toBe(1)
+      expect(written[0].text).toContain('status="timed_out"')
     }),
   40_000,
 )
@@ -400,17 +450,20 @@ it.instance(
   "reaps a task whose session has been idle with nobody reading it, without waking it",
   () =>
     Effect.gen(function* () {
-      const wake = recorder()
+      const sessions = yield* Session.Service
+      const session = yield* seedSession()
+      const wake = recorder(sessions)
       const handle = yield* start({
         code: "setInterval(() => {}, 1000)",
         settings: { idleReapMs: 300, sweepMs: 50 },
+        session: session.id,
       })
       yield* handle.promote({ wake: wake.ops })
       const info = yield* handle.awaitExit
       expect(info.status).toBe("timed_out")
       expect(info.reason).toBe("idle")
       yield* Effect.sleep("900 millis")
-      expect(wake.prompts.length).toBe(0)
+      expect((yield* notes(session.id)).length).toBe(0)
     }),
   40_000,
 )

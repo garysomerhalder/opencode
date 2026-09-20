@@ -1,32 +1,32 @@
 /**
- * Waking a session with a synthetic message.
+ * Waking a session with a harness note.
  *
  * Modeled on MiniMax Code (MIT), whose local runtime steers a
  * `<background-task-finished>` message into the owning conversation so the
  * agent resumes without polling.
  *
- * The message is created first (`noReply`), then the session loop is started.
- * Starting the loop separately closes the race where the message lands between
- * the running loop's final history read and the runner going idle: the loop's
- * top-of-loop check then sees a user message with no answering assistant and
- * keeps running. A plain `SessionPrompt.prompt` would join the finishing run
- * and leave the message unanswered until the next user turn.
+ * The note itself is built by `session/harness-note.ts`, the shared helper, so
+ * a background task's result and an accuracy reminder are the same `reminder`
+ * part and every consumer that switches on part type already handles both.
+ * Building it there also means the note carries the real user message's agent,
+ * model, format and system prompt, and that appending it writes nothing to the
+ * session row: the settings the user is on cannot be changed by a message they
+ * did not send.
+ *
+ * What is left here is delivery: persist the note, then run the session loop
+ * and check it was answered. Running the loop separately closes the race where
+ * the note lands between a running loop's final history read and the runner
+ * going idle — the loop's top-of-loop check then sees a user message with no
+ * answering assistant and keeps going, where a joined run would have finished
+ * and left the note unanswered until the user's next turn.
  */
 import { Effect } from "effect"
 import type { SessionV1 } from "@opencode-ai/core/v1/session"
+import { HarnessNote } from "../session/harness-note"
+import type { Session } from "../session/session"
 import type { SessionID } from "../session/schema"
-import type { ProviderV2 } from "@opencode-ai/core/provider"
-import type { ModelV2 } from "@opencode-ai/core/model"
 
 export interface WakeOps {
-  prompt(input: {
-    sessionID: SessionID
-    agent?: string
-    variant?: string
-    model?: { providerID: ProviderV2.ID; modelID: ModelV2.ID }
-    noReply?: boolean
-    parts: { type: "text"; text: string; synthetic?: boolean }[]
-  }): Effect.Effect<SessionV1.WithParts>
   loop?(sessionID: SessionID): Effect.Effect<SessionV1.WithParts>
 }
 
@@ -38,35 +38,39 @@ function answered(result: SessionV1.WithParts | undefined, messageID: string) {
 }
 
 /**
- * Appends a synthetic user message and makes sure a turn answers it. Returns
- * the id of the created message, or undefined when the session refused it.
+ * Appends a harness note to a session and makes sure a turn answers it.
+ * Returns the id of the note's message, or undefined when the session has no
+ * user message to carry one.
  */
 export const deliver = Effect.fn("SessionWake.deliver")(function* (input: {
+  sessions: Session.Interface
   ops: WakeOps
   sessionID: SessionID
-  /** The session's CURRENT agent, model and variant, so appending this message changes neither. */
-  agent?: string
-  variant?: string
-  model?: { providerID: ProviderV2.ID; modelID: ModelV2.ID }
+  kind: string
+  label?: string
   text: string
 }) {
-  const base = {
-    sessionID: input.sessionID,
-    ...(input.agent ? { agent: input.agent } : {}),
-    ...(input.variant ? { variant: input.variant } : {}),
-    ...(input.model ? { model: input.model } : {}),
-    parts: [{ type: "text" as const, text: input.text, synthetic: true }],
-  }
+  const messages = yield* input.sessions
+    .messages({ sessionID: input.sessionID })
+    .pipe(Effect.catchCause(() => Effect.succeed([])))
+  const user = HarnessNote.lastRealUser(messages)
+  if (!user || user.info.role !== "user") return
+  const built = HarnessNote.build({
+    user: user.info,
+    kind: input.kind,
+    ...(input.label ? { label: input.label } : {}),
+    text: input.text,
+  })
+  yield* input.sessions.updateMessage(built.info).pipe(Effect.catchCause(() => Effect.void))
+  yield* input.sessions.updatePart(built.part).pipe(Effect.catchCause(() => Effect.void))
+
   const loop = input.ops.loop
-  const message = yield* input.ops
-    .prompt(loop ? { ...base, noReply: true } : base)
-    .pipe(Effect.catchCause(() => Effect.succeed(undefined)))
-  if (!message || !loop) return message?.info.id
+  if (!loop) return built.info.id
   for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
     const result = yield* loop(input.sessionID).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
-    if (answered(result, message.info.id)) break
+    if (answered(result, built.info.id)) break
   }
-  return message.info.id
+  return built.info.id
 })
 
 export * as SessionWake from "./wake"

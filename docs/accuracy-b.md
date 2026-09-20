@@ -138,7 +138,7 @@ wake the session, since the agent asked for it.
 
 ## 5. Wake: how a finish enters the session loop
 
-On `exited`, or on `timed_out` from a deadline, the registry sends one synthetic message to the
+On `exited`, or on `timed_out` from a deadline, the registry appends one harness note to the
 owning session, batching finishes that land within 250 ms:
 
 ```
@@ -156,30 +156,38 @@ It is suppressed when the agent already read the finished task (`shell_output` s
 state), when the task was stopped on request, when it was cancelled, and when it was
 idle-reaped — in those cases either the agent knows or nobody is waiting.
 
-Transport (`src/tool/wake.ts`, shared with the background subagent in `tool/task.ts`):
-`promptOps.prompt({ … noReply: true })` appends the message, then `promptOps.loop(sessionID)`
-runs the session loop and the result is checked for an assistant message whose `parentID` is
-the appended message; up to 3 attempts.
+**The carrier is a `reminder` part**, built by `session/harness-note.ts` — the shared helper
+that the accuracy reminders also use, from the branch that introduced the type. A part type,
+rather than a text part with a `synthetic` flag, is what makes the note visible to every
+consumer that switches on part type and invisible to the ones that only read the user's own
+text. That is why `/undo`, the `@agent` exemption, compaction turn counting and the plan
+reminder all keep working, and why `opencode run` and ACP need nothing: they only handle
+text, file and reasoning parts, so a note can never be replayed as the user speaking.
 
-**The wake must not move the session.** The agent, model and variant are read from the session
-row at wake time, not captured when the command started, and passed through so
-`createUserMessage` sees no difference and calls no `setAgentModel`. Capturing them at start
-time was a real bug: a user who ran a build under `build`, then switched to `plan`, would be
-switched back to `build` — permissions included — by a message they never sent, and the switch
-was written to the session row. The same read also preserves a non-default model variant,
-which a missing `variant` would otherwise reset to `"default"` for every later turn.
+Building through that helper also fixes what an earlier revision of this branch got wrong.
+The note copies the session's real user message — agent, model, variant, format, system
+prompt — and is persisted directly with `updateMessage` / `updatePart`, so appending it writes
+nothing to the session row. The first version went through `prompt()`, where
+`createUserMessage` calls `setAgentModel` on any difference: a user who ran a build under
+`build` and then switched to `plan` was switched back, permissions included, by a message they
+never sent, and a non-default model variant was reset to `"default"` for every later turn.
+Neither is reachable now, structurally rather than by care.
+
+Delivery (`src/tool/wake.ts`, shared with the background subagent in `tool/task.ts`): persist
+the note, then run `promptOps.loop(sessionID)` and check the result is an assistant message
+whose `parentID` is the note; up to 3 attempts.
 
 Race analysis (`effect/runner.ts`, `SessionPrompt.runLoop`):
 
-- **Idle session:** the message is appended and a new run starts.
+- **Idle session:** the note is appended and a new run starts.
 - **Turn running:** `loop` joins the running run. The loop reads history only at the top of
-  each step, so the message never lands mid-stream; the next step sees it unanswered and keeps
-  going. History order stays valid (`U1, A1(tool calls), U2(synthetic), A2`).
-- **The narrow window** — the message lands after the running loop's final history read but
+  each step, so the note never lands mid-stream; the next step sees it unanswered and keeps
+  going. History order stays valid (`U1, A1(tool calls), note, A2`).
+- **The narrow window** — the note lands after the running loop's final history read but
   before the runner goes idle — is what the retry covers: the joined run returns an assistant
-  that does not answer our message, so `loop` is called again and starts a fresh run whose
-  top-of-loop check sees the unanswered message. The background subagent had this same latent
-  bug and now shares the fix.
+  that does not answer the note, so `loop` is called again and starts a fresh run whose
+  top-of-loop check sees it unanswered. The background subagent had this same latent bug and
+  now shares the fix.
 
 **The only session/\* change:** one line in `session/prompt.ts` `ops()` exposing `loop`, plus
 the matching optional `loop?` on `TaskPromptOps` in `tool/task.ts`.
@@ -253,16 +261,20 @@ foreground shell already used:
 - `test/server/httpapi-experimental.test.ts` covers the two endpoints' routing, query shape and
   response schema. The served app builds its own service graph, so live task state is not
   visible from that test; the lifecycle is covered in the registry suite.
-- The wake stub is a fake of the session prompt ops, so assertions about wake *delivery* are
-  assertions about that fake. What it does prove is the branch the registry takes: how many
-  prompts, with which agent, model and variant, and how many loops. The real
-  `SessionPrompt.prompt`/`loop` pair is exercised by the existing session suites.
+- `test/session/prompt.test.ts` holds the wake's integration test, against the real
+  `SessionPrompt` ops rather than a stub: a finished task appends a note, the real session loop
+  answers it, the model is handed the note's text, `lastRealUser` still returns the user's own
+  message, and the session's agent and model are unchanged afterwards. That is the test that
+  proves the wake's behaviour; the suites above prove the registry's branch. Even there only
+  `loop` is stubbed — the note is written through the real Session service and read back, so
+  those assertions are about persisted state rather than about a fake.
 - `test/tool/shell.test.ts` is the regression guard and still passes. Two timeouts in it were
   raised to 30 s because killing a process tree on Windows takes longer than the old 15 s
   allowance — those tests already failed on `dev` on this machine.
 
 Runs on this machine: `bun test --timeout 30000 test/tool/shell.test.ts
-test/tool/shell-tasks.test.ts test/tool/shell-background.test.ts`, plus `bun run typecheck`.
+test/tool/shell-tasks.test.ts test/tool/shell-background.test.ts test/session/prompt.test.ts`,
+plus `bun run typecheck`.
 
 ## 10. Files
 
@@ -271,21 +283,17 @@ test/tool/shell-tasks.test.ts test/tool/shell-background.test.ts`, plus `bun run
 | `src/tool/shell.ts` | the managed run path: spawn in the registry, race the yield, receipt |
 | `src/tool/shell/tasks.ts` | new: the registry, output capture, caps, reaper, wake |
 | `src/tool/shell/tools.ts` | new: `shell_output`, `shell_stop` |
-| `src/tool/wake.ts` | new: the synthetic wake message and the answered-or-retry loop |
+| `src/tool/wake.ts` | new: persists a harness note through the shared helper, then loops until answered |
 | `src/tool/shell/prompt.ts` | the `background` parameter and the "Long commands" section |
 | `src/tool/registry.ts` | registers the two tools behind the flag and hides them without a shell |
 | `src/tool/task.ts` | background subagents use the shared wake (same missed-wake fix) |
-| `src/session/prompt.ts` | one line: `loop` on the prompt ops |
+| `src/session/prompt.ts` | one line: `loop` on the prompt ops (the part type itself came from the accuracy-a branch) |
 | `core/src/v1/config/config.ts` | `experimental.background_shell` |
 | `server/.../groups/experimental.ts`, `handlers/experimental.ts`, `httpapi/server.ts` | list and stop-all endpoints |
 | `sdk/js/src/v2/gen/*` | regenerated for the two endpoints (`packages/client` does not cover this group) |
 
 ## 11. Open items
 
-- **Harness notes need their own part type.** The wake is a `text` part with `synthetic: true`,
-  which is invisible to consumers that switch on part type, exactly as `compaction` parts are
-  visible to them. This is a shared problem with the accuracy-a branch and is being fixed once,
-  in one helper, rather than twice.
 - **No UI affordance yet** for a running background task: no list, no indicator, no stop
   button. This is why the flag ships off.
 - **The idle reaper kills without notice** after 30 minutes of an idle session with no reads.
