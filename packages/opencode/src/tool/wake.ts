@@ -15,12 +15,15 @@
 import { Effect } from "effect"
 import type { SessionV1 } from "@opencode-ai/core/v1/session"
 import type { SessionID } from "../session/schema"
+import type { ProviderV2 } from "@opencode-ai/core/provider"
+import type { ModelV2 } from "@opencode-ai/core/model"
 
 export interface WakeOps {
   prompt(input: {
     sessionID: SessionID
     agent?: string
     variant?: string
+    model?: { providerID: ProviderV2.ID; modelID: ModelV2.ID }
     noReply?: boolean
     parts: { type: "text"; text: string; synthetic?: boolean }[]
   }): Effect.Effect<SessionV1.WithParts>
@@ -41,14 +44,17 @@ function answered(result: SessionV1.WithParts | undefined, messageID: string) {
 export const deliver = Effect.fn("SessionWake.deliver")(function* (input: {
   ops: WakeOps
   sessionID: SessionID
+  /** The session's CURRENT agent, model and variant, so appending this message changes neither. */
   agent?: string
   variant?: string
+  model?: { providerID: ProviderV2.ID; modelID: ModelV2.ID }
   text: string
 }) {
   const base = {
     sessionID: input.sessionID,
     ...(input.agent ? { agent: input.agent } : {}),
     ...(input.variant ? { variant: input.variant } : {}),
+    ...(input.model ? { model: input.model } : {}),
     parts: [{ type: "text" as const, text: input.text, synthetic: true }],
   }
   const loop = input.ops.loop

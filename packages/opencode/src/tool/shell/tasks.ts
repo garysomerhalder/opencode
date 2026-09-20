@@ -13,7 +13,7 @@
  */
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { InstanceState } from "@/effect/instance-state"
-import { Context, Deferred, Effect, Fiber, Layer, Scope, Stream } from "effect"
+import { Cause, Context, Deferred, Effect, Fiber, Layer, Scope, Stream } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import fs from "node:fs/promises"
@@ -23,6 +23,7 @@ import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { SessionStatus } from "@/session/status"
+import { Session } from "@/session/session"
 import type { SessionID, MessageID } from "@/session/schema"
 import { TRUNCATION_DIR } from "../truncation-dir"
 import { ToolID } from "../schema"
@@ -52,6 +53,8 @@ export type Info = {
   outputCapped: boolean
   background: boolean
   reason?: Reason
+  /** Set when the command could not be started at all. */
+  error?: string
 }
 
 export type Settings = {
@@ -65,7 +68,10 @@ export type Settings = {
 }
 
 export const DEFAULTS: Settings = {
-  enabled: true,
+  // Off for the first release: nothing in the UI shows a live background
+  // process yet, so a user who presses escape would have no way to see or stop
+  // the trees that keep running. Opt in with `experimental.background_shell`.
+  enabled: false,
   yieldAfterMs: 15_000,
   maxLifetimeMs: 60 * 60 * 1000,
   maxConcurrent: 8,
@@ -92,7 +98,8 @@ export function settings(input: ConfigInput): Settings {
   if (input === undefined) return DEFAULTS
   if (typeof input === "boolean") return { ...DEFAULTS, enabled: input }
   return {
-    enabled: input.enabled ?? DEFAULTS.enabled,
+    // Writing the settings object is itself the opt-in; `enabled: false` still wins.
+    enabled: input.enabled ?? true,
     yieldAfterMs: input.yield_after_ms ?? DEFAULTS.yieldAfterMs,
     maxLifetimeMs: input.max_lifetime_ms ?? DEFAULTS.maxLifetimeMs,
     maxConcurrent: input.max_concurrent ?? DEFAULTS.maxConcurrent,
@@ -120,7 +127,6 @@ export type StartInput = {
 
 export type PromoteInput = {
   wake?: WakeOps
-  agent?: string
   /** Absolute deadline for the process, in ms since start. Falls back to the lifetime cap. */
   deadlineMs?: number
 }
@@ -144,7 +150,16 @@ export type Handle = {
   readonly kill: (status: Exclude<Status, "running" | "exited">, reason: Reason) => Effect.Effect<Info>
 }
 
-export type ReadInput = { offset?: number; waitMs?: number; limits?: Limits }
+export type ReadInput = {
+  offset?: number
+  waitMs?: number
+  limits?: Limits
+  /**
+   * Called with the rolling preview every second while a read is waiting, so a
+   * long wait still looks alive to anything watching the tool part's metadata.
+   */
+  onWait?: (preview: string) => Effect.Effect<void>
+}
 
 export type ReadResult = {
   info: Info
@@ -203,7 +218,6 @@ type Entry = {
   done: Deferred.Deferred<Info>
   onPreview?: (text: string) => Effect.Effect<void>
   wake?: WakeOps
-  agent?: string
   promotedAt?: number
   lastReadAt: number
   lastBusyAt: number
@@ -282,6 +296,7 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner
     const status = yield* SessionStatus.Service
+    const sessions = yield* Session.Service
     const events = yield* EventV2Bridge.Service
 
     const state = yield* InstanceState.make<State>(
@@ -468,24 +483,39 @@ const layer = Layer.effect(
         const pending = current.pendingWake.filter((item) => !item.observedTerminal)
         current.pendingWake = []
         current.wakeFiber = undefined
-        const sessions = new Map<SessionID, Entry[]>()
+        const bySession = new Map<SessionID, Entry[]>()
         for (const item of pending) {
-          const list = sessions.get(item.info.sessionID) ?? []
+          const list = bySession.get(item.info.sessionID) ?? []
           list.push(item)
-          sessions.set(item.info.sessionID, list)
+          bySession.set(item.info.sessionID, list)
         }
         yield* Effect.forEach(
-          Array.from(sessions.values()),
-          (items) => {
-            const first = items[0]
-            if (!first?.wake) return Effect.void
-            return SessionWake.deliver({
-              ops: first.wake,
-              sessionID: first.info.sessionID,
-              ...(first.agent ? { agent: first.agent } : {}),
-              text: wakeText(items.map((item) => ({ info: item.info, tail: item.tail }))),
-            }).pipe(Effect.ignore)
-          },
+          Array.from(bySession.values()),
+          (items) =>
+            Effect.gen(function* () {
+              const first = items[0]
+              if (!first?.wake) return
+              // Read the agent and model the session is on NOW, not the ones the
+              // command was started under. A user who switched to another agent
+              // while the command ran must not be switched back by a message
+              // they did not send: createUserMessage persists any difference
+              // onto the session row.
+              const current = yield* sessions
+                .get(first.info.sessionID)
+                .pipe(Effect.catchCause(() => Effect.succeed(undefined)))
+              const variant =
+                current?.model?.variant && current.model.variant !== "default" ? current.model.variant : undefined
+              yield* SessionWake.deliver({
+                ops: first.wake,
+                sessionID: first.info.sessionID,
+                ...(current?.agent ? { agent: current.agent } : {}),
+                ...(current?.model
+                  ? { model: { providerID: current.model.providerID, modelID: current.model.id } }
+                  : {}),
+                ...(variant ? { variant } : {}),
+                text: wakeText(items.map((item) => ({ info: item.info, tail: item.tail }))),
+              }).pipe(Effect.ignore)
+            }),
           { concurrency: 1, discard: true },
         )
       })
@@ -587,7 +617,15 @@ const layer = Layer.effect(
           return yield* settle(entry, "exited", exit.code)
         }),
       ).pipe(
-        Effect.catchCause(() => settle(entry, "exited", null)),
+        // A command that could not be spawned at all (missing shell, bad cwd,
+        // EACCES) must not read as "ran and printed nothing": the failure is
+        // recorded on the entry and the caller raises it.
+        Effect.catchCause((cause) =>
+          Effect.gen(function* () {
+            entry.info.error = Cause.squash(cause) instanceof Error ? (Cause.squash(cause) as Error).message : String(Cause.squash(cause))
+            return yield* settle(entry, "exited", null)
+          }),
+        ),
         Effect.andThen(scheduleWake(entry)),
         Effect.asVoid,
       )
@@ -621,7 +659,6 @@ const layer = Layer.effect(
             entry.lastReadAt = Date.now()
             entry.lastBusyAt = Date.now()
             if (promoteInput.wake) entry.wake = promoteInput.wake
-            if (promoteInput.agent) entry.agent = promoteInput.agent
             yield* spill(entry)
             const lifetime = Math.min(promoteInput.deadlineMs ?? entry.settings.maxLifetimeMs, entry.settings.maxLifetimeMs)
             const reason: Reason = promoteInput.deadlineMs !== undefined && promoteInput.deadlineMs < entry.settings.maxLifetimeMs ? "deadline" : "lifetime"
@@ -691,6 +728,7 @@ const layer = Layer.effect(
       const from = input.offset ?? entry.cursor
       let timedOut = false
       if (waitMs > 0 && entry.info.status === "running" && entry.info.bytes <= from) {
+        const progress = input.onWait
         const waited = yield* Effect.raceAll([
           Deferred.await(entry.done).pipe(Effect.as("done" as const)),
           Effect.sleep(`${waitMs} millis`).pipe(Effect.as("timeout" as const)),
@@ -701,6 +739,16 @@ const layer = Layer.effect(
             }
             return "output" as const
           }),
+          ...(progress
+            ? [
+                Effect.gen(function* () {
+                  while (true) {
+                    yield* Effect.sleep("1 seconds")
+                    yield* progress(entry.preview).pipe(Effect.ignore)
+                  }
+                }).pipe(Effect.as("progress" as const)),
+              ]
+            : []),
         ])
         timedOut = waited === "timeout"
       }
@@ -766,7 +814,7 @@ const layer = Layer.effect(
 export const node = LayerNode.make({
   service: Service,
   layer,
-  deps: [CrossSpawnSpawner.node, SessionStatus.node, EventV2Bridge.node],
+  deps: [CrossSpawnSpawner.node, SessionStatus.node, EventV2Bridge.node, Session.node],
 })
 
 export * as ShellTasks from "./tasks"

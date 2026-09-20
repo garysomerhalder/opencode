@@ -1,7 +1,13 @@
 # Accuracy B: background long commands for the shell tool
 
-Status: implemented on `feat/accuracy-background-shell`. This document describes what is
-built, not a proposal.
+Status: implemented on `feat/accuracy-background-shell` and shipped **off by default**. This
+document describes what is built, not a proposal.
+
+It is opt-in for its first release because nothing in the UI shows a live background process
+yet: a user who presses escape has no list, no indicator and no stop button for trees that
+keep running. Two follow-ups turn it on by default — a UI affordance for running tasks, and a
+notice when the idle reaper kills something. Until then `experimental.background_shell` is
+how you get it, and the server endpoints in section 4 are the only way to see and stop tasks.
 
 Model: MiniMax Code (MIT). Its bash tool soft-yields a foreground command to a managed
 background task after 15 s without restarting it, hands back a receipt, exposes
@@ -47,8 +53,13 @@ shell call ──permission check (unchanged)──> spawned inside the task reg
   `OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS` keeps its old meaning.
 - `background: true` starts in the background immediately (servers, watchers). It goes through
   the same permission check.
-- At the concurrency cap nothing yields: the call falls back to today's foreground behavior and
-  the timeout message says the cap was hit and to stop a task with `shell_stop`.
+- At the concurrency cap a foreground command does not yield: it keeps today's foreground
+  behavior and the timeout message says the cap was hit and to stop a task with `shell_stop`.
+  A `background: true` call has no foreground behavior to fall back to, so it is refused right
+  away rather than being held for the full timeout and then killed.
+- A command that cannot be started at all (missing shell, unreachable working directory,
+  EACCES) raises a tool error, the way it did before this change. It is never reported as a
+  command that ran and printed nothing.
 
 ### Receipt (the tool result on a yield)
 
@@ -106,9 +117,10 @@ Registered in `tool/registry.ts` only when the flag is on, and hidden from any a
 - With no `task_id`: lists this session's background tasks.
 - Returns the new output since `since` (a byte offset) or since this session's cursor, plus
   status, exit code, duration and `next_offset`, bounded by the truncation limits.
-- `wait_ms` (max 30 000) waits for new output or for the task to end. It streams
-  `ctx.metadata({ output })` while it waits, so the desktop goal loop's progress signal keeps
-  moving for a promoted build. Reaching the wait limit never stops the task.
+- `wait_ms` (max 30 000) waits for new output or for the task to end. While it waits it pushes
+  the rolling preview into this tool part once a second through `ctx.metadata({ output })`, so
+  a long wait does not read as a frozen tool call and the desktop goal loop's progress signal
+  keeps moving for a promoted build. Reaching the wait limit never stops the task.
 - Polling discouragement, following MiniMax: the description says the finish arrives on its own,
   and after two reads that return nothing new the result says to stop polling and offers
   `wait_ms=30000`.
@@ -149,6 +161,14 @@ Transport (`src/tool/wake.ts`, shared with the background subagent in `tool/task
 runs the session loop and the result is checked for an assistant message whose `parentID` is
 the appended message; up to 3 attempts.
 
+**The wake must not move the session.** The agent, model and variant are read from the session
+row at wake time, not captured when the command started, and passed through so
+`createUserMessage` sees no difference and calls no `setAgentModel`. Capturing them at start
+time was a real bug: a user who ran a build under `build`, then switched to `plan`, would be
+switched back to `build` — permissions included — by a message they never sent, and the switch
+was written to the session row. The same read also preserves a non-default model variant,
+which a missing `variant` would otherwise reset to `"default"` for every later turn.
+
 Race analysis (`effect/runner.ts`, `SessionPrompt.runLoop`):
 
 - **Idle session:** the message is appended and a new run starts.
@@ -166,11 +186,12 @@ the matching optional `loop?` on `TaskPromptOps` in `tool/task.ts`.
 
 ## 6. Caps and cleanup
 
-Config (`experimental.background_shell`, default on; `true`/`false` is also accepted):
+Config (`experimental.background_shell`, **absent means off**; `true`/`false` is also accepted,
+and writing the settings object is itself the opt-in unless it says `enabled: false`):
 
 ```jsonc
 "experimental": { "background_shell": {
-  "enabled": true,              // false = today's behavior exactly
+  "enabled": true,              // false, or no key at all = today's behavior exactly
   "yield_after_ms": 15000,
   "max_lifetime_ms": 3600000,   // 60 min, then timed_out (wakes the session)
   "max_concurrent": 8,          // promoted running tasks per instance
@@ -212,19 +233,30 @@ foreground shell already used:
 
 ## 9. Tests
 
-- `test/tool/shell-tasks.test.ts` (registry, 9 tests): promotion keeps the same pid and the
+- `test/tool/shell-tasks.test.ts` (registry, 13 tests): promotion keeps the same pid and the
   output keeps flowing; incremental reads and the session cursor; the wake fires once with the
-  exit code and tail and its message is answered; no wake after a stop or after the agent read
-  the end; stopping kills the task's own tree (parent and grandchild) and leaves another task
-  alive; the concurrency cap refuses promotion; the lifetime cap terminates and wakes; the idle
-  reaper terminates without waking; the output cap; session deletion cancels and cross-session
-  lookups return nothing.
-- `test/tool/shell-background.test.ts` (tool, 9 tests): a long command yields a receipt and the
+  exit code and tail and its message is answered; the wake runs the loop again when the first
+  run answered something else, and gives up after three attempts; the wake carries the
+  session's current agent, model and variant rather than the ones the command started under;
+  a command that cannot be started is recorded as an error; no wake after a stop or after the
+  agent read the end; stopping kills the task's own tree (parent and grandchild) and leaves
+  another task alive; the concurrency cap refuses promotion; the lifetime cap terminates and
+  wakes; the idle reaper terminates without waking; the output cap; session deletion cancels
+  and cross-session lookups return nothing.
+- `test/tool/shell-background.test.ts` (tool, 11 tests): a long command yields a receipt and the
   same process finishes it; the wake carries the output; no wake when the agent already read it;
   incremental reads, listing, the polling warning and `shell_stop`; a turn abort leaves a
   background task running; a turn abort before the yield still kills; an explicit timeout still
-  kills with the old message; the cap fallback says so; short commands are unchanged; with the
-  flag off both the description and the timeout behavior are the old ones.
+  kills with the old message; the foreground cap fallback says so and a `background: true` call
+  at the cap is refused immediately; short commands are unchanged; the tool is off with no
+  config key; with the flag off both the description and the timeout behavior are the old ones.
+- `test/server/httpapi-experimental.test.ts` covers the two endpoints' routing, query shape and
+  response schema. The served app builds its own service graph, so live task state is not
+  visible from that test; the lifecycle is covered in the registry suite.
+- The wake stub is a fake of the session prompt ops, so assertions about wake *delivery* are
+  assertions about that fake. What it does prove is the branch the registry takes: how many
+  prompts, with which agent, model and variant, and how many loops. The real
+  `SessionPrompt.prompt`/`loop` pair is exercised by the existing session suites.
 - `test/tool/shell.test.ts` is the regression guard and still passes. Two timeouts in it were
   raised to 30 s because killing a process tree on Windows takes longer than the old 15 s
   allowance — those tests already failed on `dev` on this machine.
@@ -246,3 +278,15 @@ test/tool/shell-tasks.test.ts test/tool/shell-background.test.ts`, plus `bun run
 | `src/session/prompt.ts` | one line: `loop` on the prompt ops |
 | `core/src/v1/config/config.ts` | `experimental.background_shell` |
 | `server/.../groups/experimental.ts`, `handlers/experimental.ts`, `httpapi/server.ts` | list and stop-all endpoints |
+| `sdk/js/src/v2/gen/*` | regenerated for the two endpoints (`packages/client` does not cover this group) |
+
+## 11. Open items
+
+- **Harness notes need their own part type.** The wake is a `text` part with `synthetic: true`,
+  which is invisible to consumers that switch on part type, exactly as `compaction` parts are
+  visible to them. This is a shared problem with the accuracy-a branch and is being fixed once,
+  in one helper, rather than twice.
+- **No UI affordance yet** for a running background task: no list, no indicator, no stop
+  button. This is why the flag ships off.
+- **The idle reaper kills without notice** after 30 minutes of an idle session with no reads.
+  It should say something when it does.

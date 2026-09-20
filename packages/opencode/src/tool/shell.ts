@@ -640,6 +640,8 @@ export const ShellTool = Tool.define(
         Effect.gen(function* () {
           yield* handle.detach
           const result = yield* handle.result
+          // A command that never started is an error, not an empty run.
+          if (result.info.error) return yield* Effect.die(new Error(result.info.error))
           const end = tail(result.raw, limits.maxLines, limits.maxBytes)
           const cut = result.cut || end.cut
           const file = result.info.file ?? (cut ? yield* trunc.write(result.raw) : undefined)
@@ -719,13 +721,22 @@ export const ShellTool = Tool.define(
       const ops = ctx.extra?.promptOps as WakeOps | undefined
       const promoted = yield* handle.promote({
         ...(ops ? { wake: ops } : {}),
-        ...(ctx.agent ? { agent: ctx.agent } : {}),
         ...(input.timeout === undefined ? {} : { deadlineMs: input.timeout }),
       })
       if (promoted) return yield* receipt(promoted)
 
-      // At the concurrency cap nothing yields: fall back to the old foreground
-      // behavior, including the old timeout message.
+      const capNote = `${input.settings.maxConcurrent} background shell tasks are already running, so this command could not move to the background. Stop one with shell_stop, then retry.`
+
+      // An explicit background request has no foreground behavior to fall back
+      // to, so say no now instead of holding the command for the full timeout
+      // and then killing the thing we were asked to start.
+      if (input.background) {
+        yield* handle.kill("stopped", "stopped")
+        return yield* settled(`shell tool did not start this command in the background. ${capNote}`)
+      }
+
+      // At the concurrency cap a foreground command does not yield: it keeps
+      // today's behavior, including the old timeout message.
       const fallbackMs = input.timeout ?? defaultTimeoutMs
       const remaining = Math.max(0, (yield* handle.info).startedAt + fallbackMs - Date.now())
       const second = yield* Effect.raceAll([
@@ -733,7 +744,6 @@ export const ShellTool = Tool.define(
         abort.pipe(Effect.map(() => ({ kind: "abort" as const }))),
         Effect.sleep(`${remaining + 100} millis`).pipe(Effect.map(() => ({ kind: "timeout" as const }))),
       ])
-      const capNote = `${input.settings.maxConcurrent} background shell tasks are already running, so this command could not move to the background. Stop one with shell_stop, then retry.`
       if (second.kind === "exit") return yield* settled()
       if (second.kind === "abort") {
         yield* handle.kill("cancelled", "stopped")

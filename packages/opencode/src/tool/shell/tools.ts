@@ -98,6 +98,9 @@ export const ShellOutputTool = Tool.define(
           const result = yield* tasks.read(ctx.sessionID, params.task_id, {
             ...(params.since === undefined ? {} : { offset: params.since }),
             ...(params.wait_ms === undefined ? {} : { waitMs: params.wait_ms }),
+            // Keep this tool part visibly moving while the read waits, the way
+            // a foreground shell call streams its output.
+            onWait: (text) => ctx.metadata({ metadata: { output: text.slice(-30_000) } }),
           })
           if (!result) {
             return {

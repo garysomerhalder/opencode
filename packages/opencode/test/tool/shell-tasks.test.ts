@@ -11,6 +11,10 @@ import { Truncate } from "@/tool/truncate"
 import { SessionID, MessageID } from "../../src/session/schema"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { ProjectV2 } from "@opencode-ai/core/project"
+import { ModelV2 } from "@opencode-ai/core/model"
+import { ProviderV2 } from "@opencode-ai/core/provider"
+import { Session } from "@/session/session"
+import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -27,6 +31,8 @@ const layer = Layer.mergeAll(
       Config.node,
       EventV2Bridge.node,
       SessionStatus.node,
+      Session.node,
+      SessionProjector.node,
       ShellTasks.node,
     ]),
   ),
@@ -93,21 +99,45 @@ const waitFor = <A>(self: Effect.Effect<A>, predicate: (value: A) => boolean, ti
     return yield* self
   })
 
-const recorder = () => {
-  const prompts: { text: string; noReply: boolean }[] = []
+type Recorded = {
+  text: string
+  noReply: boolean
+  agent?: string
+  variant?: string
+  model?: { providerID: string; modelID: string }
+}
+
+/**
+ * A stand-in for the session prompt ops. `unanswered` makes the first N loops
+ * return an assistant that answers some earlier message, which is exactly the
+ * case the wake retry exists for.
+ */
+const recorder = (options: { unanswered?: number } = {}) => {
+  const prompts: Recorded[] = []
   const loops: string[] = []
+  let unanswered = options.unanswered ?? 0
   const ops: WakeOps = {
     prompt: (input) =>
       Effect.sync(() => {
         prompts.push({
           text: input.parts.map((part) => part.text).join(""),
           noReply: input.noReply === true,
+          ...(input.agent ? { agent: input.agent } : {}),
+          ...(input.variant ? { variant: input.variant } : {}),
+          ...(input.model ? { model: { providerID: input.model.providerID, modelID: input.model.modelID } } : {}),
         })
         return { info: { id: "msg_wake", role: "user" }, parts: [] } as unknown as SessionV1.WithParts
       }),
     loop: (id) =>
       Effect.sync(() => {
         loops.push(id)
+        if (unanswered > 0) {
+          unanswered--
+          return {
+            info: { id: "msg_reply", role: "assistant", parentID: "msg_older" },
+            parts: [],
+          } as unknown as SessionV1.WithParts
+        }
         return {
           info: { id: "msg_reply", role: "assistant", parentID: "msg_wake" },
           parts: [],
@@ -162,7 +192,7 @@ it.instance(
     Effect.gen(function* () {
       const wake = recorder()
       const handle = yield* start({ code: "require('fs').writeSync(1, 'done\\n')" })
-      yield* handle.promote({ wake: wake.ops, agent: "build" })
+      yield* handle.promote({ wake: wake.ops })
       yield* handle.awaitExit
       yield* Effect.sleep("900 millis")
       expect(wake.prompts.length).toBe(1)
@@ -172,6 +202,85 @@ it.instance(
       expect(wake.prompts[0].text).toContain('exit_code="0"')
       expect(wake.prompts[0].text).toContain("done")
       expect(wake.loops).toEqual([sessionID])
+    }),
+  30_000,
+)
+
+it.instance(
+  "runs the session loop again when the appended message went unanswered",
+  () =>
+    Effect.gen(function* () {
+      const wake = recorder({ unanswered: 1 })
+      const handle = yield* start({ code: "require('fs').writeSync(1, 'retry\\n')" })
+      yield* handle.promote({ wake: wake.ops })
+      yield* handle.awaitExit
+      yield* Effect.sleep("900 millis")
+      expect(wake.prompts.length).toBe(1)
+      // First loop answered an older message, so the wake ran the loop again.
+      expect(wake.loops).toEqual([sessionID, sessionID])
+    }),
+  30_000,
+)
+
+it.instance(
+  "gives up after three attempts instead of looping forever",
+  () =>
+    Effect.gen(function* () {
+      const wake = recorder({ unanswered: 99 })
+      const handle = yield* start({ code: "require('fs').writeSync(1, 'nope\\n')" })
+      yield* handle.promote({ wake: wake.ops })
+      yield* handle.awaitExit
+      yield* Effect.sleep("900 millis")
+      expect(wake.loops.length).toBe(3)
+    }),
+  30_000,
+)
+
+it.instance(
+  "wakes with the agent and model the session is on now, not the ones it started under",
+  () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const wake = recorder()
+      const session = yield* sessions.create({ title: "wake target", agent: "build" })
+      yield* sessions.setAgentModel({
+        sessionID: session.id,
+        agent: "plan",
+        model: { id: ModelV2.ID.make("some-model"), providerID: ProviderV2.ID.make("some-provider"), variant: "thinking" },
+        time: Date.now(),
+      })
+      const handle = yield* start({ code: "require('fs').writeSync(1, 'switched\\n')", session: session.id })
+      yield* handle.promote({ wake: wake.ops })
+      yield* handle.awaitExit
+      yield* Effect.sleep("900 millis")
+      expect(wake.prompts.length).toBe(1)
+      expect(wake.prompts[0].agent).toBe("plan")
+      expect(wake.prompts[0].variant).toBe("thinking")
+      expect(wake.prompts[0].model).toEqual({ providerID: "some-provider", modelID: "some-model" })
+    }),
+  30_000,
+)
+
+it.instance(
+  "reports a command that could not be started as an error, not an empty run",
+  () =>
+    Effect.gen(function* () {
+      const tasks = yield* ShellTasks.Service
+      // A working directory that does not exist fails at spawn on every
+      // platform, where a missing binary may be resolved by a shell first.
+      const missing = path.join((yield* TestInstance).directory, "no-such-directory")
+      const handle = yield* tasks.start({
+        command: ChildProcess.make(process.execPath, ["-e", "0"], { cwd: missing, stdin: "ignore" }),
+        display: "bad working directory",
+        cwd: missing,
+        sessionID,
+        messageID,
+        limits,
+        settings: settings(),
+      })
+      const info = yield* handle.awaitExit
+      expect(info.error).toBeTruthy()
+      expect(info.exitCode).toBeNull()
     }),
   30_000,
 )
@@ -189,12 +298,14 @@ it.instance(
       expect(stopped.prompts.length).toBe(0)
 
       const observed = recorder()
-      const quick = yield* start({ code: "require('fs').writeSync(1, 'hi\\n')" })
+      const quick = yield* start({ code: "setTimeout(() => require('fs').writeSync(1, 'hi\\n'), 400)" })
       yield* quick.promote({ wake: observed.ops })
-      yield* quick.awaitExit
-      // Reading the finished task before the batch fires means the agent has
-      // already seen the result, so there is nothing to wake it for.
-      yield* tasks.read(sessionID, quick.id, { offset: 0 })
+      // A read that is already waiting when the task ends sees the terminal
+      // state first, so the agent has the result and there is nothing to wake
+      // it for. Waiting first also keeps this off the batch timer's heels.
+      yield* tasks.read(sessionID, quick.id, { offset: 0, waitMs: 20_000 })
+      const read = yield* tasks.read(sessionID, quick.id, { waitMs: 20_000 })
+      expect(read?.info.status).toBe("exited")
       yield* Effect.sleep("900 millis")
       expect(observed.prompts.length).toBe(0)
     }),

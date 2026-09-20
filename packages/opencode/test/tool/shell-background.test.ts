@@ -343,6 +343,41 @@ it.instance(
 )
 
 it.instance(
+  "refuses an explicit background request at the cap instead of holding the command",
+  () =>
+    cleanly(
+      Effect.gen(function* () {
+        const tasks = yield* ShellTasks.Service
+        const tool = yield* shell()
+        yield* tool.execute({ command: say([], { holdMs: 600000 }), background: true }, context())
+        const started = Date.now()
+        const second = yield* tool.execute({ command: say([], { holdMs: 600000 }), background: true }, context())
+        // No foreground fallback: an explicit background request is answered now.
+        expect(Date.now() - started).toBeLessThan(20_000)
+        expect(second.output).toContain("did not start this command in the background")
+        expect(second.output).toContain("background shell tasks are already running")
+        expect((yield* tasks.running(sessionID)).length).toBe(1)
+      }),
+    ),
+  settle({ max_concurrent: 1 }),
+  90_000,
+)
+
+it.instance(
+  "is off unless the config turns it on",
+  () =>
+    Effect.gen(function* () {
+      const tool = yield* shell()
+      expect(tool.description).not.toContain("# Long commands")
+      const result = yield* tool.execute({ command: say(["plain"]) }, context())
+      expect(result.output.trim()).toBe("plain")
+    }),
+  // No background_shell key at all: the default.
+  {},
+  90_000,
+)
+
+it.instance(
   "leaves short commands exactly as they were",
   () =>
     cleanly(
