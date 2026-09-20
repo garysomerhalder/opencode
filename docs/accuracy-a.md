@@ -223,6 +223,13 @@ still user-role:
   user message, so a reminder mid-turn cannot change which tools the task gate allows. The "already
   continued" guard looks the turn's user message up by `lastUser.id` rather than scanning `msgs`,
   which comes from `filterCompacted` and is reordered for model consumption.
+
+  The same reordering is why `lastRealUser` compares messages with `MessageV2.isAfter` instead of
+  walking the array backwards. In a compacted session the newest user message sits at index 0, so
+  `findLast` would return a prompt from the retained tail — and in a long session that compacts, an
+  `@agent` turn would be granted or refused its exemption based on an earlier prompt. The ordering
+  lives in the helper rather than at the call sites, because the helper is shared with the
+  background-task wake and the next caller will not know the array is reordered.
 - **Undo and redo**: the revert boundary comes from the last real user message (`revert.ts`), so a
   revert cannot stop at a reminder and leave the user's prompt and its edits in place. The TUI's
   `/undo` and `/redo` and the app's `userMessages()` skip notes for the same reason.
@@ -256,10 +263,12 @@ Each feature was taken red first, then green.
   a step with no tool calls clears the streak.
 - `packages/opencode/test/session/todo-reminder.test.ts` (unit, 5): summary counts, the interval
   gate, one stop reminder per turn, nothing when every item is terminal.
-- `packages/opencode/test/session/harness-note.test.ts` (unit, 5): a `reminder` part makes a note and
+- `packages/opencode/test/session/harness-note.test.ts` (unit, 6): a `reminder` part makes a note and
   a synthetic text part does not (a compaction-continue message is not a note); `kind` reporting;
-  `lastRealUser` skips notes so an `@agent` turn keeps its exemption; nothing when the user has not
-  spoken; `build` carries the turn's agent, model, system and `autonomous` onto the note.
+  `lastRealUser` skips notes so an `@agent` turn keeps its exemption; it follows message order rather
+  than array order on a compacted list (red against the `findLast` version, which returned the
+  retained tail's prompt); nothing when the user has not spoken; `build` carries the turn's agent,
+  model, system and `autonomous` onto the note.
 - `packages/opencode/test/session/message-v2.test.ts` (+1): a reminder part reaches the model as
   user-role text — without this arm the model never sees the reminder at all.
 - `packages/opencode/test/session/accuracy-loop.test.ts` (integration, 10): the autonomy section is

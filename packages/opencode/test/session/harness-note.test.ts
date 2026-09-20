@@ -5,8 +5,11 @@ import { HarnessNote } from "../../src/session/harness-note"
 const part = (input: Record<string, unknown>) =>
   ({ id: "prt_" + Math.random().toString(36).slice(2), sessionID: "ses_1", messageID: "msg_1", ...input }) as any
 
-const message = (id: string, role: "user" | "assistant", parts: unknown[]) =>
-  ({ info: { id, role } as unknown as SessionV1.Info, parts: parts as SessionV1.Part[] }) as {
+const message = (id: string, role: "user" | "assistant", parts: unknown[], created = Number(id.split("_")[1] ?? 0)) =>
+  ({
+    info: { id, role, time: { created } } as unknown as SessionV1.Info,
+    parts: parts as SessionV1.Part[],
+  }) as {
     info: SessionV1.Info
     parts: SessionV1.Part[]
   }
@@ -61,6 +64,25 @@ describe("harness notes", () => {
 
   test("lastRealUser returns nothing when the user has not spoken", () => {
     expect(HarnessNote.lastRealUser([answer, note])).toBeUndefined()
+  })
+
+  test("lastRealUser follows message order, not array order", () => {
+    // filterCompacted hands the loop [compaction-user, summary, ...retained
+    // tail..., continue-user], so the newest user message can sit at index 0.
+    // Walking the array backwards would pick a prompt from the retained tail
+    // and compute the @agent exemption from the wrong turn.
+    const recent = message("msg_9", "user", [
+      part({ type: "text", text: "@build ship it" }),
+      part({ type: "agent", name: "build" }),
+    ])
+    const summary = message("msg_2", "assistant", [part({ type: "text", text: "summary" })])
+    const tailUser = message("msg_3", "user", [part({ type: "text", text: "older prompt" })])
+    const tailAnswer = message("msg_4", "assistant", [part({ type: "text", text: "older answer" })])
+    const reminder = message("msg_10", "user", [part({ type: "reminder", kind: "todo_continue", text: "finish up" })])
+
+    const found = HarnessNote.lastRealUser([recent, summary, tailUser, tailAnswer, reminder])
+    expect(String(found?.info.id)).toBe("msg_9")
+    expect(found?.parts.some((p) => p.type === "agent")).toBe(true)
   })
 
   test("build carries the turn's settings onto a new message", () => {

@@ -605,7 +605,12 @@ export function latest(msgs: WithParts[]) {
   return { user, assistant, finished, tasks }
 }
 
-function isAfter(info: Info, other?: Info) {
+/**
+ * Chronological ordering for messages, with the ID as a deterministic
+ * tie-breaker. Array position is not usable for this — see the note on
+ * `latest` — so anything picking "the newest message" compares with this.
+ */
+export function isAfter(info: Info, other?: Info) {
   if (!other) return true
   if (info.time.created !== other.time.created) return info.time.created > other.time.created
   return info.id > other.id

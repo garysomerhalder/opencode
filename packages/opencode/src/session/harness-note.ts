@@ -13,6 +13,7 @@
 // message here, so the consumer work stays in one place.
 
 import type { SessionV1 } from "@opencode-ai/core/v1/session"
+import { MessageV2 } from "./message-v2"
 import { MessageID, PartID } from "./schema"
 
 export const TYPE = "reminder"
@@ -31,11 +32,26 @@ export function kind(parts: ReadonlyArray<SessionV1.Part>): string | undefined {
   return parts.find(isNotePart)?.kind
 }
 
-/** The newest message the user actually sent, skipping harness notes. */
+/**
+ * The newest message the user actually sent, skipping harness notes.
+ *
+ * Ordering lives here on purpose. The loop's message list comes from
+ * `filterCompacted`, which reorders for model consumption
+ * ([compaction-user, summary, …retained tail…, continue-user]), so array
+ * position is not chronological: walking backwards can return a prompt from the
+ * retained tail while a newer one sits at index 0. Callers cannot be expected to
+ * know that, so this compares with the same `isAfter` semantics as
+ * `MessageV2.latest` rather than trusting position.
+ */
 export function lastRealUser<T extends { info: SessionV1.Info; parts: SessionV1.Part[] }>(
   messages: ReadonlyArray<T>,
 ): T | undefined {
-  return messages.findLast((message) => message.info.role === "user" && !isNote(message))
+  let latest: T | undefined
+  for (const message of messages) {
+    if (message.info.role !== "user" || isNote(message)) continue
+    if (MessageV2.isAfter(message.info, latest?.info)) latest = message
+  }
+  return latest
 }
 
 /**
