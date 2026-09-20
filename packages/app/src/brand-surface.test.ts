@@ -198,8 +198,19 @@ describe("brand switch: the three copies of the brand cannot drift", () => {
   // Three packages need the brand and no package is a dependency of all three: app depends on ui
   // and core, ui depends on neither, core depends on nothing. So each has a small copy of the
   // identity, and this is what keeps them the same.
+  //
+  // Both are outside the app project, so they are loaded by path (like i18n/parity.test.ts and the
+  // desktop dictionary in brand.test.ts) to keep `tsgo -b` happy. A literal specifier here is
+  // resolved statically and roots the file in app's program, which composite build mode then
+  // rejects with TS6307.
+  const uiBrandPath = "../../ui/src/brand"
+  const coreBrandPath = "../../core/src/brand"
+
   test("packages/ui/src/brand.ts agrees with packages/app/src/brand.ts", async () => {
-    const { LEGATUS_UI, resolveUiBrand } = await import("../../ui/src/brand")
+    const { LEGATUS_UI, resolveUiBrand } = (await import(uiBrandPath)) as {
+      LEGATUS_UI: { id: string; productName: string }
+      resolveUiBrand: (value: string | undefined) => unknown
+    }
     expect(LEGATUS_UI.id).toBe(LEGATUS.id)
     expect(LEGATUS_UI.productName).toBe(LEGATUS.productName)
     expect(resolveUiBrand("opencode")).toBeUndefined()
@@ -207,7 +218,7 @@ describe("brand switch: the three copies of the brand cannot drift", () => {
   })
 
   test("packages/core/src/brand.ts agrees too, and serves the CLI and the TUI", async () => {
-    const core = (await import("../../core/src/brand")) as {
+    const core = (await import(coreBrandPath)) as {
       LEGATUS: { id: string; productName: string; short: string }
       PRODUCT: string
       SHORT: string
