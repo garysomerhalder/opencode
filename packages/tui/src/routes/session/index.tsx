@@ -1391,6 +1391,19 @@ function UserMessage(props: {
 
   const compaction = createMemo(() => props.parts.find((x) => x.type === "compaction"))
 
+  // A reminder the harness wrote into the running turn (runaway guard, task
+  // completion). It is a system note, not the user speaking.
+  const harness = createMemo(() => {
+    const part = props.parts.find(
+      (x) => x.type === "text" && x.synthetic === true && typeof x.metadata?.accuracy_reminder === "string",
+    )
+    if (!part || part.type !== "text") return
+    const kind = String(part.metadata?.accuracy_reminder ?? "")
+    if (kind.startsWith("todo")) return "Task completion reminder"
+    if (kind.startsWith("runaway")) return "Runaway guard reminder"
+    return "Harness reminder"
+  })
+
   return (
     <>
       <Show when={text()}>
@@ -1461,6 +1474,11 @@ function UserMessage(props: {
           titleAlignment="center"
           borderColor={theme.borderActive}
         />
+      </Show>
+      <Show when={harness()}>
+        {(label) => (
+          <box marginTop={1} border={["top"]} title={` ${label()} `} titleAlignment="center" borderColor={theme.border} />
+        )}
       </Show>
     </>
   )

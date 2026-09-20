@@ -1201,6 +1201,18 @@ export function UserMessageDisplay(props: {
 
   const text = createMemo(() => textPart()?.text || "")
 
+  // Reminders the harness injected into a running turn (runaway guard, task
+  // completion) arrive as all-synthetic user messages. Show them as a system
+  // note rather than an empty bubble that looks like the user said nothing.
+  const harness = createMemo(() =>
+    props.parts?.some(
+      (p) =>
+        p.type === "text" &&
+        (p as TextPart).synthetic === true &&
+        typeof ((p as TextPart).metadata as Record<string, unknown> | undefined)?.["accuracy_reminder"] === "string",
+    ),
+  )
+
   const files = createMemo(() => (props.parts?.filter((p) => p.type === "file") as FilePart[]) ?? [])
 
   const attachments = createMemo(() => files().filter(attached))
@@ -1314,6 +1326,9 @@ export function UserMessageDisplay(props: {
 
   return (
     <div data-component="user-message" data-timeline-part-id={textPart()?.id}>
+      <Show when={!text() && harness()}>
+        <MessageDivider label={i18n.t("ui.messagePart.harnessReminder")} />
+      </Show>
       <Show when={!props.useV2Actions}>{renderAttachments()}</Show>
       <Show
         when={text()}

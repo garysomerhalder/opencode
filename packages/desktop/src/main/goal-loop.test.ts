@@ -3,6 +3,7 @@ import {
   completionReached,
   createGoalLoop,
   extractAssistantText,
+  isHarnessNote,
   type GoalLoopEvent,
   type GoalLoopServer,
   type GoalLoopStartInput,
@@ -27,6 +28,21 @@ function stubFetch(routes: Route[], calls: string[]) {
     const body = route.respond()
     return new Response(JSON.stringify(body), { status: 200 })
   }) as typeof fetch
+}
+
+/** An all-synthetic user message the server's accuracy harness injected mid-turn. */
+function harnessNote(id: string, kind = "runaway_guard") {
+  return {
+    info: { id, role: "user" },
+    parts: [
+      {
+        type: "text",
+        text: "<system-reminder>[runaway guard] change approach</system-reminder>",
+        synthetic: true,
+        metadata: { accuracy_reminder: kind },
+      },
+    ],
+  }
 }
 
 function assistantMessages(texts: string[]) {
@@ -91,6 +107,15 @@ describe("goal loop predicate", () => {
     expect(completionReached(extractAssistantText(payload), "GOAL_COMPLETE")).toBe(false)
   })
 
+  test("recognises a harness note and ignores ordinary user messages", () => {
+    expect(isHarnessNote(harnessNote("u9"))).toBe(true)
+    expect(isHarnessNote({ info: { id: "u1", role: "user" }, parts: [{ type: "text", text: "hi" }] })).toBe(false)
+    expect(
+      isHarnessNote({ info: { id: "u2", role: "user" }, parts: [{ type: "text", text: "x", synthetic: true }] }),
+    ).toBe(false)
+    expect(isHarnessNote({ info: { id: "m1", role: "assistant" }, parts: [{ type: "text", text: "x" }] })).toBe(false)
+  })
+
   test("completion marker must stand on its own line", () => {
     expect(completionReached("done\nGOAL_COMPLETE\nbye", "GOAL_COMPLETE")).toBe(true)
     expect(completionReached("almost GOAL_COMPLETE-ish", "GOAL_COMPLETE")).toBe(false)
@@ -124,6 +149,97 @@ describe("goal loop driver", () => {
     expect(loop.status()).toBe(null)
     expect(events.map((e) => e.type)).toEqual(["started", "completed"])
     expect(calls.some((c) => c.startsWith("POST /session?"))).toBe(true)
+  })
+
+  test("a harness reminder mid-turn does not hide the completion marker", async () => {
+    const polls = { n: 0 }
+    const events: GoalLoopEvent[] = []
+    const fetchImpl = stubFetch(
+      [
+        { method: "POST", path: "/session", respond: () => ({ id: "ses_note" }) },
+        { method: "POST", path: "/session/ses_note/prompt_async", respond: () => ({}) },
+        statusRoutes("ses_note", (call) => call === 1, polls),
+        {
+          method: "GET",
+          path: "/session/ses_note/message",
+          // The model emitted the marker, the server injected a todo reminder
+          // and the model kept working: one turn, marker included.
+          respond: () => [
+            { info: { id: "u1", role: "user" }, parts: [{ type: "text", text: "ship it" }] },
+            { info: { id: "m1", role: "assistant" }, parts: [{ type: "text", text: "all done\nGOAL_COMPLETE" }] },
+            harnessNote("u2", "todo_continue"),
+            { info: { id: "m2", role: "assistant" }, parts: [{ type: "text", text: "tidied the last todo" }] },
+          ],
+        },
+      ],
+      [],
+    )
+    const loop = createGoalLoop({
+      getServer: async () => server,
+      fetchImpl,
+      onEvent: (e) => events.push(e),
+      pollIntervalMs: 5,
+    })
+    await loop.start({ directory: "/repo", goal: "ship it" })
+    await waitFor(() => loop.status() === null)
+    expect(events.map((e) => e.type)).toEqual(["started", "completed"])
+  })
+
+  test("a trailing harness note is not mistaken for an unrun user prompt", async () => {
+    const polls = { n: 0 }
+    const events: GoalLoopEvent[] = []
+    const fetchImpl = stubFetch(
+      [
+        { method: "POST", path: "/session", respond: () => ({ id: "ses_tail" }) },
+        { method: "POST", path: "/session/ses_tail/prompt_async", respond: () => ({}) },
+        statusRoutes("ses_tail", (call) => call === 1, polls),
+        {
+          method: "GET",
+          path: "/session/ses_tail/message",
+          respond: () => [
+            { info: { id: "u1", role: "user" }, parts: [{ type: "text", text: "ship it" }] },
+            { info: { id: "m1", role: "assistant" }, parts: [{ type: "text", text: "all done\nGOAL_COMPLETE" }] },
+            harnessNote("u2"),
+          ],
+        },
+      ],
+      [],
+    )
+    const loop = createGoalLoop({
+      getServer: async () => server,
+      fetchImpl,
+      onEvent: (e) => events.push(e),
+      pollIntervalMs: 5,
+      startTimeoutMs: 50,
+    })
+    await loop.start({ directory: "/repo", goal: "ship it" })
+    await waitFor(() => loop.status() === null)
+    expect(events.map((e) => e.type)).toEqual(["started", "completed"])
+  })
+
+  test("prompts are sent as autonomous so the agent never waits on a question", async () => {
+    const polls = { n: 0 }
+    const bodies: unknown[] = []
+    const fetchImpl = (async (input: URL | RequestInfo, init?: RequestInit) => {
+      const url = new URL(String(input))
+      const method = (init?.method ?? "GET").toUpperCase()
+      if (url.pathname === "/session" && method === "POST") return json({ id: "ses_auto" })
+      if (url.pathname.endsWith("/prompt_async")) {
+        bodies.push(JSON.parse(String(init?.body ?? "{}")))
+        return json({})
+      }
+      if (url.pathname === "/session/status") {
+        polls.n += 1
+        return json(polls.n === 1 ? { ses_auto: { type: "busy" } } : {})
+      }
+      if (url.pathname.endsWith("/message")) return json(assistantMessages(["done\nGOAL_COMPLETE"]))
+      throw new Error(`unexpected request: ${method} ${url.pathname}`)
+    }) as typeof fetch
+    const loop = createGoalLoop({ getServer: async () => server, fetchImpl, pollIntervalMs: 5 })
+    await loop.start({ directory: "/repo", goal: "ship it" })
+    await waitFor(() => loop.status() === null)
+    expect(bodies).toHaveLength(1)
+    expect((bodies[0] as { autonomous?: boolean }).autonomous).toBe(true)
   })
 
   test("continues prompting until the iteration cap, then reports capped", async () => {

@@ -67,6 +67,10 @@ class TransientError extends Error {}
 type SessionMessage = {
   id: string | null
   role: unknown
+  // A user message the server's accuracy harness wrote itself (runaway guard or
+  // todo reminder). It belongs to the turn already running: it is neither a new
+  // user prompt to wait on nor a boundary the turn's output starts after.
+  harness: boolean
   aborted: boolean
   // set when the turn ended with an error other than an abort
   error: { message: string; statusCode: number | null; retryable: boolean } | null
@@ -156,6 +160,7 @@ function parseMessages(payload: unknown): SessionMessage[] {
       return {
         id: typeof info["id"] === "string" ? info["id"] : null,
         role: info["role"] ?? item["type"],
+        harness: isHarnessNote(item),
         aborted,
         error:
           !aborted && typeof error.name === "string"
@@ -199,9 +204,38 @@ function contextOf(messages: SessionMessage[]): { id: string | null; tokens: num
   return last.tokens === null ? null : { id: last.id, tokens: last.tokens }
 }
 
-// Assistant output of the latest turn: everything after the last user message.
-function turnText(messages: SessionMessage[]): string {
-  const start = messages.findLastIndex((message) => message.role === "user") + 1
+/**
+ * A harness note: an all-synthetic user message the server injected into a
+ * running turn (a runaway-guard or task-completion reminder). Recognised by the
+ * `accuracy_reminder` marker on its synthetic text part.
+ */
+export function isHarnessNote(item: unknown): boolean {
+  if (typeof item !== "object" || item === null) return false
+  const record = item as Record<string, unknown>
+  const info = (record["info"] ?? record) as Record<string, unknown>
+  const role = info["role"] ?? record["type"]
+  if (role !== "user") return false
+  const parts = record["parts"] ?? info["parts"] ?? record["content"]
+  if (!Array.isArray(parts) || parts.length === 0) return false
+  return parts.some((part) => {
+    if (typeof part !== "object" || part === null) return false
+    const entry = part as Record<string, unknown>
+    if (entry["type"] !== "text" || entry["synthetic"] !== true) return false
+    const metadata = entry["metadata"]
+    return (
+      typeof metadata === "object" &&
+      metadata !== null &&
+      typeof (metadata as Record<string, unknown>)["accuracy_reminder"] === "string"
+    )
+  })
+}
+
+// Assistant output of the latest turn: everything after the last real user
+// message. Harness notes are skipped, so a turn the server continued after its
+// own reminder still reads as one turn — including a completion marker the
+// model emitted before the reminder landed.
+export function turnText(messages: SessionMessage[]): string {
+  const start = messages.findLastIndex((message) => message.role === "user" && !message.harness) + 1
   return extractAssistantText(messages.slice(start).map((message) => message.raw))
 }
 
@@ -351,6 +385,10 @@ export function createGoalLoop(deps: GoalLoopDeps) {
       method: "POST",
       body: JSON.stringify({
         parts: [{ type: "text", text }],
+        // Nobody is at the keyboard for a goal-loop turn, even though the
+        // desktop client does expose a question tool. Tell the server, so the
+        // agent decides and reports instead of stopping to ask.
+        autonomous: true,
         ...(input.agent ? { agent: input.agent } : {}),
         ...(input.model ? { model: input.model } : {}),
       }),
@@ -565,7 +603,7 @@ export function createGoalLoop(deps: GoalLoopDeps) {
 
         const messages = await sessionMessages(server, sessionID)
         const last = messages.at(-1)
-        if (last?.role === "user" && last.id !== track.staleUserID) {
+        if (last?.role === "user" && !last.harness && last.id !== track.staleUserID) {
           // An admitted prompt (the loop's own or another client's) has not run
           // yet. Never send on top of it; wait for its turn instead.
           if (track.pendingUser?.id !== last.id) track.pendingUser = { id: last.id, at: now() }
