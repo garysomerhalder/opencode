@@ -145,7 +145,13 @@ describe("brand surface: the allow-list itself", () => {
     expect(ids.filter((id, index) => ids.indexOf(id) !== index)).toEqual([])
   })
 
-  test("no stale entries: every allowance still matches something", async () => {
+  // The shadow build (docs/legatus-shadow.md) renames most of these identifiers out of existence,
+  // so on that tree the allow-list is legitimately a superset of what is left — the shadow is
+  // strictly cleaner, not dirtier. Staleness is a brand-layer invariant, asserted on the tree the
+  // rename has not been applied to.
+  const renamed = read("packages/desktop/electron.vite.config.ts").includes("VITE_LEGATUS_BRAND")
+
+  test.if(!renamed)("no stale entries: every allowance still matches something", async () => {
     const seen = new Set([...(await scanDictionaries(true)), ...scanSource(true)].map((hit) => hit.id))
     expect(ALLOWLIST.map((entry) => entry.id).filter((id) => !seen.has(id))).toEqual([])
   })
