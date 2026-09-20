@@ -1,6 +1,7 @@
 import type { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { CLI, PRODUCT } from "@opencode-ai/core/brand"
+import { USERNAME_DEFAULT } from "@/server/auth"
 // CLI entry point for `opencode run` and `opencode --mini`.
 //
 // Handles three modes:
@@ -200,7 +201,7 @@ export const RunCommand = effectCmd({
       .option("username", {
         alias: ["u"],
         type: "string",
-        describe: "basic auth username (defaults to OPENCODE_SERVER_USERNAME or 'opencode')",
+        describe: `basic auth username (defaults to OPENCODE_SERVER_USERNAME or '${USERNAME_DEFAULT}')`,
       })
       .option("dir", {
         type: "string",

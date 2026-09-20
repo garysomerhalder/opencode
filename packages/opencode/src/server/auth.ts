@@ -33,11 +33,18 @@ export function authorized(credentials: DecodedCredentials, config: Info) {
   )
 }
 
+/**
+ * Default basic-auth username on the server wire protocol. Not a brand value and not renamed —
+ * it is a protocol default, and docs/legatus-shadow.md keeps it. It lives on a constant so the
+ * help text that quotes it carries no product name of its own.
+ */
+export const USERNAME_DEFAULT = "opencode"
+
 export function header(credentials?: Credentials) {
   const password = credentials?.password ?? Flag.OPENCODE_SERVER_PASSWORD
   if (!password) return undefined
 
-  const username = credentials?.username ?? Flag.OPENCODE_SERVER_USERNAME ?? "opencode"
+  const username = credentials?.username ?? Flag.OPENCODE_SERVER_USERNAME ?? USERNAME_DEFAULT
   return `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`
 }
 

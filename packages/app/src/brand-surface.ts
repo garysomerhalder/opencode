@@ -446,9 +446,9 @@ export const ALLOWLIST: readonly Allowance[] = [
     "Names an environment variable in help text. Env var names are not product copy; the shadow rename owns them (R1).",
     [
       "packages/opencode/src/cli/cmd/attach.ts:basic auth password (defaults to OPENCODE_SERVER_PASSWORD)",
-      "packages/opencode/src/cli/cmd/attach.ts:basic auth username (defaults to OPENCODE_SERVER_USERNAME or 'opencode')",
+      "packages/opencode/src/cli/cmd/attach.ts:basic auth username (defaults to OPENCODE_SERVER_USERNAME or '${USERNAME_DEFAULT}')",
       "packages/opencode/src/cli/cmd/run.ts:basic auth password (defaults to OPENCODE_SERVER_PASSWORD)",
-      "packages/opencode/src/cli/cmd/run.ts:basic auth username (defaults to OPENCODE_SERVER_USERNAME or 'opencode')",
+      "packages/opencode/src/cli/cmd/run.ts:basic auth username (defaults to OPENCODE_SERVER_USERNAME or '${USERNAME_DEFAULT}')",
       "packages/opencode/src/cli/cmd/serve.ts:Warning: OPENCODE_SERVER_PASSWORD is not set; server is unsecured.",
       "packages/opencode/src/cli/cmd/web.ts:!  OPENCODE_SERVER_PASSWORD is not set; server is unsecured.",
     ],
