@@ -46,6 +46,10 @@ import type {
   ExperimentalSessionBackgroundResponses,
   ExperimentalSessionListErrors,
   ExperimentalSessionListResponses,
+  ExperimentalShellTaskListErrors,
+  ExperimentalShellTaskListResponses,
+  ExperimentalShellTaskStopAllErrors,
+  ExperimentalShellTaskStopAllResponses,
   ExperimentalWorkspaceAdapterListErrors,
   ExperimentalWorkspaceAdapterListResponses,
   ExperimentalWorkspaceCreateErrors,
@@ -898,6 +902,80 @@ export class Session extends HeyApiClient {
   }
 }
 
+export class ShellTask extends HeyApiClient {
+  /**
+   * List background shell tasks
+   *
+   * List the background shell tasks of this instance, or of one session when sessionID is given.
+   */
+  public list<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      sessionID?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "sessionID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      ExperimentalShellTaskListResponses,
+      ExperimentalShellTaskListErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/shell/task",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Stop background shell tasks
+   *
+   * Stop every running background shell task and kill its process tree, optionally limited to one session.
+   */
+  public stopAll<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      sessionID?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "sessionID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      ExperimentalShellTaskStopAllResponses,
+      ExperimentalShellTaskStopAllErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/shell/task/stop",
+      ...options,
+      ...params,
+    })
+  }
+}
+
 export class Resource extends HeyApiClient {
   /**
    * Get MCP resources
@@ -1271,6 +1349,11 @@ export class Experimental extends HeyApiClient {
   private _session?: Session
   get session(): Session {
     return (this._session ??= new Session({ client: this.client }))
+  }
+
+  private _shellTask?: ShellTask
+  get shellTask(): ShellTask {
+    return (this._shellTask ??= new ShellTask({ client: this.client }))
   }
 
   private _resource?: Resource

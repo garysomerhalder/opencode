@@ -2056,6 +2056,20 @@ export type Config = {
       todo_reminder_interval?: number
     }
     policies?: Array<ConfigV2ExperimentalPolicy>
+    /**
+     * Background shell tasks: a long foreground command keeps running as a background task instead of being killed
+     */
+    background_shell?:
+      | boolean
+      | {
+          enabled?: boolean
+          yield_after_ms?: number
+          max_lifetime_ms?: number
+          max_concurrent?: number
+          max_output_bytes?: number
+          idle_reap_ms?: number
+          sweep_ms?: number
+        }
   }
 }
 
@@ -2275,6 +2289,23 @@ export type GlobalSession = {
   }
   project: ProjectSummary | null
 }
+
+export type ShellTask = {
+  id: string
+  sessionID: string
+  command: string
+  cwd: string
+  status: "running" | "exited" | "stopped" | "timed_out" | "cancelled"
+  pid?: number
+  exitCode: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  startedAt: number
+  endedAt?: number
+  bytes: number
+  file?: string
+  reason?: string
+}
+
+export type ShellTasks = Array<ShellTask>
 
 export type McpResource = {
   name: string
@@ -7907,6 +7938,67 @@ export type ExperimentalSessionBackgroundResponses = {
 
 export type ExperimentalSessionBackgroundResponse =
   ExperimentalSessionBackgroundResponses[keyof ExperimentalSessionBackgroundResponses]
+
+export type ExperimentalShellTaskListData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+    sessionID?: string
+  }
+  url: "/experimental/shell/task"
+}
+
+export type ExperimentalShellTaskListErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type ExperimentalShellTaskListError = ExperimentalShellTaskListErrors[keyof ExperimentalShellTaskListErrors]
+
+export type ExperimentalShellTaskListResponses = {
+  /**
+   * Background shell tasks
+   */
+  200: ShellTasks
+}
+
+export type ExperimentalShellTaskListResponse =
+  ExperimentalShellTaskListResponses[keyof ExperimentalShellTaskListResponses]
+
+export type ExperimentalShellTaskStopAllData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+    sessionID?: string
+  }
+  url: "/experimental/shell/task/stop"
+}
+
+export type ExperimentalShellTaskStopAllErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type ExperimentalShellTaskStopAllError =
+  ExperimentalShellTaskStopAllErrors[keyof ExperimentalShellTaskStopAllErrors]
+
+export type ExperimentalShellTaskStopAllResponses = {
+  /**
+   * Stopped background shell tasks
+   */
+  200: ShellTasks
+}
+
+export type ExperimentalShellTaskStopAllResponse =
+  ExperimentalShellTaskStopAllResponses[keyof ExperimentalShellTaskStopAllResponses]
 
 export type ExperimentalResourceListData = {
   body?: never

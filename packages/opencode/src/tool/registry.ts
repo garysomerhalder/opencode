@@ -5,6 +5,9 @@ import { PlanExitTool } from "./plan"
 import { Session } from "@/session/session"
 import { QuestionTool } from "./question"
 import { ShellTool } from "./shell"
+import { ShellOutputTool, ShellStopTool } from "./shell/tools"
+import { ShellTasks } from "./shell/tasks"
+import { ShellID } from "./shell/id"
 import { EditTool } from "./edit"
 import { GlobTool } from "./glob"
 import { GrepTool } from "./grep"
@@ -108,6 +111,8 @@ const layer = Layer.effect(
     const webfetch = yield* WebFetchTool
     const websearch = yield* WebSearchTool
     const shell = yield* ShellTool
+    const shellOutput = yield* ShellOutputTool
+    const shellStop = yield* ShellStopTool
     const globtool = yield* GlobTool
     const writetool = yield* WriteTool
     const edit = yield* EditTool
@@ -203,7 +208,7 @@ const layer = Layer.effect(
           }
         }
 
-        yield* config.get()
+        const backgroundShell = ShellTasks.settings((yield* config.get()).experimental?.background_shell).enabled
         const questionEnabled = ["app", "cli", "desktop"].includes(flags.client) || flags.enableQuestionTool
 
         const tool = yield* Effect.all({
@@ -221,6 +226,8 @@ const layer = Layer.effect(
           skill: Tool.init(skilltool),
           patch: Tool.init(patchtool),
           question: Tool.init(question),
+          shellOutput: Tool.init(shellOutput),
+          shellStop: Tool.init(shellStop),
           lsp: Tool.init(lsptool),
           plan: Tool.init(plan),
           ...(codeModeTool ? { execute: Tool.init(codeModeTool) } : {}),
@@ -232,6 +239,7 @@ const layer = Layer.effect(
             tool.invalid,
             ...(questionEnabled ? [tool.question] : []),
             tool.shell,
+            ...(backgroundShell ? [tool.shellOutput, tool.shellStop] : []),
             tool.read,
             tool.glob,
             tool.grep,
@@ -292,6 +300,12 @@ const layer = Layer.effect(
       const filtered = (yield* all()).filter((tool) => {
         if (tool.id === WebSearchTool.id) {
           return webSearchEnabled(input.providerID, { exa: flags.enableExa, parallel: flags.enableParallel })
+        }
+
+        // Reading or stopping a background shell task is meaningless for an
+        // agent that cannot run shell commands in the first place.
+        if (tool.id === ShellOutputTool.id || tool.id === ShellStopTool.id) {
+          return Permission.evaluate(ShellID.ToolID, "*", input.agent.permission).action !== "deny"
         }
 
         const usePatch =
@@ -436,6 +450,7 @@ export const node = LayerNode.make({
     Skill.node,
     Session.node,
     BackgroundJob.node,
+    ShellTasks.node,
     Provider.node,
     LSP.node,
     Instruction.node,

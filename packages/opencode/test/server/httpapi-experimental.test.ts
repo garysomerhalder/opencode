@@ -197,6 +197,34 @@ describe("experimental HttpApi", () => {
     },
   )
 
+  // The served app builds its own service graph, so these cover routing, the
+  // query shape and the response schema rather than live task state; the task
+  // lifecycle itself is covered in test/tool/shell-tasks.test.ts.
+  it.instance("serves the background shell task endpoints", () =>
+    Effect.gen(function* () {
+      const tmp = yield* TestInstance
+      const session = yield* createSession()
+
+      const listed = yield* request(ExperimentalPaths.shellTasks, tmp.directory)
+      expect(listed.status).toBe(200)
+      expect(yield* json(listed)).toEqual([])
+
+      const scoped = yield* request(`${ExperimentalPaths.shellTasks}?sessionID=${session.id}`, tmp.directory)
+      expect(scoped.status).toBe(200)
+      expect(yield* json(scoped)).toEqual([])
+
+      const stopped = yield* request(ExperimentalPaths.shellTasksStop, tmp.directory, { method: "POST" })
+      expect(stopped.status).toBe(200)
+      expect(yield* json(stopped)).toEqual([])
+
+      const stoppedScoped = yield* request(`${ExperimentalPaths.shellTasksStop}?sessionID=${session.id}`, tmp.directory, {
+        method: "POST",
+      })
+      expect(stoppedScoped.status).toBe(200)
+      expect(yield* json(stoppedScoped)).toEqual([])
+    }),
+  )
+
   it.instance("returns declared worktree errors", () =>
     Effect.gen(function* () {
       const tmp = yield* TestInstance

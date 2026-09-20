@@ -10,6 +10,7 @@ import { Session } from "@/session/session"
 import type { SessionID } from "@/session/schema"
 import { ToolJsonSchema } from "@/tool/json-schema"
 import { ToolRegistry } from "@/tool/registry"
+import { ShellTasks } from "@/tool/shell/tasks"
 import { Worktree } from "@/worktree"
 import { Effect, Option } from "effect"
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse"
@@ -34,6 +35,7 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
     const worktreeSvc = yield* Worktree.Service
     const sessions = yield* Session.Service
     const background = yield* BackgroundJob.Service
+    const tasks = yield* ShellTasks.Service
     const flags = yield* RuntimeFlags.Service
 
     const capabilities = Effect.fn("ExperimentalHttpApi.capabilities")(function* () {
@@ -171,6 +173,36 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
       return promoted.some((job) => job !== undefined)
     })
 
+    const shellTaskInfo = (info: ShellTasks.Info) => ({
+      id: info.id,
+      sessionID: info.sessionID,
+      command: info.command,
+      cwd: info.cwd,
+      status: info.status,
+      ...(info.pid === undefined ? {} : { pid: info.pid }),
+      exitCode: info.exitCode,
+      startedAt: info.startedAt,
+      ...(info.endedAt === undefined ? {} : { endedAt: info.endedAt }),
+      bytes: info.bytes,
+      ...(info.file ? { file: info.file } : {}),
+      ...(info.reason ? { reason: info.reason } : {}),
+    })
+
+    const shellTasks = Effect.fn("ExperimentalHttpApi.shellTasks")(function* (ctx: {
+      query: { sessionID?: SessionID }
+    }) {
+      return (yield* tasks.list(ctx.query.sessionID)).map(shellTaskInfo)
+    })
+
+    const shellTasksStop = Effect.fn("ExperimentalHttpApi.shellTasksStop")(function* (ctx: {
+      query: { sessionID?: SessionID }
+    }) {
+      const stopped = yield* tasks.stopAll(
+        ctx.query.sessionID ? { sessionID: ctx.query.sessionID } : {},
+      )
+      return stopped.map(shellTaskInfo)
+    })
+
     const resource = Effect.fn("ExperimentalHttpApi.resource")(function* () {
       return yield* mcp.resources()
     })
@@ -188,6 +220,8 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
       .handle("worktreeReset", worktreeReset)
       .handle("session", session)
       .handle("sessionBackground", sessionBackground)
+      .handle("shellTasks", shellTasks)
+      .handle("shellTasksStop", shellTasksStop)
       .handle("resource", resource)
   }),
 )

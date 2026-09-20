@@ -14,11 +14,14 @@ import { Effect, Exit, Schema, Scope } from "effect"
 import { EffectBridge } from "@/effect/bridge"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Database } from "@opencode-ai/core/database/database"
+import { SessionWake } from "./wake"
 
 export interface TaskPromptOps {
   cancel(sessionID: SessionID): Effect.Effect<void>
   resolvePromptParts(template: string): Effect.Effect<SessionPrompt.PromptInput["parts"]>
   prompt(input: SessionPrompt.PromptInput): Effect.Effect<SessionV1.WithParts>
+  /** Runs the session loop. Used to answer a synthetic message a running turn did not pick up. */
+  loop?(sessionID: SessionID): Effect.Effect<SessionV1.WithParts>
 }
 
 const id = "task"
@@ -229,28 +232,22 @@ export const TaskTool = Tool.define(
         text: string,
       ) {
         const currentParent = yield* sessions.get(ctx.sessionID)
-        yield* ops
-          .prompt({
-            sessionID: ctx.sessionID,
-            agent: currentParent.agent ?? ctx.agent,
-            variant,
-            parts: [
-              {
-                type: "text",
-                synthetic: true,
-                text: renderOutput({
-                  sessionID: nextSession.id,
-                  state,
-                  summary:
-                    state === "completed"
-                      ? `Background task completed: ${params.description}`
-                      : `Background task failed: ${params.description}`,
-                  text,
-                }),
-              },
-            ],
-          })
-          .pipe(Effect.ignore, Effect.forkIn(scope, { startImmediately: true }))
+        yield* SessionWake.deliver({
+          sessions,
+          ops,
+          sessionID: ctx.sessionID,
+          kind: "subagent_result",
+          label: state === "completed" ? "background subagent finished" : "background subagent failed",
+          text: renderOutput({
+            sessionID: nextSession.id,
+            state,
+            summary:
+              state === "completed"
+                ? `Background task completed: ${params.description}`
+                : `Background task failed: ${params.description}`,
+            text,
+          }),
+        }).pipe(Effect.ignore, Effect.forkIn(scope, { startImmediately: true }))
       })
 
       const notify = Effect.fn("TaskTool.notifyBackgroundResult")(function* (jobID: string) {

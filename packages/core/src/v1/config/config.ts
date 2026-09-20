@@ -213,6 +213,38 @@ export const Info = Schema.Struct({
       policies: Schema.optional(Schema.mutable(Schema.Array(ConfigExperimental.Policy))).annotate({
         description: "Policy statements applied to supported resources, such as provider access",
       }),
+      background_shell: Schema.optional(
+        Schema.Union([
+          Schema.Boolean,
+          Schema.Struct({
+            enabled: Schema.optional(Schema.Boolean).annotate({
+              description: "Soft-yield long shell commands to background tasks. Enabled by default.",
+            }),
+            yield_after_ms: Schema.optional(PositiveInt).annotate({
+              description: "How long a foreground shell command runs before it yields as a background task",
+            }),
+            max_lifetime_ms: Schema.optional(PositiveInt).annotate({
+              description: "Hard limit on how long a background shell task may run before it is terminated",
+            }),
+            max_concurrent: Schema.optional(PositiveInt).annotate({
+              description: "Maximum number of running background shell tasks",
+            }),
+            max_output_bytes: Schema.optional(PositiveInt).annotate({
+              description: "Maximum number of bytes captured to a background shell task's output file",
+            }),
+            idle_reap_ms: Schema.optional(PositiveInt).annotate({
+              description:
+                "Terminate a background shell task after its session has been idle this long with no output reads",
+            }),
+            sweep_ms: Schema.optional(PositiveInt).annotate({
+              description: "How often background shell tasks are checked against the lifetime and idle limits",
+            }),
+          }),
+        ]),
+      ).annotate({
+        description:
+          "Background shell tasks: a long foreground command keeps running as a background task instead of being killed",
+      }),
     }),
   ),
 }).annotate({ identifier: "Config" })

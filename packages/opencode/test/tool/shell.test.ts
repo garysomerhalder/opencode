@@ -8,6 +8,7 @@ import path from "path"
 import { Config } from "@/config/config"
 import { Shell } from "@opencode-ai/core/shell"
 import { ShellTool } from "../../src/tool/shell"
+import { ShellTasks } from "../../src/tool/shell/tasks"
 import { Filesystem } from "@/util/filesystem"
 import { provideInstance, testInstanceStoreLayer, tmpdirScoped } from "../fixture/fixture"
 import type { Permission } from "../../src/permission"
@@ -32,6 +33,7 @@ const shellLayer = Layer.mergeAll(
       Config.node,
       Agent.node,
       RuntimeFlags.node,
+      ShellTasks.node,
     ]),
   ),
   testInstanceStoreLayer,
@@ -1037,7 +1039,9 @@ describe("tool.shell abort", () => {
           expect(collected.length).toBeGreaterThan(0)
         }),
       ),
-    15_000,
+    // Killing a process tree takes seconds on Windows; 15s was already marginal
+    // before background tasks existed.
+    30_000,
   )
 
   it.live(
@@ -1054,27 +1058,30 @@ describe("tool.shell abort", () => {
           expect(result.output).toContain("retry with a larger timeout value in milliseconds")
         }),
       ),
-    15_000,
+    // Killing a process tree takes seconds on Windows, so 15s was not enough
+    // for this to pass reliably even before background tasks existed.
+    30_000,
   )
 
-  it.live(
+  // Without an explicit timeout, a long command yields to a background task
+  // instead of being killed, so this default only applies when background shell
+  // tasks are turned off. See test/tool/shell-background.test.ts for the rest.
+  it.instance(
     "uses RuntimeFlags bashDefaultTimeoutMs when timeout is omitted",
     () =>
-      runIn(
-        projectRoot,
-        Effect.gen(function* () {
-          const tool = yield* initShell()
-          expect(tool.description).toContain("commands will time out after 500ms")
-          const result = yield* tool.execute(
-            {
-              command: `sleep 60`,
-            },
-            ctx,
-          )
-          expect(result.output).toContain("exceeding timeout 500 ms")
-        }),
-      ).pipe(Effect.provide(RuntimeFlags.layer({ bashDefaultTimeoutMs: 500 }))),
-    15_000,
+      Effect.gen(function* () {
+        const tool = yield* initShell()
+        expect(tool.description).toContain("commands will time out after 500ms")
+        const result = yield* tool.execute(
+          {
+            command: `sleep 60`,
+          },
+          ctx,
+        )
+        expect(result.output).toContain("exceeding timeout 500 ms")
+      }).pipe(Effect.provide(RuntimeFlags.layer({ bashDefaultTimeoutMs: 500 }))),
+    { config: { experimental: { background_shell: false } } },
+    20_000,
   )
 
   if (process.platform !== "win32") {
