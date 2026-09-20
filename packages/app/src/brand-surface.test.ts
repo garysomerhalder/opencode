@@ -219,8 +219,12 @@ describe("brand switch: the three copies of the brand cannot drift", () => {
     // same way electron.vite.config.ts defaults the desktop build to it.
     expect(core.PRODUCT).toBe(LEGATUS.productName)
     expect(core.SHORT).toBe(LEGATUS.short)
-    // The binary's name is NOT a brand value — the brand layer never renames binaries.
-    expect(core.CLI).toBe("opencode")
+    // The binary's name is NOT a brand value — the brand layer never renames binaries, the shadow
+    // rename script does (R14). So rather than pinning it to a literal, pin it to the truth: every
+    // command this app prints for the user to type has to name the binary that actually exists.
+    // This holds in both trees and fails if either side is renamed without the other.
+    const bin = Object.keys(JSON.parse(read("packages/opencode/package.json")).bin ?? {})
+    expect(bin).toContain(core.CLI)
   })
 
   test("both CLI builds define the brand, so a packaged binary carries the switch", () => {
