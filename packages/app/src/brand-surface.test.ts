@@ -19,6 +19,12 @@ const SOURCE_ROOTS = [
   join(ROOT, "packages/app/src"),
   join(ROOT, "packages/ui/src"),
   join(ROOT, "packages/desktop/src"),
+  // The CLI and the TUI are a product surface too, and they are reachable without ever leaving the
+  // desktop app: it embeds a terminal. A user who has never seen a shell can still be told to run
+  // `opencode auth login`.
+  join(ROOT, "packages/opencode/src/cli"),
+  join(ROOT, "packages/cli/src"),
+  join(ROOT, "packages/tui/src"),
 ] as const
 
 const SOURCE_FILES = [join(ROOT, "packages/desktop/src/renderer/index.html")] as const
@@ -119,6 +125,37 @@ describe("brand surface: the mark", () => {
     }
   })
 
+  test("the CLI and TUI wordmarks follow the brand, and there is only one copy of the art", () => {
+    // Four things spell the product name in half-block glyphs: the TUI home screen, the CLI's TTY
+    // logo, the CLI's piped banner, and the session epilogue. A fourth copy of the art used to be
+    // inline in util/presentation.ts, where it stayed on "opencode" while everything around it was
+    // branded. They all come from one module now, and that module reads the brand.
+    const art = read("packages/tui/src/logo.ts")
+    expect(art).toContain('import { Brand } from "@opencode-ai/core/brand"')
+    for (const name of ["logo", "wordmark", "initial"]) {
+      expect({ name, switched: art.includes(`export const ${name} = Brand?.id === "legatus"`) }).toEqual({
+        name,
+        switched: true,
+      })
+    }
+    // Upstream's glyphs are still there, for the brand-off build.
+    expect(art).toContain("█▀▀█ █▀▀█ █▀▀█ █▀▀▄")
+    // …and nobody re-inlines their own copy.
+    for (const file of [
+      "packages/tui/src/util/presentation.ts",
+      "packages/opencode/src/cli/ui.ts",
+      "packages/opencode/src/cli/cmd/run/splash.ts",
+    ]) {
+      expect({ file, inlined: /["'`]█[▀▄_^~ █]{3}/.test(read(file)) }).toEqual({ file, inlined: false })
+    }
+  })
+
+  test("the product's initial is the splash badge, not the OpenCode Go 'O'", () => {
+    const splash = read("packages/opencode/src/cli/cmd/run/splash.ts")
+    expect(splash).toContain("initial.slice(1)")
+    expect(splash).not.toContain("go.right.slice(1)")
+  })
+
   test("the new-session hero draws the Legatus lockup, not letterforms of its own", () => {
     const source = read("packages/desktop/src/renderer/brand/wordmark-v2.tsx")
     expect(source).toContain("legatus-lockup.svg")
@@ -157,12 +194,38 @@ describe("brand surface: the allow-list itself", () => {
   })
 })
 
-describe("brand switch: the ui copy of the brand cannot drift", () => {
+describe("brand switch: the three copies of the brand cannot drift", () => {
+  // Three packages need the brand and no package is a dependency of all three: app depends on ui
+  // and core, ui depends on neither, core depends on nothing. So each has a small copy of the
+  // identity, and this is what keeps them the same.
   test("packages/ui/src/brand.ts agrees with packages/app/src/brand.ts", async () => {
     const { LEGATUS_UI, resolveUiBrand } = await import("../../ui/src/brand")
     expect(LEGATUS_UI.id).toBe(LEGATUS.id)
     expect(LEGATUS_UI.productName).toBe(LEGATUS.productName)
     expect(resolveUiBrand("opencode")).toBeUndefined()
     expect(resolveUiBrand(undefined)).toBeUndefined()
+  })
+
+  test("packages/core/src/brand.ts agrees too, and serves the CLI and the TUI", async () => {
+    const core = (await import("../../core/src/brand")) as {
+      LEGATUS: { id: string; productName: string; short: string }
+      PRODUCT: string
+      SHORT: string
+      CLI: string
+    }
+    expect(core.LEGATUS.id).toBe(LEGATUS.id)
+    expect(core.LEGATUS.productName).toBe(LEGATUS.productName)
+    // No build define and no OPENCODE_BRAND in the environment: the CLI defaults to the brand, the
+    // same way electron.vite.config.ts defaults the desktop build to it.
+    expect(core.PRODUCT).toBe(LEGATUS.productName)
+    expect(core.SHORT).toBe(LEGATUS.short)
+    // The binary's name is NOT a brand value — the brand layer never renames binaries.
+    expect(core.CLI).toBe("opencode")
+  })
+
+  test("both CLI builds define the brand, so a packaged binary carries the switch", () => {
+    for (const script of ["packages/opencode/script/build.ts", "packages/opencode/script/build-node.ts"]) {
+      expect({ script, defined: read(script).includes("OPENCODE_BRAND:") }).toEqual({ script, defined: true })
+    }
   })
 })

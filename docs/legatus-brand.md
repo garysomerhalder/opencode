@@ -128,12 +128,44 @@ are grouped so a reviewer reads ~15 reasons rather than 140 lines, and three met
 list honest: every entry carries a reason, no entry is duplicated, and **no entry is stale** — an
 allowance that no longer matches anything fails the build.
 
+### The CLI and the TUI
+
+They are a product surface too, and they are reachable without ever leaving the desktop app,
+because it embeds a terminal: a user who has never opened a shell can still be told to run
+`opencode auth login`.
+
+They cannot use `packages/app/src/brand.ts` — they are bundled by Bun, not Vite, and
+`packages/opencode` deliberately does not depend on `packages/app`. So the switch is expressed with
+the seam those builds already use, a bare global that `script/build.ts` and `script/build-node.ts`
+define, with an env fallback for `bun dev`: `packages/core/src/brand.ts`.
+
+Two naming axes, and the difference matters:
+
+| | | |
+|---|---|---|
+| `PRODUCT` / `SHORT` | the product's name and its two-letter form | brand layer — becomes "Legatus" / "LG" |
+| `CLI` | the name the binary is invoked by, for commands the user is told to type | **not** a brand value. The brand layer never renames binaries; the shadow rename owns it (R14). Keeping every printed command on one constant is what makes the two agree — rename the binary and every hint follows, and in a tree where the binary really is `opencode`, the hints still tell the truth. |
+
+So `run Legatus with a message` (product) but `` Run `opencode auth login` `` (binary, whatever it
+is in this tree).
+
+Three copies of the brand identity now exist — `packages/app`, `packages/ui`, `packages/core` —
+because no package is a dependency of all three (app depends on ui and core; ui depends on
+neither; core depends on nothing). They are pinned to each other by `brand-surface.test.ts`.
+
 ### What the gate cannot see
 
-- **Artwork.** A wordmark is letterform paths; no regex reads it. The upstream wordmark and logo
-  are swapped as whole modules by `electron.vite.config.ts`, and the test asserts the aliases
-  exist, that each replacement exports what the module it replaces exports, that the hero draws
-  the Legatus lockup, and that upstream's wordmark is left untouched for the brand-off build.
+- **Artwork.** A wordmark is letterform paths or half-block glyphs; no regex reads it. There are
+  five: the desktop hero, the TUI home screen, the CLI's TTY logo, the CLI's piped banner and the
+  session epilogue — plus the splash badge, which is a single letter and so is art *and* an
+  initialism. The desktop one is swapped as a module by `electron.vite.config.ts`; the four
+  terminal ones now all come from `packages/tui/src/logo.ts`, which reads the brand. (One of them
+  was an inline copy in `util/presentation.ts`, quietly still spelling "opencode".) The test
+  asserts the aliases exist, that the art module is brand-switched, that nobody re-inlines a
+  copy, and that upstream's glyphs are still there for the brand-off build.
+- **Initialisms.** "OC" is OpenCode, and `/opencode/i` cannot see it. The terminal title
+  (`OC | <session>`) and the `oc-2` theme label had to be found by reading, not scanning, and are
+  listed in the brand rather than discovered by it.
 - **Text fetched at runtime.** The "what's new" highlights come from upstream's
   `changelog.json`. They are upstream's own release notes, so they name upstream, and nothing in
   this repo can rewrite them.

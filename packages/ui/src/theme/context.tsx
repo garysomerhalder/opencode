@@ -45,7 +45,9 @@ function knownThemes() {
 }
 
 const names: Record<string, string> = {
-  "oc-2": "OC-2",
+  // "OC-2" is an OpenCode initialism, invisible to the brand-surface scan. Same treatment as
+  // `opencode` below: the label follows the brand, the persisted id does not.
+  "oc-2": activeUiBrand()?.upstreamThemeNameV2 ?? "OC-2",
   amoled: "AMOLED",
   aura: "Aura",
   ayu: "Ayu",

@@ -1,7 +1,8 @@
-const logo = {
-  left: ["                   ", "█▀▀█ █▀▀█ █▀▀█ █▀▀▄", "█__█ █__█ █^^^ █__█", "▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀~~▀"],
-  right: ["             ▄     ", "█▀▀▀ █▀▀█ █▀▀█ █▀▀█", "█___ █__█ █__█ █^^^", "▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀"],
-}
+// A fourth copy of the wordmark used to live here, inline. It is art, so it stayed on the upstream
+// product name while everything around it was branded — the same way the desktop hero did. It now
+// comes from the one art module, which follows the brand switch.
+import { logo } from "../logo"
+import { CLI } from "@opencode-ai/core/brand"
 
 const reset = "\x1b[0m"
 const bold = "\x1b[1m"
@@ -32,7 +33,7 @@ export function sessionEpilogue(input: { title: string; sessionID?: string }) {
     ...wordmark("  "),
     "",
     `  ${weak("Session")}${bold}${input.title}${reset}`,
-    `  ${weak("Continue")}${bold}opencode -s ${input.sessionID}${reset}`,
+    `  ${weak("Continue")}${bold}${CLI} -s ${input.sessionID}${reset}`,
     "",
   ].join("\n")
 }

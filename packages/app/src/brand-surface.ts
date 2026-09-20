@@ -367,6 +367,186 @@ export const ALLOWLIST: readonly Allowance[] = [
       'packages/app/src/entry.tsx:http://${import.meta.env.VITE_OPENCODE_SERVER_HOST ?? "localhost"}:${import.meta.env.VITE_OPENCODE_SERVER_PORT ?? "4096"}',
     ],
   ),
+
+  // ================================================================================================
+  // CLI and TUI. Reachable without leaving the desktop app, which embeds a terminal.
+  // ================================================================================================
+
+  // ---- GITHUB_AGENT -----------------------------------------------------------------------------
+  ...group(
+    "The GitHub agent writes workflow YAML, branch names and PR comments for the upstream `opencode-github-action`, its GitHub App and its `/opencode` comment trigger. Renaming any of it produces a workflow that does not run. The shadow rename script excludes this file for the same reason (R1).",
+    [
+      "packages/opencode/src/cli/cmd/github.handler.ts:   Learn more about the GitHub agent - https://opencode.ai/docs/github/#usage-examples",
+      "packages/opencode/src/cli/cmd/github.handler.ts: /opencode",
+      "packages/opencode/src/cli/cmd/github.handler.ts:- Git push and PR creation are handled AUTOMATICALLY by the opencode infrastructure after your response",
+      "packages/opencode/src/cli/cmd/github.handler.ts:.github/workflows/opencode.yml",
+      "packages/opencode/src/cli/cmd/github.handler.ts:/opencode",
+      "packages/opencode/src/cli/cmd/github.handler.ts:/opencode,/oc",
+      'packages/opencode/src/cli/cmd/github.handler.ts:<a href="${shareBaseUrl}/s/${shareId}"><img width="200" alt="${titleAlt}" src="https://social-cards.sst.dev/opencode-share/${title64}.png?model=${providerID}/${modelID}&version=${session.version}&id=${shareId}" /></a>\\n',
+      "packages/opencode/src/cli/cmd/github.handler.ts:Sending message to opencode...",
+      "packages/opencode/src/cli/cmd/github.handler.ts:[opencode session](${shareBaseUrl}/s/${shareId})&nbsp;&nbsp;|&nbsp;&nbsp;",
+      "packages/opencode/src/cli/cmd/github.handler.ts:https://api.opencode.ai",
+      "packages/opencode/src/cli/cmd/github.handler.ts:https://api.opencode.ai/get_github_app_installation?owner=${app.owner}&repo=${app.repo}",
+      "packages/opencode/src/cli/cmd/github.handler.ts:https://dev.opencode.ai",
+      "packages/opencode/src/cli/cmd/github.handler.ts:https://github.com/apps/opencode-agent",
+      "packages/opencode/src/cli/cmd/github.handler.ts:https://opencode.ai",
+      "packages/opencode/src/cli/cmd/github.handler.ts:opencode session",
+      "packages/opencode/src/cli/cmd/github.handler.ts:opencode-agent[bot]",
+      "packages/opencode/src/cli/cmd/github.handler.ts:opencode-github-action",
+      "packages/opencode/src/cli/cmd/github.handler.ts:opencode/${type}${issueId}-${timestamp}",
+      "packages/opencode/src/cli/cmd/github.handler.ts:opencode/${type}-${hex}-${timestamp}",
+      "packages/tui/src/feature-plugins/home/tips-view.tsx:Comment {highlight}/opencode fix this{/highlight} on issues to auto-create PRs",
+      "packages/tui/src/feature-plugins/home/tips-view.tsx:Use {highlight}/opencode{/highlight} in GitHub issues/PRs to trigger AI actions",
+    ],
+  ),
+
+  // ---- UPSTREAM_INSTALL -------------------------------------------------------------------------
+  ...group(
+    "Uninstalls an existing upstream install: its package-manager commands, its `~/.opencode/bin` PATH entry and the `# opencode` marker those shell profiles were written with. Relabelling would print a command that does not exist and leave the real entry behind.",
+    [
+      "packages/opencode/src/cli/cmd/uninstall.ts:# opencode",
+      "packages/opencode/src/cli/cmd/uninstall.ts:.opencode",
+      "packages/opencode/src/cli/cmd/uninstall.ts:.opencode/bin",
+      "packages/opencode/src/cli/cmd/uninstall.ts:brew uninstall opencode",
+      "packages/opencode/src/cli/cmd/uninstall.ts:bun remove -g opencode-ai",
+      "packages/opencode/src/cli/cmd/uninstall.ts:choco uninstall opencode",
+      "packages/opencode/src/cli/cmd/uninstall.ts:npm uninstall -g opencode-ai",
+      "packages/opencode/src/cli/cmd/uninstall.ts:opencode",
+      "packages/opencode/src/cli/cmd/uninstall.ts:opencode-ai",
+      "packages/opencode/src/cli/cmd/uninstall.ts:pnpm uninstall -g opencode-ai",
+      "packages/opencode/src/cli/cmd/uninstall.ts:scoop uninstall opencode",
+      "packages/opencode/src/cli/cmd/uninstall.ts:yarn global remove opencode-ai",
+    ],
+  ),
+
+  // ---- PROJECT_CONFIG ---------------------------------------------------------------------------
+  ...group(
+    "Names `opencode.json` or a `.opencode/` project directory — real paths this app reads. Project config is deliberately shared with upstream (docs/legatus-shadow.md), so the names are correct as written; the shadow rename owns `~/.config/opencode` (R17).",
+    [
+      "packages/opencode/src/cli/cmd/agent.ts:.opencode",
+      "packages/opencode/src/cli/cmd/mcp.ts:Remote MCP servers support OAuth by default. Add a remote server in opencode.json:",
+      "packages/opencode/src/cli/cmd/providers.ts:Configure via opencode.json options (profile, region, endpoint) or\\n",
+      "packages/opencode/src/cli/cmd/providers.ts:This only stores a credential for ${provider} - you will need configure it in opencode.json, check the docs for examples.",
+      "packages/opencode/src/cli/error.ts:Or check your config (opencode.json) provider/model names",
+      "packages/tui/src/component/dialog-provider.tsx:Saved credential for ${props.providerID}. Configure it in opencode.json to use it.",
+      "packages/tui/src/context/theme.tsx:.opencode",
+      "packages/tui/src/feature-plugins/home/tips-view.tsx:Add {highlight}.md{/highlight} files to {highlight}.opencode/agents/{/highlight} for specialized AI personas",
+      "packages/tui/src/feature-plugins/home/tips-view.tsx:Add {highlight}.md{/highlight} files to {highlight}.opencode/commands/{/highlight} for reusable prompts",
+      "packages/tui/src/feature-plugins/home/tips-view.tsx:Add {highlight}.ts{/highlight} files to {highlight}.opencode/plugins/{/highlight} for event hooks",
+      "packages/tui/src/feature-plugins/home/tips-view.tsx:Create JSON theme files in {highlight}.opencode/themes/{/highlight} directory",
+      "packages/tui/src/feature-plugins/home/tips-view.tsx:Create {highlight}.ts{/highlight} files in {highlight}.opencode/tools/{/highlight} to define new LLM tools",
+      "packages/tui/src/feature-plugins/home/tips-view.tsx:Create {highlight}opencode.json{/highlight} for server settings, and {highlight}tui.json{/highlight} for TUI",
+      "packages/tui/src/feature-plugins/home/tips-view.tsx:Place TUI settings in {highlight}~/.config/opencode/tui.json{/highlight} for global config",
+      "packages/tui/src/util/error.ts:Or check your config (opencode.json) provider/model names",
+    ],
+  ),
+
+  // ---- ENV_NAME ---------------------------------------------------------------------------------
+  ...group(
+    "Names an environment variable in help text. Env var names are not product copy; the shadow rename owns them (R1).",
+    [
+      "packages/opencode/src/cli/cmd/attach.ts:basic auth password (defaults to OPENCODE_SERVER_PASSWORD)",
+      "packages/opencode/src/cli/cmd/attach.ts:basic auth username (defaults to OPENCODE_SERVER_USERNAME or 'opencode')",
+      "packages/opencode/src/cli/cmd/run.ts:basic auth password (defaults to OPENCODE_SERVER_PASSWORD)",
+      "packages/opencode/src/cli/cmd/run.ts:basic auth username (defaults to OPENCODE_SERVER_USERNAME or 'opencode')",
+      "packages/opencode/src/cli/cmd/serve.ts:Warning: OPENCODE_SERVER_PASSWORD is not set; server is unsecured.",
+      "packages/opencode/src/cli/cmd/web.ts:!  OPENCODE_SERVER_PASSWORD is not set; server is unsecured.",
+    ],
+  ),
+
+  // ---- SERVICE_TAG ------------------------------------------------------------------------------
+  ...group("Effect service tag / internal module identifier. Never rendered.", [
+    "packages/opencode/src/cli/cmd/run/runtime.boot.ts:@opencode/RunBoot",
+    "packages/opencode/src/cli/cmd/run/stream.transport.ts:@opencode/RunStreamTransport",
+    "packages/opencode/src/cli/cmd/run/variant.shared.ts:@opencode/RunVariant",
+    "packages/tui/src/audio.d.ts:@opencode-ai/ui/audio/*.mp3",
+  ]),
+
+  // ---- WIRE (cli/tui) ---------------------------------------------------------------------------
+  ...group(
+    "Wire or filesystem identifier, not display copy: the loopback host the CLI talks to itself on, the provider discovery path, the mDNS service name, the fixed temp file, an MCP client name, a config or keybind id.",
+    [
+      "packages/opencode/src/cli/cmd/mcp.ts:opencode-debug",
+      "packages/opencode/src/cli/cmd/providers.ts:${url}/.well-known/opencode",
+      "packages/opencode/src/cli/cmd/run.ts:http://opencode.internal",
+      "packages/opencode/src/cli/cmd/run/runtime.ts:http://opencode.internal",
+      "packages/opencode/src/cli/cmd/tui.ts:http://opencode.internal",
+      "packages/opencode/src/cli/network.ts:custom domain name for mDNS service (default: opencode.local)",
+      "packages/opencode/src/cli/network.ts:opencode.local",
+      "packages/tui/src/app.tsx:opencode.debug",
+      "packages/tui/src/app.tsx:opencode.status",
+      "packages/tui/src/attention.ts:opencode.default",
+      "packages/tui/src/clipboard.ts:opencode-clipboard.png",
+      "packages/tui/src/component/dialog-provider.tsx:__opencode_custom_provider__",
+      "packages/tui/src/component/error-component.tsx:opencode-version",
+      "packages/tui/src/config/index.tsx:opencode.default",
+      "packages/tui/src/config/keybind.ts:opencode.debug",
+      "packages/tui/src/config/keybind.ts:opencode.status",
+      "packages/tui/src/feature-plugins/home/tips-view.tsx:opencode.status",
+      "packages/tui/src/feature-plugins/system/diff-viewer.tsx:opencode-plain-text",
+      "packages/tui/src/keymap.tsx:opencode.mode",
+    ],
+  ),
+
+  // ---- PROVIDER_ID (cli/tui) --------------------------------------------------------------------
+  ...group(
+    "models.dev provider id for OpenCode Zen / OpenCode Go, matched against server data. A third party's identifier on the wire.",
+    [
+      "packages/opencode/src/cli/cmd/models.ts:opencode",
+      "packages/opencode/src/cli/cmd/plug.ts:opencode",
+      "packages/opencode/src/cli/cmd/providers.ts:opencode",
+      "packages/opencode/src/cli/cmd/run/footer.command.tsx:opencode",
+      "packages/tui/src/attention.ts:opencode",
+      "packages/tui/src/component/dialog-model.tsx:opencode",
+      "packages/tui/src/component/dialog-provider.tsx:opencode-go",
+      "packages/tui/src/component/use-connected.tsx:opencode",
+      "packages/tui/src/context/editor.ts:opencode",
+      "packages/tui/src/context/theme.tsx:opencode",
+      "packages/tui/src/feature-plugins/home/tips.tsx:opencode",
+      "packages/tui/src/feature-plugins/sidebar/footer.tsx:opencode",
+      "packages/tui/src/prompt/traits.ts:opencode",
+      "packages/tui/src/routes/session/index.tsx:opencode",
+      "packages/tui/src/routes/session/index.tsx:opencode-go",
+    ],
+  ),
+
+  // ---- THIRD_PARTY (cli/tui) --------------------------------------------------------------------
+  ...group(
+    "Names OpenCode Zen, a third-party service the user connects to and pays. Renaming it would be false attribution.",
+    ["packages/tui/src/feature-plugins/home/tips-view.tsx:Use {highlight}/connect{/highlight} with OpenCode Zen for curated, tested models"],
+  ),
+
+  // ---- UPSTREAM_URL (cli/tui) -------------------------------------------------------------------
+  ...group(
+    "A destination that genuinely is upstream: their docs, auth endpoint, issue tracker, share service or published container image. The destination stays truthful.",
+    [
+      "packages/opencode/src/cli/cmd/providers.ts:Cloudflare AI Gateway can be configured with CLOUDFLARE_GATEWAY_ID, CLOUDFLARE_ACCOUNT_ID, and CLOUDFLARE_API_TOKEN environment variables. Read more: https://opencode.ai/docs/providers/#cloudflare-ai-gateway",
+      "packages/opencode/src/cli/cmd/providers.ts:Create an api key at https://opencode.ai/auth",
+      "packages/tui/src/app.tsx:https://opencode.ai/docs",
+      "packages/tui/src/component/dialog-provider.tsx:https://opencode.ai/go",
+      "packages/tui/src/component/dialog-provider.tsx:https://opencode.ai/zen",
+      "packages/tui/src/component/dialog-retry-action.tsx:https://opencode.ai/go",
+      "packages/tui/src/component/error-component.tsx:https://github.com/anomalyco/opencode/issues/new?template=bug-report.yml",
+      "packages/tui/src/feature-plugins/home/tips-view.tsx:Run {highlight}/share{/highlight} to create a public opencode.ai link",
+      "packages/tui/src/feature-plugins/home/tips-view.tsx:Run {highlight}docker run -it --rm ghcr.io/anomalyco/opencode{/highlight} in a container",
+    ],
+  ),
+
+  // ---- DEV_FIXTURE ------------------------------------------------------------------------------
+  ...group(
+    "A code sample or recorded fixture for developers (an SDK snippet, a stream demo), not product copy.",
+    [
+      "packages/opencode/src/cli/cmd/generate.ts:const client = createOpencodeClient()",
+      'packages/opencode/src/cli/cmd/run/demo.ts:2:   "name": "opencode",',
+      "packages/opencode/src/cli/cmd/run/demo.ts:packages/opencode/src/cli/cmd/run/stream.ts",
+    ],
+  ),
+
+  // ---- INTERNAL_ERROR ---------------------------------------------------------------------------
+  ...group(
+    "Internal invariant message naming the keymap's own module. It fires only on a programming error and names code, not the product.",
+    ["packages/tui/src/keymap.tsx:Opencode mode stack is not registered for this keymap"],
+  ),
 ]
 
 const ALLOWED = new Map(ALLOWLIST.map((entry) => [entry.id, entry.reason]))

@@ -20,6 +20,8 @@ export type Brand = {
   appNames: { dev: string; beta: string; prod: string }
   defaultTheme: string
   upstreamName: string
+  /** Two-letter form for places too narrow for the name. Upstream's is "OC". */
+  short: string
   /** Image URL for OS notifications, and anywhere else that needs the mark as a URL. */
   notificationIcon: string
   /** Prefix for files the app writes into the user's folders (the debug-log export). */
@@ -33,6 +35,7 @@ export const LEGATUS: Brand = {
   appNames: { dev: "Legatus Dev", beta: "Legatus Beta", prod: "Legatus" },
   defaultTheme: "legatus",
   upstreamName: "OpenCode",
+  short: "LG",
   notificationIcon: LEGATUS_ICON_DATA_URI,
   filePrefix: "legatus",
   messages: {

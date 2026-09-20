@@ -1,4 +1,5 @@
 import { cmd } from "./cmd"
+import { PRODUCT } from "@opencode-ai/core/brand"
 import { UI } from "@/cli/ui"
 import { errorMessage } from "@opencode-ai/tui/util/error"
 import { validateSession } from "../tui/validate-session"
@@ -6,7 +7,7 @@ import { ServerAuth } from "@/server/auth"
 
 export const AttachCommand = cmd({
   command: "attach <url>",
-  describe: "attach to a running opencode server",
+  describe: `attach to a running ${PRODUCT} server`,
   builder: (yargs) =>
     yargs
       .positional("url", {

@@ -1,4 +1,5 @@
 import { cmd } from "@/cli/cmd/cmd"
+import { PRODUCT } from "@opencode-ai/core/brand"
 import { Rpc } from "@/util/rpc"
 import { type rpc } from "../tui/worker"
 import path from "path"
@@ -71,12 +72,12 @@ export function resolveThreadDirectory(project?: string, envPWD = process.env.PW
 
 export const TuiThreadCommand = cmd({
   command: "$0 [project]",
-  describe: "start opencode tui",
+  describe: `start the ${PRODUCT} tui`,
   builder: (yargs) =>
     withNetworkOptions(yargs)
       .positional("project", {
         type: "string",
-        describe: "path to start opencode in",
+        describe: `path to start ${PRODUCT} in`,
       })
       .option("model", {
         type: "string",

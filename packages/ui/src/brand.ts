@@ -16,12 +16,18 @@ export type UiBrand = {
   productName: string
   /** Label for upstream's default palette in the theme picker, which is named after upstream. */
   upstreamThemeName: string
+  /**
+   * Label for upstream's `oc-2` palette. "OC" is an OpenCode initialism, so a `/opencode/i` scan
+   * cannot see it — it has to be listed rather than found.
+   */
+  upstreamThemeNameV2: string
 }
 
 export const LEGATUS_UI: UiBrand = {
   id: "legatus",
   productName: "Legatus",
   upstreamThemeName: "Classic",
+  upstreamThemeNameV2: "Classic 2",
 }
 
 const KNOWN: Record<string, UiBrand> = { legatus: LEGATUS_UI }

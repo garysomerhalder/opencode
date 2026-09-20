@@ -1,4 +1,5 @@
 /// <reference path="./audio.d.ts" />
+import { PRODUCT } from "@opencode-ai/core/brand"
 import type {
   TuiAttention,
   TuiAttentionNotifyInput,
@@ -45,7 +46,7 @@ const TITLE_LIMIT = 80
 const MESSAGE_LIMIT = 240
 const BUILTIN_PACK: RegisteredSoundPack = {
   id: DEFAULT_PACK_ID,
-  name: "OpenCode Default",
+  name: `${PRODUCT} Default`,
   builtin: true,
   sounds: {
     default: defaultSoundPath,

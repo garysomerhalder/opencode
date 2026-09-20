@@ -1,4 +1,5 @@
 import type { Argv } from "yargs"
+import { PRODUCT } from "@opencode-ai/core/brand"
 import { Auth } from "../../auth"
 import { cmd } from "./cmd"
 import { CliError, effectCmd, fail } from "../effect-cmd"
@@ -304,7 +305,7 @@ export const ProvidersLoginCommand = effectCmd({
   builder: (yargs: Argv) =>
     yargs
       .positional("url", {
-        describe: "opencode auth provider",
+        describe: `${PRODUCT} auth provider`,
         type: "string",
       })
       .option("provider", {
