@@ -7,7 +7,6 @@
 import { Effect, Schema } from "effect"
 import * as Tool from "../tool"
 import { ShellTasks } from "./tasks"
-import { ShellID } from "./id"
 
 export const OutputToolID = "shell_output"
 export const StopToolID = "shell_stop"
@@ -175,6 +174,3 @@ export const ShellStopTool = Tool.define(
     }
   }),
 )
-
-/** The tools follow the shell tool: an agent without a shell has nothing to read or stop. */
-export const SHELL_TOOL_ID = ShellID.ToolID

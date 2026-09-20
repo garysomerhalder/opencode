@@ -177,6 +177,10 @@ const WAKE_BATCH_MS = 250
 const WAKE_TAIL_LINES = 40
 const WAKE_TAIL_BYTES = 4 * 1024
 const MAX_WAIT_MS = 30_000
+/** Output kept in memory for a finished background task; the file keeps the rest. */
+const FINISHED_TAIL_BYTES = 8 * 1024
+/** Finished tasks kept in the registry, newest first. */
+const MAX_FINISHED = 50
 
 type Chunk = { text: string; size: number }
 
@@ -303,10 +307,14 @@ const layer = Layer.effect(
             )
           }).pipe(Effect.ignore),
         )
+        // Only ask here too. Closing this scope interrupts the fibers that own
+        // the processes, and each one kills its tree on the way out, so waiting
+        // for a status that those fibers can no longer report would hang
+        // instance disposal.
         yield* Effect.addFinalizer(() =>
           Effect.forEach(
             Array.from(data.tasks.values()).filter((entry) => entry.info.status === "running"),
-            (entry) => terminate(entry, "cancelled", "shutdown"),
+            (entry) => requestStop(entry, "cancelled", "shutdown"),
             { concurrency: "unbounded", discard: true },
           ).pipe(Effect.andThen(unsubscribe), Effect.ignore),
         )
@@ -406,6 +414,17 @@ const layer = Layer.effect(
       if (entry.onPreview) yield* entry.onPreview(entry.preview).pipe(Effect.ignore)
     })
 
+    /** Keeps the registry from growing without bound over a long session. */
+    const prune = Effect.fn("ShellTasks.prune")(function* () {
+      const data = yield* InstanceState.get(state)
+      const finished = Array.from(data.tasks.values())
+        .filter((entry) => entry.info.status !== "running")
+        .toSorted((a, b) => (a.info.endedAt ?? a.info.startedAt) - (b.info.endedAt ?? b.info.startedAt))
+      for (const entry of finished.slice(0, Math.max(0, finished.length - MAX_FINISHED))) {
+        data.tasks.delete(entry.info.id)
+      }
+    })
+
     const settle = Effect.fn("ShellTasks.settle")(function* (
       entry: Entry,
       next: Exclude<Status, "running">,
@@ -418,7 +437,16 @@ const layer = Layer.effect(
       entry.info.endedAt = Date.now()
       if (reason) entry.info.reason = reason
       if (entry.file) yield* flush(entry)
+      if (entry.info.background) {
+        // The tool call for a promoted task returned long ago; only the wake
+        // tail is still needed, and the full output lives in the file.
+        entry.chunks = []
+        entry.used = 0
+        entry.tail = keepTail(entry.tail, FINISHED_TAIL_BYTES)
+        entry.preview = preview(entry.preview, FINISHED_TAIL_BYTES)
+      }
       yield* Deferred.succeed(entry.done, snapshot(entry)).pipe(Effect.ignore)
+      yield* prune()
       return snapshot(entry)
     })
 
