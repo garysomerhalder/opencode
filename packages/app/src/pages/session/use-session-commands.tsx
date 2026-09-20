@@ -15,7 +15,7 @@ import { showToast } from "@/utils/toast"
 import { downloadSessionExport, fetchSessionExport, sessionExportFilename } from "@/utils/session-export"
 import { findLast } from "@opencode-ai/core/util/array"
 import { createSessionTabs } from "@/pages/session/helpers"
-import { extractPromptFromParts } from "@/utils/prompt"
+import { extractPromptFromParts, isHarnessNote } from "@/utils/prompt"
 import { Message, Part, UserMessage } from "@opencode-ai/sdk/v2"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { useSessionArchive } from "@/pages/session/session-archive"
@@ -98,7 +98,11 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
     if (!id) return []
     return sync().data.message[id] ?? []
   }
-  const userMessages = () => messages().filter((m) => m.role === "user") as UserMessage[]
+  // Harness notes are user messages the server injected into a running turn, so
+  // undo, redo and message navigation step over them: they are not something
+  // the user sent, and reverting to one would keep the real prompt in place.
+  const userMessages = () =>
+    messages().filter((m) => m.role === "user" && !isHarnessNote(sync().data.part[m.id])) as UserMessage[]
   const visibleUserMessages = () => {
     const revert = info()?.revert?.messageID
     if (!revert) return userMessages()

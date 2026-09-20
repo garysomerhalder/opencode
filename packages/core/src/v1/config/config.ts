@@ -182,6 +182,34 @@ export const Info = Schema.Struct({
       mcp_timeout: Schema.optional(PositiveInt).annotate({
         description: "Timeout in milliseconds for model context protocol (MCP) requests",
       }),
+      accuracy: Schema.optional(
+        Schema.Struct({
+          autonomy_prompt: Schema.optional(Schema.Boolean).annotate({
+            description:
+              "Add the shared autonomy section to every request's system prompt (default true). Autonomous/headless runs also get the no-questions addendum.",
+          }),
+          autonomy_when_no_question_tool: Schema.optional(Schema.Boolean).annotate({
+            description:
+              "Also treat a turn as autonomous when no question tool is available (default false). Off by default because a user who disables the question tool is still at the keyboard; turn it on for scripted fleets where nothing can answer.",
+          }),
+          runaway_guard: Schema.optional(Schema.Boolean).annotate({
+            description:
+              "Detect repeated tool actions, results and error families across steps and inject one strategy reminder per turn (default true). Replaces the doom_loop permission ask.",
+          }),
+          runaway_guard_threshold: Schema.optional(PositiveInt).annotate({
+            description: "Repeats in consecutive steps before the runaway reminder is injected (default 3, minimum 2)",
+          }),
+          todo_reminder: Schema.optional(Schema.Boolean).annotate({
+            description:
+              "Remind the agent about unfinished todos every N steps, and continue once when it stops with open todos (default true)",
+          }),
+          todo_reminder_interval: Schema.optional(PositiveInt).annotate({
+            description: "Steps between periodic todo completion reminders (default 5)",
+          }),
+        }),
+      ).annotate({
+        description: "Agent accuracy harness: autonomy prompt, runaway guard and todo completion reminders",
+      }),
       policies: Schema.optional(Schema.mutable(Schema.Array(ConfigExperimental.Policy))).annotate({
         description: "Policy statements applied to supported resources, such as provider access",
       }),

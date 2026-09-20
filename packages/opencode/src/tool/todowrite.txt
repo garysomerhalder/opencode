@@ -22,6 +22,8 @@ Skip when:
 - `cancelled` - no longer needed
 
 ## Rules
+- Updating the list does not complete the work. Marking an item `completed` is a record of work you have already done and verified, never a substitute for doing it.
+- Before your final response, reconcile the list with reality: everything really done is `completed`, everything no longer needed is `cancelled`, and anything still open is either finished now or called out in your answer.
 - Update status in real time; don't batch completions
 - Mark `completed` only after the required work is actually done, including any required verification. Never based on intent.
 - Keep exactly one `in_progress` while work remains

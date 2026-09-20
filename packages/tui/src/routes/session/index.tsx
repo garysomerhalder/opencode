@@ -36,6 +36,7 @@ import type {
   ReasoningPart,
   SessionStatus,
 } from "@opencode-ai/sdk/v2"
+import { HarnessNote } from "./harness-note"
 import { useLocal } from "../../context/local"
 import { Locale } from "../../util/locale"
 import { webSearchProviderLabel } from "../../util/tool-display"
@@ -617,7 +618,7 @@ export function Session() {
       run: async () => {
         const status = sync.data.session_status?.[route.sessionID]
         if (status?.type !== "idle") await sdk.client.session.abort({ sessionID: route.sessionID }).catch(() => {})
-        const message = messagesBeforeRevert().findLast((item) => item.role === "user")
+        const message = HarnessNote.lastUser(messagesBeforeRevert(), (id) => sync.data.part[id])
         if (!message) return
         void sdk.client.session
           .revert({
@@ -655,7 +656,7 @@ export function Session() {
         dialog.clear()
         const messageID = session()?.revert?.messageID
         if (!messageID) return
-        const message = messages().find((x) => x.role === "user" && x.id > messageID)
+        const message = HarnessNote.nextUser(messages(), messageID, (id) => sync.data.part[id])
         if (!message) {
           void sdk.client.session.unrevert({
             sessionID: route.sessionID,
@@ -1391,6 +1392,14 @@ function UserMessage(props: {
 
   const compaction = createMemo(() => props.parts.find((x) => x.type === "compaction"))
 
+  // A reminder the harness wrote into the running turn (runaway guard, task
+  // completion). It is a system note, not the user speaking.
+  const harness = createMemo(() => {
+    const part = props.parts.find((x) => x.type === "reminder")
+    if (part?.type !== "reminder") return
+    return part.label ? `${part.label} reminder` : "Harness reminder"
+  })
+
   return (
     <>
       <Show when={text()}>
@@ -1461,6 +1470,11 @@ function UserMessage(props: {
           titleAlignment="center"
           borderColor={theme.borderActive}
         />
+      </Show>
+      <Show when={harness()}>
+        {(label) => (
+          <box marginTop={1} border={["top"]} title={` ${label()} `} titleAlignment="center" borderColor={theme.border} />
+        )}
       </Show>
     </>
   )

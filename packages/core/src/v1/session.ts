@@ -24,6 +24,7 @@ export {
   PatchPart,
   Range,
   ReasoningPart,
+  ReminderPart,
   ResourceSource,
   RetryPart,
   SessionInfo,

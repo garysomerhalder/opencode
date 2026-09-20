@@ -120,6 +120,8 @@ export class Subscription {
   }
 
   private async replayContentPart(message: SessionMessageResponse, part: Part) {
+    // Harness reminders are `reminder` parts, so they never reach this and are
+    // never replayed as something the user said.
     if (part.type !== "text" && part.type !== "file" && part.type !== "reasoning") return
 
     const sessionUpdate =

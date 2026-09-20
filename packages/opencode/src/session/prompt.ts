@@ -31,6 +31,13 @@ import { ConfigMarkdown } from "@/config/markdown"
 import { SessionSummary } from "./summary"
 import { NamedError } from "@opencode-ai/core/util/error"
 import { SessionProcessor } from "./processor"
+import { Todo } from "./todo"
+import { Accuracy } from "./accuracy"
+import { HarnessNote } from "./harness-note"
+import { RunawayGuard } from "./runaway-guard"
+import { TodoReminder } from "./todo-reminder"
+import PROMPT_AUTONOMY from "./prompt/autonomy.txt"
+import PROMPT_AUTONOMY_HEADLESS from "./prompt/autonomy-headless.txt"
 import { Tool } from "@/tool/tool"
 import { Permission } from "@/permission"
 import { SessionStatus } from "./status"
@@ -93,6 +100,14 @@ function formatMcpResourceBytes(value: number) {
   return `${Math.ceil(value / (1024 * 1024))} MB`
 }
 
+/**
+ * A user message the harness wrote itself (runaway guard or todo reminder). It
+ * belongs to the turn that is already running: it is not a new user prompt and
+ * not a turn boundary. Re-exported from {@link HarnessNote} so existing callers
+ * keep working; new code should use the module directly.
+ */
+export const isHarnessNote = HarnessNote.isNote
+
 function isOrphanedInterruptedTool(part: SessionV1.ToolPart) {
   // cleanup() marks abandoned tool_use blocks this way after retries/aborts.
   // They are not pending work and must not trigger an assistant-prefill request.
@@ -140,6 +155,7 @@ const layer = Layer.effect(
     const events = yield* EventV2Bridge.Service
     const flags = yield* RuntimeFlags.Service
     const database = yield* Database.Service
+    const todos = yield* Todo.Service
     const { db } = database
     const ops = Effect.fn("SessionPrompt.ops")(function* () {
       return {
@@ -667,6 +683,7 @@ const layer = Layer.effect(
         },
         system: input.system,
         format: input.format,
+        ...(input.autonomous === true ? { autonomous: true } : {}),
       }
 
       const current = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
@@ -1085,6 +1102,41 @@ const layer = Layer.effect(
         let step = 0
         const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
 
+        // Accuracy harness, turn-scoped: one runaway guard and one todo
+        // reminder budget per runLoop call (see docs/accuracy-a.md).
+        const accuracy = Accuracy.settings(yield* config.get())
+        const guard = accuracy.runawayGuard
+          ? RunawayGuard.create({ threshold: accuracy.runawayGuardThreshold })
+          : undefined
+        const todoState = accuracy.todoReminder
+          ? TodoReminder.create({ interval: accuracy.todoReminderInterval })
+          : undefined
+
+        const todoSummary = Effect.fn("SessionPrompt.todoSummary")(function* () {
+          return TodoReminder.summarize(yield* todos.get(sessionID).pipe(Effect.catch(() => Effect.succeed([]))))
+        })
+
+        // Harness notes ride in on an all-synthetic user message, the same shape
+        // the compaction "continue" and subtask summary messages use. Every field
+        // of the real user message is carried over so the next step keeps its
+        // agent, model, format, system prompt and autonomous flag.
+        const note = Effect.fn("SessionPrompt.harnessNote")(function* (input: {
+          user: SessionV1.User
+          kind: string
+          label: string
+          texts: string[]
+        }) {
+          const built = HarnessNote.build({
+            user: input.user,
+            kind: input.kind,
+            label: input.label,
+            text: input.texts.join("\n\n"),
+          })
+          yield* sessions.updateMessage(built.info)
+          yield* sessions.updatePart(built.part)
+          return built.info
+        })
+
         while (true) {
           yield* status.set(sessionID, { type: "busy" })
           yield* Effect.logInfo("loop", { "session.id": sessionID, step })
@@ -1124,6 +1176,28 @@ const layer = Layer.effect(
                 tool: orphan.tool,
                 callID: orphan.callID,
               })
+            }
+            // Stopped with todos still open: remind once and keep going. The
+            // budget lives in todoState (once per turn) and the marker on the
+            // turn's own user message makes it survive a restarted loop. Look
+            // that message up by id: `msgs` comes from filterCompacted, which
+            // reorders for model consumption, so findLast is not the same thing
+            // as "the message this turn is answering".
+            if (
+              todoState &&
+              !orphan &&
+              lastAssistant.finish === "stop" &&
+              !lastAssistant.error &&
+              structured === undefined &&
+              lastUser.format?.type !== "json_schema" &&
+              !isHarnessNote(msgs.find((msg) => msg.info.id === lastUser.id))
+            ) {
+              const reminder = TodoReminder.onStop(todoState, yield* todoSummary())
+              if (reminder) {
+                yield* Effect.logInfo("todo reminder", { "session.id": sessionID, ...reminder.log })
+                yield* note({ user: lastUser, kind: "todo_continue", label: "Task completion", texts: [reminder.text] })
+                continue
+              }
             }
             yield* Effect.logInfo("exiting loop", { "session.id": sessionID })
             break
@@ -1216,11 +1290,15 @@ const layer = Layer.effect(
               sessionID,
               model,
               contextTokens: lastFinished && lastFinished.summary !== true ? lastFinished.tokens : undefined,
+              guard,
             })
             .pipe(Effect.onInterrupt(() => finalizeInterruptedAssistant))
 
           const outcome: "break" | "continue" = yield* Effect.gen(function* () {
-            const lastUserMsg = msgs.findLast((m) => m.info.role === "user")
+            // The @agent exemption belongs to the prompt the user actually
+            // sent, so skip harness notes: a reminder mid-turn must not change
+            // which tools the task gate allows.
+            const lastUserMsg = HarnessNote.lastRealUser(msgs)
             const bypassAgentCheck = lastUserMsg?.parts.some((p) => p.type === "agent") ?? false
             const promptOps = yield* ops()
 
@@ -1262,8 +1340,26 @@ const layer = Layer.effect(
               sys.mcp(agent, session.permission),
               MessageV2.toModelMessagesEffect(msgs, model),
             ])
+            // "Can this turn reach a human?" — the question tool has to be
+            // registered for this client, enabled for the agent and the session,
+            // and not turned off on the message itself. request.ts filters the
+            // same way just before the call.
+            const questionAvailable =
+              tools["question"] !== undefined &&
+              lastUser.tools?.["question"] !== false &&
+              !Permission.disabled(["question"], Permission.merge(agent.permission, session.permission ?? [])).has(
+                "question",
+              )
+            const autonomous = Accuracy.autonomous({
+              autonomous: lastUser.autonomous,
+              questionAvailable,
+              inferFromMissingQuestionTool: accuracy.autonomyWhenNoQuestionTool,
+            })
             const system = [
               ...env,
+              ...(accuracy.autonomyPrompt
+                ? [autonomous ? `${PROMPT_AUTONOMY}\n${PROMPT_AUTONOMY_HEADLESS}` : PROMPT_AUTONOMY]
+                : []),
               ...instructions,
               ...(mcpInstructions ? [mcpInstructions] : []),
               ...(skills ? [skills] : []),
@@ -1318,6 +1414,30 @@ const layer = Layer.effect(
             }
 
             if (result === "stop") return "break" as const
+            if (result === "continue") {
+              // Step end: the runaway guard has already seen this step's tools
+              // inside the processor; the todo reminder is time-based on steps.
+              const texts: string[] = []
+              const kinds: string[] = []
+              const labels: string[] = []
+              if (handle.reminder) {
+                yield* Effect.logInfo("runaway guard", { "session.id": sessionID, ...handle.reminder.log })
+                texts.push(handle.reminder.text)
+                kinds.push("runaway_guard")
+                labels.push("Runaway guard")
+              }
+              if (todoState) {
+                const reminder = TodoReminder.periodic(todoState, yield* todoSummary(), step)
+                if (reminder) {
+                  yield* Effect.logInfo("todo reminder", { "session.id": sessionID, ...reminder.log })
+                  texts.push(reminder.text)
+                  kinds.push("todo_periodic")
+                  labels.push("Task completion")
+                }
+              }
+              if (texts.length > 0)
+                yield* note({ user: lastUser, kind: kinds.join("+"), label: labels.join(" + "), texts })
+            }
             if (result === "compact") {
               yield* compaction.create({
                 sessionID,
@@ -1510,6 +1630,10 @@ export const PromptInput = Schema.Struct({
   format: Schema.optional(SessionV1.Format),
   system: Schema.optional(Schema.String),
   variant: Schema.optional(Schema.String),
+  autonomous: Schema.optional(Schema.Boolean).annotate({
+    description:
+      "Run this turn autonomously: no user is available to answer questions, so the agent is told to decide and report instead of asking. Safety rules still apply.",
+  }),
   parts: Schema.Array(
     Schema.Union([
       SessionV1.TextPartInput,
@@ -1626,6 +1750,7 @@ export const node = LayerNode.make({
     EventV2Bridge.node,
     RuntimeFlags.node,
     Database.node,
+    Todo.node,
   ],
 })
 

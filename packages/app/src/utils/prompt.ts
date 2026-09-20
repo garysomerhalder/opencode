@@ -39,6 +39,17 @@ function selectionFromFileUrl(url: string): Extract<Inline, { type: "file" }>["s
   }
 }
 
+/**
+ * A harness note: a user message the server injected into a turn that is
+ * already running (runaway guard, task completion reminder, background-task
+ * wake). It carries `reminder` parts rather than text, so it has no prompt to
+ * restore — and undo must not treat it as one of the user's messages, or the
+ * revert boundary lands on the reminder and keeps the real prompt in place.
+ */
+export function isHarnessNote(parts: Part[] | undefined) {
+  return parts !== undefined && parts.length > 0 && parts.every((part) => part.type === "reminder")
+}
+
 function textPartValue(parts: Part[]) {
   const candidates = parts
     .filter((part): part is TextPart => part.type === "text")
