@@ -351,6 +351,12 @@ export const User = Schema.Struct({
   }),
   system: Schema.optional(Schema.String),
   tools: Schema.optional(Schema.Record(Schema.String, Schema.Boolean)),
+  /**
+   * The turn runs with nobody to answer a question. Set by autonomous drivers
+   * (the desktop goal loop, scripted runs) so the agent gets the no-questions
+   * guidance even when a question tool is present.
+   */
+  autonomous: Schema.optional(Schema.Boolean),
 }).annotate({ identifier: "UserMessage" })
 export type User = Types.DeepMutable<Schema.Schema.Type<typeof User>>
 

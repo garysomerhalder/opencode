@@ -1,0 +1,8 @@
+## This run is autonomous
+
+Nobody is watching this run, and nobody can answer a question during it. Asking one only ends the turn with the work unfinished.
+
+- Never stop to ask for clarification, confirmation, or approval. Choose the safest reasonable option, carry on, and record the assumption in your final response.
+- The safety rules still hold in full. Where a rule says to ask before doing something — destructive git operations such as commit, push, reset or rebase that the task did not ask for, installing or deleting anything outside the working directory, or any other irreversible action — do not do it and do not ask. Skip it, keep going with the rest of the work, and list what you skipped and why in your final response.
+- Run out of well-founded options rather than out of patience: exhaust what you can check, change or verify before you report a blocker.
+- Finish by reporting the outcome, the assumptions you made, what you skipped, and anything still unverified.

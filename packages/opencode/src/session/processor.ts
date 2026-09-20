@@ -25,6 +25,7 @@ import { isRecord } from "@/util/record"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Database } from "@opencode-ai/core/database/database"
 import { Usage, type LLMEvent } from "@opencode-ai/llm"
+import { RunawayGuard } from "./runaway-guard"
 
 const DOOM_LOOP_THRESHOLD = 3
 export type Result = "compact" | "stop" | "continue"
@@ -45,6 +46,8 @@ export interface Handle {
     },
   ) => Effect.Effect<void>
   readonly process: (streamInput: LLM.StreamInput) => Effect.Effect<Result>
+  /** Runaway-guard reminder raised at the end of the step just processed. */
+  readonly reminder?: RunawayGuard.Reminder | undefined
 }
 
 type Input = {
@@ -54,6 +57,10 @@ type Input = {
   // Token usage of the last finished turn in this session, if any. Used to
   // recognise an opaque provider 400 as a context overflow.
   contextTokens?: SessionV1.Assistant["tokens"]
+  // Turn-scoped runaway guard. When present the guard is enabled: the processor
+  // feeds it at step end and stops raising the doom_loop permission ask, which
+  // headless runs cannot answer anyway.
+  guard?: RunawayGuard.State
 }
 
 export interface Interface {
@@ -116,6 +123,7 @@ const layer = Layer.effect(
         reasoningMap: {},
       }
       let aborted = false
+      let reminder: RunawayGuard.Reminder | undefined
 
       const parse = (e: unknown) =>
         MessageV2.fromError(e, {
@@ -368,6 +376,11 @@ const layer = Layer.effect(
                 ? { ...value.providerMetadata, providerExecuted: true }
                 : value.providerMetadata,
             }))
+
+            // The runaway guard supersedes this ask: it watches repeats across
+            // steps instead of inside one message, and it reminds rather than
+            // blocking. Only fall back to the permission ask when it is off.
+            if (input.guard) return
 
             const parts = yield* MessageV2.parts(ctx.assistantMessage.id).pipe(
               Effect.provideService(Database.Service, database),
@@ -664,6 +677,7 @@ const layer = Layer.effect(
           messageID: input.assistantMessage.id,
         })
         ctx.needsCompaction = false
+        reminder = undefined
         ctx.shouldBreak = (yield* config.get()).experimental?.continue_loop_on_deny !== true
 
         return yield* Effect.gen(function* () {
@@ -710,6 +724,19 @@ const layer = Layer.effect(
             Effect.ensuring(cleanup()),
           )
 
+          // Step end: every tool part is settled by now (cleanup awaits them),
+          // so the guard sees final inputs, outputs and errors. It fails open —
+          // detection must never take a turn down.
+          if (input.guard && !aborted && !ctx.assistantMessage.error) {
+            yield* Effect.gen(function* () {
+              const parts = yield* MessageV2.parts(ctx.assistantMessage.id).pipe(
+                Effect.provideService(Database.Service, database),
+              )
+              const tools = parts.filter((part): part is SessionV1.ToolPart => part.type === "tool")
+              reminder = RunawayGuard.observe(input.guard!, tools)
+            }).pipe(Effect.ignore)
+          }
+
           if (ctx.needsCompaction) return "compact"
           if (ctx.blocked || ctx.assistantMessage.error) return "stop"
           return "continue"
@@ -723,6 +750,9 @@ const layer = Layer.effect(
         updateToolCall,
         completeToolCall,
         process,
+        get reminder() {
+          return reminder
+        },
       } satisfies Handle
     })
 

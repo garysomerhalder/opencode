@@ -1,6 +1,6 @@
 # Accuracy A: autonomy prompt, runaway guard, todo completion
 
-Status: design, waiting for review. Techniques adapted from MiniMax Code (MIT). Nothing is copied
+Status: implemented on `feat/accuracy-prompt-loop-todo`. Techniques adapted from MiniMax Code (MIT). Nothing is copied
 verbatim; ported files carry a `MiniMax Code (MIT)` credit header.
 
 Motivation: on FrontierHarness Eval (30 tasks, same Kimi K3 model) minimax-code scored 76.7% and
@@ -50,6 +50,11 @@ applies the defaults.
 | `packages/opencode/src/session/processor.ts` | Feeds the guard at step end; skips the `doom_loop` ask when the guard is on |
 | `packages/opencode/src/session/prompt.ts` | Injects the autonomy system section; persists reminders; continues once on stop with open todos |
 | `packages/opencode/src/tool/todowrite.txt` | "Updating the list does not complete the work" plus a reconcile-before-final rule |
+| `packages/schema/src/v1/session.ts` | `autonomous?: boolean` on the user message |
+| `packages/desktop/src/main/goal-loop.ts` | Sends `autonomous: true`; treats harness notes as part of the running turn |
+| `packages/tui/src/routes/session/index.tsx` | Renders a harness note as a system divider, not a user bubble |
+| `packages/session-ui/src/components/message-part.tsx`, `packages/ui/src/i18n/en.ts` | Same for the app, with the `ui.messagePart.harnessReminder` label |
+| `packages/sdk/js/src/v2/gen/{types,sdk}.gen.ts` | Regenerated: `autonomous` on prompt/prompt_async, `experimental.accuracy` on config |
 | tests (listed below) | New and extended tests |
 
 `tool/shell.ts` and the task registry belong to the parallel `accuracy-b` work. This branch does not
@@ -72,21 +77,25 @@ skills blocks. This avoids editing ten provider files, and it also covers agents
   unverified;
 - base conclusions on evidence, because not recognising something does not prove it doesn't exist.
 
-**Interactive vs headless.** The deciding signal is whether the model can reach a human through the
-tool set for that step. If the `question` tool is present in the resolved tools, the run is
-interactive. If it is absent, the run is headless. The `question` tool is missing in these cases:
+**Interactive vs autonomous.** Two signals, either of which is enough to make a turn autonomous:
 
-- `opencode run` without `--interactive`, which denies `question`, `plan_enter` and `plan_exit`;
-- clients other than app, cli and desktop, which the tool registry gates out;
-- subagents, which run without the tool.
+1. **The caller says so.** `autonomous: true` on `prompt` and `prompt_async` (persisted on the user
+   message as `SessionV1.User.autonomous`, and copied onto every harness note so it survives the rest
+   of the turn). The desktop goal loop sets it on every prompt it sends: those turns run inside the
+   desktop client, which does have a question tool, but nobody is there to answer it.
+2. **No question tool for this step**, checked the way `llm/request.ts` filters tools just before the
+   call: the tool has to be registered for the client, allowed by the agent and session permissions,
+   and not turned off on the message. It is missing for `opencode run` without `--interactive` (which
+   denies `question`, `plan_enter` and `plan_exit`), for clients other than app, cli and desktop, and
+   for subagents.
 
-The signal is observable and needs no new configuration. It also matches reality: a model that has no
-question tool cannot ask anyway.
+Signal 2 needs no configuration and matches reality: a model with no question tool cannot ask anyway.
+Signal 1 covers the case signal 2 cannot see — a human-shaped client driven by a robot.
 
 - Interactive: the shared section only. The model may still ask through the `question` tool for
   outcome-changing decisions. Safety confirmations stay in place, such as the kimi.txt rule to
   confirm every git mutation and to confirm installs outside the working directory.
-- Headless: the shared section plus a headless addendum. It says that nobody can answer questions
+- Autonomous: the shared section plus the headless addendum. It says that nobody can answer questions
   during the run, so the model should not stop to ask. It should pick the safest reasonable default
   and record the assumption in the final report. Safety rules still hold, but a step that needs
   confirmation is skipped rather than asked about. For example, the model makes no destructive git
@@ -113,7 +122,7 @@ interactive runs.
   It is passed to `processor.create({ ..., guard })`.
 - **Feed.** At the processor's step end, after the stream has drained and `cleanup()` has settled
   every tool part, the processor builds a step view from the assistant message's tool parts and calls
-  `RunawayGuard.observe(state, view)`. Doing this after `cleanup` rather than at the `step-finish`
+  `RunawayGuard.observe(state, toolParts)`. Doing this after `cleanup` rather than at the `step-finish`
   event ensures every tool result is final. Provider-executed tools and tools rejected by permission
   are excluded, the same way MiniMax excludes permission-blocked calls.
 - **Fingerprints per step:**
@@ -143,12 +152,12 @@ interactive runs.
 ## C. Todo completion
 
 `todo-reminder.ts` holds the logic: `summarize(todos)` returns total, active, completed and cancelled
-counts, where active means pending or in_progress. It also holds `shouldRemind(state, step, interval)`
+counts, where active means pending or in_progress. It also holds `periodic(state, summary, step)` and `onStop(state, summary)`
 and the reminder text: you still have N active todos; continue the unfinished work, or mark finished
 items completed and obsolete ones cancelled; don't present the task as complete while items are
 active.
 
-- **Periodic reminder.** At the start of each loop step, when the loop is continuing after tool calls,
+- **Periodic reminder.** At the end of each loop step, when the loop is continuing after tool calls,
   `prompt.ts` reads `Todo.get(sessionID)`. If there are active todos, and at least `interval` steps
   have passed since the last todo reminder in this turn (counted from the first step), it persists one
   synthetic user message with `metadata: { accuracy_reminder: "todo_periodic" }`.
@@ -170,50 +179,64 @@ active.
 - **todowrite.txt** gains two rules: "Updating the list does not complete the work" and "Before your
   final response, reconcile statuses with the actual work."
 
-## Tests (test-first: red, then green)
+## Harness notes and turn tracking
 
-Style: `it.instance` with the `TestLLMServer` scripted mock, following `test/session/prompt.test.ts`
-and `processor-effect.test.ts`.
+Both features deliver their reminder the same way: an all-synthetic user message carrying
+`metadata: { accuracy_reminder: "<kind>" }` on its text part, with every other field copied from the
+real user message (agent, model, variant, format, system, tools, `autonomous`). The precedents are
+the compaction "continue" message and the subtask summary message, which are also all-synthetic user
+messages.
 
-- `test/session/runaway-guard.test.ts` (unit):
-  - three identical actions in consecutive steps give one reminder;
-  - a non-consecutive repeat gives none;
-  - the same error family across different inputs triggers;
-  - one reminder per turn at most;
-  - permission-rejected calls are excluded;
-  - the threshold is configurable.
-- `test/session/todo-reminder.test.ts` (unit): summary counts, the interval gate, and no reminder
-  when every item is terminal.
-- `test/session/accuracy-loop.test.ts` (integration, mock LLM):
-  - B: the mock issues the same tool call on three steps, then stops. Expect exactly one synthetic
-    `runaway_guard` user message, no `permission.asked` event, the tool still executed every time,
-    and the reminder text in the 4th LLM request body.
-  - B off: no reminder message.
-  - C continue: the mock calls todowrite with pending items, then stops. Expect one `todo_continue`
-    synthetic message and a second LLM call. When it stops again, the loop exits with no third
-    reminder.
-  - C periodic: the mock issues 5 tool steps with an active todo. Expect a `todo_periodic` reminder in
-    the 6th request.
-  - C off: the loop exits on the first stop.
-- `test/session/system.test.ts` / prompt test (A):
-  - the autonomy section appears in the request system prompt for a non-Kimi model;
-  - the headless addendum appears when `question` is denied in session permission and is absent when
-    the question tool is available;
-  - the flag off removes both.
-- `test/agent/agent.test.ts` keeps its `doom_loop` default-permission assertion. The permission still
-  exists; only the processor stops asking it when the guard is on.
+Anything that reasons about turns has to know these are not the user speaking:
 
-Run the relevant files several times with `timeout 300`, plus `bun run typecheck` in
-`packages/opencode`.
+- **Desktop goal loop** (`goal-loop.ts`): `isHarnessNote()` tags each parsed message. `turnText()`
+  now starts after the last *real* user message, so a turn the server continued after its own
+  reminder still reads as one turn — including a completion marker the model emitted just before the
+  reminder landed. The idle-poll check that waits for an admitted-but-unrun user prompt skips harness
+  notes too, so a trailing note is never mistaken for a prompt that failed to start.
+- **TUI** (`routes/session/index.tsx`) and **app** (`session-ui/message-part.tsx`): a harness note
+  renders as a centred system divider ("Runaway guard reminder" / "Task completion reminder" in the
+  TUI, `ui.messagePart.harnessReminder` in the app) instead of an empty user bubble.
+- **Secrets**: fingerprints are SHA-256 hashes truncated to 16 hex characters. Raw tool output never
+  enters a reminder, a log line or the guard's state — the log record is
+  `{ kind, tool, occurrences, fingerprint }`, and a test asserts that a secret printed by a tool
+  appears in none of them.
+
+## Tests
+
+Style: `it.instance` with the `TestLLMServer` scripted mock, following `test/session/prompt.test.ts`.
+Each feature was taken red first, then green.
+
+- `packages/opencode/test/session/runaway-guard.test.ts` (unit, 8): three identical actions in a row
+  give one reminder; an interrupted repeat gives none; the same error family across different inputs
+  triggers; identical results with different inputs trigger; permission-rejected and
+  provider-executed calls are ignored; the threshold is configurable; the reminder and its log record
+  contain no raw output; a step with no tool calls clears the streak.
+- `packages/opencode/test/session/todo-reminder.test.ts` (unit, 5): summary counts, the interval
+  gate, one stop reminder per turn, nothing when every item is terminal.
+- `packages/opencode/test/session/accuracy-loop.test.ts` (integration, 9): the autonomy section is
+  present by default without the headless part; `autonomous: true` adds the headless part even with a
+  question tool available; a session that denies `question` is autonomous; the flag off removes both;
+  a repeated failing tool call injects exactly one runaway reminder and it reaches the next request;
+  the guard off injects none; stopping with open todos continues exactly once (3 LLM calls, not a
+  loop); the todo flag off exits at the first stop; a periodic reminder lands mid-run.
+- `packages/desktop/src/main/goal-loop.test.ts` (+4): `isHarnessNote` recognition; a mid-turn
+  reminder does not hide the completion marker; a trailing note is not mistaken for an unrun prompt;
+  goal-loop prompts carry `autonomous: true`. The two turn-tracking tests were confirmed red against
+  the unpatched loop.
+
+Typecheck: `packages/opencode`, `core`, `schema`, `desktop`, `tui`, `session-ui` all clean.
 
 ## Uncertainty and risks
 
-- Synthetic user messages mid-turn change `lastUser`. They copy every user field, so model, agent,
-  format and system stay the same. The desktop goal loop and UI renderers need to tolerate all-synthetic
-  user messages the way they already do for the compaction continue message. I'll check whether the TUI
-  and app hide them.
-- The generated SDK types (`packages/sdk/js/**/types.gen.ts`) will not include the new config keys
-  unless they are regenerated. I will regenerate them if the repo script runs cleanly in the worktree.
-  If it doesn't, I'll leave them and report it.
-- Headless detection by the presence of the `question` tool treats clients such as ACP as headless,
-  because their question tool is gated off. That is intended: those clients cannot answer a question.
+- Harness notes change `lastUser` for the rest of the turn. Every user field is copied over, so agent,
+  model, format, system and `autonomous` are preserved, and the loop's exit condition
+  (`assistant.parentID === lastUser.id`) still holds. Other consumers that count user messages should
+  be reviewed if new ones appear; the session title heuristic already ignores all-synthetic messages.
+- `packages/opencode/test/session/prompt.test.ts` has 4 failing tests on this machine both with and
+  without these changes (shell and cancel timing on Windows); the failing names vary between runs.
+- Running `runaway-guard.test.ts` and `todo-reminder.test.ts` in one `bun test` invocation sometimes
+  fails the preload's `afterAll` temp-dir cleanup on Windows (EBUSY). Each file passes on its own and
+  the assertions pass either way.
+- SDK regeneration rewrites every generated file with LF endings; only the two files with real
+  content changes are kept in the commit.

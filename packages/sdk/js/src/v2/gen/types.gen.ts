@@ -259,6 +259,7 @@ export type UserMessage = {
   tools?: {
     [key: string]: boolean
   }
+  autonomous?: boolean
 }
 
 export type ProviderAuthError = {
@@ -2028,6 +2029,13 @@ export type Config = {
     primary_tools?: Array<string>
     continue_loop_on_deny?: boolean
     mcp_timeout?: number
+    accuracy?: {
+      autonomy_prompt?: boolean
+      runaway_guard?: boolean
+      runaway_guard_threshold?: number
+      todo_reminder?: boolean
+      todo_reminder_interval?: number
+    }
     policies?: Array<ConfigV2ExperimentalPolicy>
   }
 }
@@ -10061,6 +10069,7 @@ export type SessionPromptData = {
     format?: OutputFormat
     system?: string
     variant?: string
+    autonomous?: boolean
     parts: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
   }
   path: {
@@ -10408,6 +10417,7 @@ export type SessionPromptAsyncData = {
     format?: OutputFormat
     system?: string
     variant?: string
+    autonomous?: boolean
     parts: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
   }
   path: {

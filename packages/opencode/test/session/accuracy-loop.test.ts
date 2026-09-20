@@ -1,0 +1,390 @@
+import { ConfigV1 } from "@opencode-ai/core/v1/config/config"
+import { Database } from "@opencode-ai/core/database/database"
+import { LayerNode } from "@opencode-ai/core/effect/layer-node"
+import { SessionProjector } from "@opencode-ai/core/session/projector"
+import { expect } from "bun:test"
+import { Effect, Layer } from "effect"
+import path from "path"
+import { Agent as AgentSvc } from "../../src/agent/agent"
+import { BackgroundJob } from "@/background/job"
+import { Command } from "../../src/command"
+import { Config } from "@/config/config"
+import { EventV2Bridge } from "@/event-v2-bridge"
+import { Env } from "../../src/env"
+import { FSUtil } from "@opencode-ai/core/fs-util"
+import { Format } from "../../src/format"
+import { Git } from "../../src/git"
+import { Image } from "../../src/image/image"
+import { Instruction } from "../../src/session/instruction"
+import { LLM } from "../../src/session/llm"
+import { LSP } from "@/lsp/lsp"
+import { MCP } from "../../src/mcp"
+import { MessageV2 } from "../../src/session/message-v2"
+import { Permission } from "../../src/permission"
+import { Plugin } from "../../src/plugin"
+import { Provider as ProviderSvc } from "@/provider/provider"
+import { Question } from "../../src/question"
+import { Ripgrep } from "@opencode-ai/core/ripgrep"
+import { RuntimeFlags } from "@/effect/runtime-flags"
+import { Session } from "@/session/session"
+import { SessionCompaction } from "../../src/session/compaction"
+import { SessionPrompt } from "../../src/session/prompt"
+import { SessionProcessor } from "../../src/session/processor"
+import { SessionRevert } from "../../src/session/revert"
+import { SessionRunState } from "../../src/session/run-state"
+import { SessionStatus } from "../../src/session/status"
+import { SessionSummary } from "../../src/session/summary"
+import { Skill } from "../../src/skill"
+import { Snapshot } from "../../src/snapshot"
+import { SystemPrompt } from "../../src/session/system"
+import { Todo } from "../../src/session/todo"
+import { ToolRegistry } from "@/tool/registry"
+import { Truncate } from "@/tool/truncate"
+import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
+import { ModelV2 } from "@opencode-ai/core/model"
+import { ProviderV2 } from "@opencode-ai/core/provider"
+import { TestInstance } from "../fixture/fixture"
+import { testEffect } from "../lib/effect"
+import { TestLLMServer } from "../lib/llm-server"
+
+const ref = {
+  providerID: ProviderV2.ID.make("test"),
+  modelID: ModelV2.ID.make("test-model"),
+}
+
+const summary = Layer.succeed(
+  SessionSummary.Service,
+  SessionSummary.Service.of({
+    summarize: () => Effect.void,
+    diff: () => Effect.succeed([]),
+    computeDiff: () => Effect.succeed([]),
+  }),
+)
+
+const lsp = Layer.succeed(
+  LSP.Service,
+  LSP.Service.of({
+    init: () => Effect.void,
+    status: () => Effect.succeed([]),
+    hasClients: () => Effect.succeed(false),
+    touchFile: () => Effect.void,
+    diagnostics: () => Effect.succeed({}),
+    hover: () => Effect.succeed(undefined),
+    definition: () => Effect.succeed([]),
+    references: () => Effect.succeed([]),
+    implementation: () => Effect.succeed([]),
+    documentSymbol: () => Effect.succeed([]),
+    workspaceSymbol: () => Effect.succeed([]),
+    prepareCallHierarchy: () => Effect.succeed([]),
+    incomingCalls: () => Effect.succeed([]),
+    outgoingCalls: () => Effect.succeed([]),
+  }),
+)
+
+const mcp = Layer.succeed(
+  MCP.Service,
+  MCP.Service.of({
+    status: () => Effect.succeed({}),
+    clients: () => Effect.succeed({}),
+    instructions: () => Effect.succeed([]),
+    tools: () => Effect.succeed({}),
+    prompts: () => Effect.succeed({}),
+    resources: () => Effect.succeed({}),
+    resourceTemplates: () => Effect.succeed({}),
+    add: () => Effect.succeed({ status: { status: "disabled" as const } }),
+    remove: () => Effect.succeed(false),
+    connect: () => Effect.void,
+    disconnect: () => Effect.void,
+    getPrompt: () => Effect.succeed(undefined),
+    readResource: () => Effect.succeed(undefined),
+    startAuth: () => Effect.die("unexpected MCP auth in accuracy tests"),
+    authenticate: () => Effect.die("unexpected MCP auth in accuracy tests"),
+    finishAuth: () => Effect.die("unexpected MCP auth in accuracy tests"),
+    removeAuth: () => Effect.void,
+    supportsOAuth: () => Effect.succeed(false),
+    hasStoredTokens: () => Effect.succeed(false),
+    getAuthStatus: () => Effect.succeed("not_authenticated" as const),
+  }),
+)
+
+const root = LayerNode.group([
+  SessionPrompt.node,
+  Session.node,
+  SessionProjector.node,
+  MessageV2.node,
+  Snapshot.node,
+  LLM.node,
+  Env.node,
+  AgentSvc.node,
+  Command.node,
+  Permission.node,
+  Plugin.node,
+  Config.node,
+  ProviderSvc.node,
+  LSP.node,
+  MCP.node,
+  FSUtil.node,
+  BackgroundJob.node,
+  SessionStatus.node,
+  SessionRunState.node,
+  Database.node,
+  EventV2Bridge.node,
+  Question.node,
+  Todo.node,
+  ToolRegistry.node,
+  Skill.node,
+  Git.node,
+  Ripgrep.node,
+  Format.node,
+  Truncate.node,
+  SessionProcessor.node,
+  Image.node,
+  SessionCompaction.node,
+  SessionRevert.node,
+  Instruction.node,
+  SystemPrompt.node,
+  CrossSpawnSpawner.node,
+  RuntimeFlags.node,
+  LayerNode.make({ service: TestLLMServer, layer: TestLLMServer.layer, deps: [] }),
+])
+
+const it = testEffect(
+  LayerNode.compile(root, [
+    [SessionSummary.node, summary],
+    [LSP.node, lsp],
+    [MCP.node, mcp],
+    [RuntimeFlags.node, RuntimeFlags.layer({ experimentalEventSystem: true })],
+  ]),
+)
+
+const provider = {
+  test: {
+    name: "Test",
+    id: "test",
+    env: [],
+    npm: "@ai-sdk/openai-compatible",
+    models: {
+      "test-model": {
+        id: "test-model",
+        name: "Test Model",
+        attachment: false,
+        reasoning: false,
+        temperature: false,
+        tool_call: true,
+        release_date: "2025-01-01",
+        limit: { context: 100000, output: 10000 },
+        cost: { input: 0, output: 0 },
+        options: {},
+      },
+    },
+    options: { apiKey: "test-key", baseURL: "http://localhost:1/v1" },
+  },
+}
+
+const useConfig = Effect.fn("test.useConfig")(function* (accuracy?: Record<string, unknown>) {
+  const { directory } = yield* TestInstance
+  const llm = yield* TestLLMServer
+  const fs = yield* FSUtil.Service
+  const config: Partial<ConfigV1.Info> = {
+    provider: {
+      ...provider,
+      test: { ...provider.test, options: { ...provider.test.options, baseURL: llm.url } },
+    },
+    ...(accuracy ? ({ experimental: { accuracy } } as Partial<ConfigV1.Info>) : {}),
+  }
+  yield* fs.writeWithDirs(
+    path.join(directory, "opencode.json"),
+    JSON.stringify({ $schema: "https://opencode.ai/config.json", ...config }),
+  )
+  return { llm, directory }
+})
+
+const session = Effect.fn("test.session")(function* () {
+  const sessions = yield* Session.Service
+  return yield* sessions.create({
+    title: "Accuracy",
+    permission: [{ permission: "*", pattern: "*", action: "allow" }],
+  })
+})
+
+/** Synthetic harness notes: all-synthetic user messages with an accuracy marker. */
+const notes = Effect.fn("test.notes")(function* (sessionID: string) {
+  const sessions = yield* Session.Service
+  const msgs = yield* sessions.messages({ sessionID: sessionID as any })
+  return msgs
+    .filter((msg) => msg.info.role === "user")
+    .flatMap((msg) =>
+      msg.parts.flatMap((part) =>
+        part.type === "text" && part.synthetic && typeof part.metadata?.accuracy_reminder === "string"
+          ? [{ kind: part.metadata.accuracy_reminder as string, text: part.text }]
+          : [],
+      ),
+    )
+})
+
+const systemOf = (hit: { body: Record<string, unknown> }) =>
+  JSON.stringify((hit.body.messages as unknown[])?.filter((m: any) => m?.role === "system") ?? [])
+
+// A. autonomy prompt
+
+it.instance("adds the autonomy section to the system prompt, interactive by default", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useConfig()
+    const prompt = yield* SessionPrompt.Service
+    const chat = yield* session()
+    yield* llm.text("done")
+    yield* prompt.prompt({ sessionID: chat.id, agent: "build", parts: [{ type: "text", text: "hi" }] })
+    const hits = yield* llm.hits
+    const system = systemOf(hits[0]!)
+    expect(system).toContain("Working autonomously")
+    expect(system).not.toContain("This run is autonomous")
+  }),
+)
+
+it.instance("autonomous prompts get the headless section even with a question tool available", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useConfig()
+    const prompt = yield* SessionPrompt.Service
+    const chat = yield* session()
+    yield* llm.text("done")
+    yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      autonomous: true,
+      parts: [{ type: "text", text: "hi" }],
+    })
+    const hits = yield* llm.hits
+    const system = systemOf(hits[0]!)
+    expect(system).toContain("Working autonomously")
+    expect(system).toContain("This run is autonomous")
+  }),
+)
+
+it.instance("a session that denies the question tool is treated as headless", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useConfig()
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({
+      title: "Headless",
+      permission: [
+        { permission: "*", pattern: "*", action: "allow" },
+        { permission: "question", pattern: "*", action: "deny" },
+      ],
+    })
+    yield* llm.text("done")
+    yield* prompt.prompt({ sessionID: chat.id, agent: "build", parts: [{ type: "text", text: "hi" }] })
+    const hits = yield* llm.hits
+    expect(systemOf(hits[0]!)).toContain("This run is autonomous")
+  }),
+)
+
+it.instance("the autonomy section is gone when the flag is off", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useConfig({ autonomy_prompt: false })
+    const prompt = yield* SessionPrompt.Service
+    const chat = yield* session()
+    yield* llm.text("done")
+    yield* prompt.prompt({ sessionID: chat.id, agent: "build", parts: [{ type: "text", text: "hi" }] })
+    const hits = yield* llm.hits
+    const system = systemOf(hits[0]!)
+    expect(system).not.toContain("Working autonomously")
+    expect(system).not.toContain("This run is autonomous")
+  }),
+)
+
+// B. runaway guard
+
+it.instance(
+  "repeating the same tool call injects exactly one runaway reminder and no permission ask",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useConfig()
+      const prompt = yield* SessionPrompt.Service
+      const chat = yield* session()
+      for (let i = 0; i < 5; i++) yield* llm.tool("read", { filePath: "/definitely/missing/file.txt" })
+      yield* llm.text("giving up")
+      yield* prompt.prompt({ sessionID: chat.id, agent: "build", parts: [{ type: "text", text: "loop" }] })
+      const injected = yield* notes(chat.id)
+      expect(injected.filter((note) => note.kind.includes("runaway_guard"))).toHaveLength(1)
+      expect(injected[0]!.text).toContain("[runaway guard]")
+      const hits = yield* llm.hits
+      expect(JSON.stringify(hits.at(-1)!.body)).toContain("[runaway guard]")
+    }),
+  20000,
+)
+
+it.instance(
+  "no runaway reminder when the guard is off",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useConfig({ runaway_guard: false })
+      const prompt = yield* SessionPrompt.Service
+      const chat = yield* session()
+      for (let i = 0; i < 4; i++) yield* llm.tool("read", { filePath: "/definitely/missing/file.txt" })
+      yield* llm.text("giving up")
+      yield* prompt.prompt({ sessionID: chat.id, agent: "build", parts: [{ type: "text", text: "loop" }] })
+      expect(yield* notes(chat.id)).toHaveLength(0)
+    }),
+  20000,
+)
+
+// C. todo completion
+
+const pendingTodos = { todos: [{ content: "finish the feature", status: "pending", priority: "high" }] }
+
+it.instance(
+  "stopping with open todos injects one reminder and continues once",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useConfig()
+      const prompt = yield* SessionPrompt.Service
+      const chat = yield* session()
+      yield* llm.tool("todowrite", pendingTodos)
+      yield* llm.text("all done")
+      yield* llm.text("actually stopping")
+      yield* prompt.prompt({ sessionID: chat.id, agent: "build", parts: [{ type: "text", text: "work" }] })
+      const injected = yield* notes(chat.id)
+      expect(injected.filter((note) => note.kind === "todo_continue")).toHaveLength(1)
+      expect(injected.at(-1)!.text).toContain("[task completion]")
+      // one request for the todowrite step, one for the stop, one after the
+      // reminder — and then the loop gives up instead of looping forever
+      const hits = yield* llm.hits
+      expect(hits.length).toBe(3)
+    }),
+  20000,
+)
+
+it.instance(
+  "no todo continuation when the flag is off",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useConfig({ todo_reminder: false })
+      const prompt = yield* SessionPrompt.Service
+      const chat = yield* session()
+      yield* llm.tool("todowrite", pendingTodos)
+      yield* llm.text("all done")
+      yield* prompt.prompt({ sessionID: chat.id, agent: "build", parts: [{ type: "text", text: "work" }] })
+      expect(yield* notes(chat.id)).toHaveLength(0)
+      expect((yield* llm.hits).length).toBe(2)
+    }),
+  20000,
+)
+
+it.instance(
+  "a periodic todo reminder lands while the work is still running",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useConfig({ todo_reminder_interval: 2, runaway_guard: false })
+      const prompt = yield* SessionPrompt.Service
+      const chat = yield* session()
+      yield* llm.tool("todowrite", pendingTodos)
+      yield* llm.tool("glob", { pattern: "**/*.ts" })
+      yield* llm.text("stopping")
+      yield* llm.text("really stopping")
+      yield* prompt.prompt({ sessionID: chat.id, agent: "build", parts: [{ type: "text", text: "work" }] })
+      const injected = yield* notes(chat.id)
+      expect(injected.some((note) => note.kind.includes("todo_periodic"))).toBe(true)
+    }),
+  20000,
+)
