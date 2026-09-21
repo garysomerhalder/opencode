@@ -173,20 +173,7 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
       return promoted.some((job) => job !== undefined)
     })
 
-    const shellTaskInfo = (info: ShellTasks.Info) => ({
-      id: info.id,
-      sessionID: info.sessionID,
-      command: info.command,
-      cwd: info.cwd,
-      status: info.status,
-      ...(info.pid === undefined ? {} : { pid: info.pid }),
-      exitCode: info.exitCode,
-      startedAt: info.startedAt,
-      ...(info.endedAt === undefined ? {} : { endedAt: info.endedAt }),
-      bytes: info.bytes,
-      ...(info.file ? { file: info.file } : {}),
-      ...(info.reason ? { reason: info.reason } : {}),
-    })
+    const shellTaskInfo = ShellTasks.clientInfo
 
     const shellTasks = Effect.fn("ExperimentalHttpApi.shellTasks")(function* (ctx: {
       query: { sessionID?: SessionID }
@@ -197,10 +184,17 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
     const shellTasksStop = Effect.fn("ExperimentalHttpApi.shellTasksStop")(function* (ctx: {
       query: { sessionID?: SessionID }
     }) {
-      const stopped = yield* tasks.stopAll(
-        ctx.query.sessionID ? { sessionID: ctx.query.sessionID } : {},
-      )
+      const stopped = yield* tasks.stopAll(ctx.query.sessionID ? { sessionID: ctx.query.sessionID } : {})
       return stopped.map(shellTaskInfo)
+    })
+
+    const shellTaskStop = Effect.fn("ExperimentalHttpApi.shellTaskStop")(function* (ctx: {
+      params: { taskID: string }
+      query: { sessionID: SessionID }
+    }) {
+      const stopped = yield* tasks.stop(ctx.query.sessionID, ctx.params.taskID)
+      if (!stopped) return yield* new HttpApiError.NotFound({})
+      return shellTaskInfo(stopped)
     })
 
     const resource = Effect.fn("ExperimentalHttpApi.resource")(function* () {
@@ -222,6 +216,7 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
       .handle("sessionBackground", sessionBackground)
       .handle("shellTasks", shellTasks)
       .handle("shellTasksStop", shellTasksStop)
+      .handle("shellTaskStop", shellTaskStop)
       .handle("resource", resource)
   }),
 )

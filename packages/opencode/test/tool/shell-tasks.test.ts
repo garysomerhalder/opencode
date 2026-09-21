@@ -136,15 +136,15 @@ const notes = (sessionID: SessionID) =>
     return messages
       .filter((message) => HarnessNote.isNote(message))
       .map((message) => ({
-      id: message.info.id,
-      agent: message.info.role === "user" ? message.info.agent : undefined,
-      model: message.info.role === "user" ? message.info.model : undefined,
-      kind: HarnessNote.kind(message.parts),
-      text: message.parts
-        .filter((part) => part.type === "reminder")
-        .map((part) => (part.type === "reminder" ? part.text : ""))
-        .join(""),
-    }))
+        id: message.info.id,
+        agent: message.info.role === "user" ? message.info.agent : undefined,
+        model: message.info.role === "user" ? message.info.model : undefined,
+        kind: HarnessNote.kind(message.parts),
+        text: message.parts
+          .filter((part) => part.type === "reminder")
+          .map((part) => (part.type === "reminder" ? part.text : ""))
+          .join(""),
+      }))
   })
 
 /** A session with one real user message for a note to copy. */
@@ -393,7 +393,10 @@ it.instance(
 
       const stopped = yield* tasks.stop(sessionID, handle.id)
       expect(stopped?.status).toBe("stopped")
-      yield* waitFor(Effect.sync(() => alive(pids!.parent) || alive(pids!.child)), (any) => any === false)
+      yield* waitFor(
+        Effect.sync(() => alive(pids!.parent) || alive(pids!.child)),
+        (any) => any === false,
+      )
       expect(alive(pids!.parent)).toBe(false)
       expect(alive(pids!.child)).toBe(false)
 
@@ -517,4 +520,85 @@ it.instance(
       expect(alive(info.pid!)).toBe(false)
     }),
   40_000,
+)
+
+/** Every shell.task.updated event published while `self` runs. */
+const collectTaskEvents = <A, E, R>(self: Effect.Effect<A, E, R>) =>
+  Effect.gen(function* () {
+    const events = yield* EventV2Bridge.Service
+    const seen: Array<{ sessionID: string; task: ShellTasks.Info & { tail?: string; wake?: string } }> = []
+    const unsubscribe = yield* events.listen((event) => {
+      if (event.type === "shell.task.updated") seen.push(event.data as (typeof seen)[number])
+      return Effect.void
+    })
+    const value = yield* self
+    yield* Effect.sleep("200 millis")
+    yield* unsubscribe
+    return { value, seen }
+  })
+
+it.instance(
+  "publishes shell.task.updated when a task goes to the background and when it ends",
+  () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const wake = recorder(sessions)
+      const session = yield* seedSession()
+      const { seen } = yield* collectTaskEvents(
+        Effect.gen(function* () {
+          const handle = yield* start({
+            code: "require('fs').writeSync(1, 'building\\n'); setTimeout(() => {}, 600)",
+            session: session.id,
+          })
+          yield* waitFor(handle.info, (info) => info.bytes > 0)
+          yield* handle.promote({ wake: wake.ops })
+          yield* handle.awaitExit
+          yield* Effect.sleep("900 millis")
+        }),
+      )
+      const statuses = seen.map((item) => item.task.status)
+      expect(statuses[0]).toBe("running")
+      expect(statuses.at(-1)).toBe("exited")
+      expect(seen.every((item) => item.sessionID === session.id)).toBe(true)
+      // the promoted event already carries the last output line and a pending wake
+      expect(seen[0]!.task.tail).toBe("building")
+      expect(seen[0]!.task.wake).toBe("pending")
+      // after the wake was delivered, the last event says so
+      expect(seen.at(-1)!.task.wake).toBe("delivered")
+    }),
+  30_000,
+)
+
+it.instance(
+  "a task that never goes to the background publishes nothing",
+  () =>
+    Effect.gen(function* () {
+      const { seen } = yield* collectTaskEvents(
+        Effect.gen(function* () {
+          const handle = yield* start({ code: "require('fs').writeSync(1, 'quick\n')" })
+          yield* handle.awaitExit
+        }),
+      )
+      expect(seen).toEqual([])
+    }),
+  30_000,
+)
+
+it.instance(
+  "a stopped task lists no wake",
+  () =>
+    Effect.gen(function* () {
+      const tasks = yield* ShellTasks.Service
+      const sessions = yield* Session.Service
+      const wake = recorder(sessions)
+      const handle = yield* start({ code: "setInterval(() => {}, 1000)" })
+      yield* handle.promote({ wake: wake.ops })
+      const stopped = yield* tasks.stop(sessionID, handle.id)
+      expect(stopped?.status).toBe("stopped")
+      const listed = (yield* tasks.list(sessionID)).find((info) => info.id === handle.id) as
+        | (ShellTasks.Info & { wake?: string })
+        | undefined
+      expect(listed?.wake).toBe("suppressed")
+    }),
+  30_000,
 )

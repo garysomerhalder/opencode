@@ -9,6 +9,7 @@ import type {
   QuestionRequest,
   Session,
   SessionStatus,
+  ShellTask,
   Todo,
 } from "@opencode-ai/sdk/v2/client"
 import type { FileDiffInfo } from "@opencode-ai/client/promise"
@@ -21,6 +22,7 @@ import { normalizeSessionInfo } from "@/utils/session"
 import { compareMessages, messageKey, normalizeSessionMessages } from "@/utils/session-message"
 import { dropSessionCaches, pickSessionCacheEvictions, SESSION_CACHE_LIMIT } from "./global-sync/session-cache"
 import { createV2SessionReducer, type V2SessionReduction } from "./server-session-v2-reducer"
+import { upsertTask } from "@/pages/session/composer/session-task-dock-view"
 import type { ServerApi } from "@/utils/server"
 
 type MessageApi = ServerApi["message"]
@@ -198,6 +200,7 @@ export function createServerSession(
     session_status: {} as Record<string, SessionStatus>,
     session_diff: {} as Record<string, FileDiffInfo[]>,
     todo: {} as Record<string, Todo[]>,
+    shell_task: {} as Record<string, ShellTask[]>,
     permission: {} as Record<string, PermissionRequest[]>,
     question: {} as Record<string, QuestionRequest[]>,
     message: {} as Record<string, Message[]>,
@@ -1022,6 +1025,11 @@ export function createServerSession(
         setData("todo", props.sessionID, reconcile(props.todos, { key: "id" }))
         return
       }
+      case "shell.task.updated": {
+        const props = event.properties as { sessionID: string; task: ShellTask }
+        setData("shell_task", props.sessionID, (list) => upsertTask(list ?? [], props.task))
+        return
+      }
       case "session.status": {
         const props = event.properties as { sessionID: string; status: SessionStatus }
         setData("session_status", props.sessionID, reconcile(props.status))
@@ -1391,6 +1399,18 @@ export function createServerSession(
           setData("todo", sessionID, reconcile(result.data ?? [], { key: "id" }))
         })
       })
+    },
+    /** Background shell tasks of a session; events keep them current after this first load. */
+    async shellTasks(sessionID: string) {
+      if ((await options?.protocol) === "v2") return
+      const result = await client.experimental.shellTask.list({ sessionID }).catch(() => undefined)
+      const tasks = result?.data
+      if (!Array.isArray(tasks)) return
+      setData("shell_task", sessionID, (list) => tasks.reduce((next, task) => upsertTask(next, task), list ?? []))
+    },
+    async stopShellTask(sessionID: string, taskID: string) {
+      const result = await client.experimental.shellTask.stop({ sessionID, taskID })
+      if (result.data) setData("shell_task", sessionID, (list) => upsertTask(list ?? [], result.data!))
     },
     history: {
       more: (sessionID: string) =>

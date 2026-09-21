@@ -93,6 +93,7 @@ export type Event =
   | EventWorktreeFailed
   | EventServerConnected
   | EventGlobalDisposed
+  | EventShellTaskUpdated
   | EventServerInstanceDisposed
 
 export type QuestionReplied = {
@@ -745,6 +746,23 @@ export type QuestionTool = {
 }
 
 export type QuestionAnswer = Array<string>
+
+export type ShellTask = {
+  id: string
+  sessionID: string
+  command: string
+  cwd: string
+  status: "running" | "exited" | "stopped" | "timed_out" | "cancelled"
+  pid?: number
+  exitCode: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  startedAt: number
+  endedAt?: number
+  bytes: number
+  file?: string
+  reason?: string
+  tail?: string
+  wake?: "none" | "pending" | "delivered" | "read" | "suppressed"
+}
 
 export type GlobalEvent = {
   directory: string
@@ -1619,6 +1637,14 @@ export type GlobalEvent = {
           [key: string]: unknown
         }
       }
+    | {
+        id: string
+        type: "shell.task.updated"
+        properties: {
+          sessionID: string
+          task: ShellTask
+        }
+      }
     | EventServerInstanceDisposed
     | SyncEventSessionCreated
     | SyncEventSessionUpdated
@@ -2290,21 +2316,6 @@ export type GlobalSession = {
   project: ProjectSummary | null
 }
 
-export type ShellTask = {
-  id: string
-  sessionID: string
-  command: string
-  cwd: string
-  status: "running" | "exited" | "stopped" | "timed_out" | "cancelled"
-  pid?: number
-  exitCode: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-  startedAt: number
-  endedAt?: number
-  bytes: number
-  file?: string
-  reason?: string
-}
-
 export type ShellTasks = Array<ShellTask>
 
 export type McpResource = {
@@ -2933,6 +2944,23 @@ export type QuestionRejected2 = {
   }
 }
 
+export type ShellTask2 = {
+  id: string
+  sessionID: string
+  command: string
+  cwd: string
+  status: "running" | "exited" | "stopped" | "timed_out" | "cancelled"
+  pid?: number
+  exitCode: number | "NaN" | "Infinity" | "-Infinity"
+  startedAt: number
+  endedAt?: number
+  bytes: number
+  file?: string
+  reason?: string
+  tail?: string
+  wake?: "none" | "pending" | "delivered" | "read" | "suppressed"
+}
+
 export type V2Event =
   | ModelsDevRefreshed
   | IntegrationUpdated
@@ -3022,6 +3050,7 @@ export type V2Event =
   | WorktreeFailed
   | ServerConnected
   | GlobalDisposed
+  | ShellTaskUpdated
 
 export type V2EventStream = string
 
@@ -6186,6 +6215,24 @@ export type GlobalDisposed = {
   }
 }
 
+export type ShellTaskUpdated = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "shell.task.updated"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    sessionID: string
+    task: ShellTask2
+  }
+}
+
 export type QuestionV2Request = {
   id: string
   sessionID: string
@@ -7133,6 +7180,15 @@ export type EventGlobalDisposed = {
   }
 }
 
+export type EventShellTaskUpdated = {
+  id: string
+  type: "shell.task.updated"
+  properties: {
+    sessionID: string
+    task: ShellTask2
+  }
+}
+
 export type CredentialOAuth = {
   type: "oauth"
   methodID: string
@@ -7999,6 +8055,42 @@ export type ExperimentalShellTaskStopAllResponses = {
 
 export type ExperimentalShellTaskStopAllResponse =
   ExperimentalShellTaskStopAllResponses[keyof ExperimentalShellTaskStopAllResponses]
+
+export type ExperimentalShellTaskStopData = {
+  body?: never
+  path: {
+    taskID: string
+  }
+  query: {
+    directory?: string
+    workspace?: string
+    sessionID: string
+  }
+  url: "/experimental/shell/task/{taskID}/stop"
+}
+
+export type ExperimentalShellTaskStopErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type ExperimentalShellTaskStopError = ExperimentalShellTaskStopErrors[keyof ExperimentalShellTaskStopErrors]
+
+export type ExperimentalShellTaskStopResponses = {
+  /**
+   * The stopped background shell task
+   */
+  200: ShellTask
+}
+
+export type ExperimentalShellTaskStopResponse =
+  ExperimentalShellTaskStopResponses[keyof ExperimentalShellTaskStopResponses]
 
 export type ExperimentalResourceListData = {
   body?: never
