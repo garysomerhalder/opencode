@@ -13,6 +13,8 @@ import { useLanguage } from "@/context/language"
 import { getAvatarColors, type LocalProject, useLayout } from "@/context/layout"
 import { useNotification } from "@/context/notification"
 import { usePermission } from "@/context/permission"
+import { useGoalLoops } from "@/goal-loop/loops-store"
+import { runningSessions } from "@/goal-loop/panel-view"
 import { messageAgentColor } from "@/utils/agent"
 import { sessionTitle } from "@/utils/session-title"
 import { sessionPermissionRequest } from "../session/composer/session-request-tree"
@@ -168,6 +170,10 @@ export const SessionItem = (props: SessionItemProps): JSX.Element => {
     return serverSync().session.data.session_working(props.session.id)
   })
 
+  const goalLoops = useGoalLoops()
+  // Another session's goal never shows on this page, so the list says which sessions have one.
+  const goalRunning = createMemo(() => runningSessions(goalLoops?.states() ?? []).has(props.session.id))
+
   const tint = createMemo(() =>
     messageAgentColor(serverSync().session.data.message[props.session.id], sessionStore.agent),
   )
@@ -241,6 +247,11 @@ export const SessionItem = (props: SessionItemProps): JSX.Element => {
             </Show>
           </div>
 
+          <Show when={goalRunning()}>
+            <Tooltip value={language.t("goalPanel.badge")} placement="top">
+              <Icon name="status" size="small" class="shrink-0 text-icon-info-base" data-slot="session-goal-badge" />
+            </Tooltip>
+          </Show>
           <Show when={!props.level}>
             <div
               class="shrink-0 overflow-hidden transition-[width,opacity]"

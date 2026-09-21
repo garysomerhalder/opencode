@@ -245,10 +245,12 @@ const createPlatform = (windowState: DesktopWindowState): Platform => {
 
     goalLoop: {
       start: (input) => window.api.goalLoop.start(input),
-      stop: () => window.api.goalLoop.stop(),
-      status: () => window.api.goalLoop.status(),
+      stop: (sessionID) => window.api.goalLoop.stop(sessionID),
+      status: (sessionID) => window.api.goalLoop.status(sessionID),
+      list: () => window.api.goalLoop.list(),
+      dismiss: (sessionID) => window.api.goalLoop.dismiss(sessionID),
       subscribe: (cb) => window.api.goalLoop.onEvent(cb),
-      last: () => window.api.goalLoop.last(),
+      last: (sessionID) => window.api.goalLoop.last(sessionID),
     },
 
     linear: {

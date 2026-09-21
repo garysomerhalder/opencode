@@ -47,9 +47,11 @@ import {
 } from "./windows"
 import { registerDevWindowsIdentity, startMenuPrograms } from "./windows-identity"
 import { createWslServersController } from "./wsl/servers"
-import { createGoalLoop, type GoalLoopStartInput, type GoalLoopState } from "./goal-loop"
+import { createGoalLoop } from "./goal-loop"
+import { createGoalLoops } from "./goal-loops"
+import { readLast, saveLast, saveState, takeOrphans, type KeyValueStore } from "./goal-loop-store"
 import { getStore } from "./store"
-import { GOAL_LOOP_LAST_KEY, GOAL_LOOP_STATE_KEY, GOAL_LOOP_STORE } from "./store-keys"
+import { GOAL_LOOP_STORE } from "./store-keys"
 import { registerWslIpcHandlers } from "./wsl/ipc"
 import { spawnWslSidecar } from "./wsl/sidecar"
 import { migrate } from "./migrate"
@@ -102,24 +104,6 @@ async function killSidecar() {
   server = null
   connectionFile?.remove("sidecar stopped")
   await current.stop()
-}
-
-function readGoalLoopRecord(store: { get: (key: string) => unknown }): GoalLoopState | null {
-  const record = store.get(GOAL_LOOP_STATE_KEY) as Partial<GoalLoopState> | null | undefined
-  if (!record || typeof record !== "object") return null
-  if (record.status !== "running" || typeof record.id !== "string") return null
-  return record as GoalLoopState
-}
-
-function readGoalLoopLast(store: { get: (key: string) => unknown }): GoalLoopStartInput | null {
-  const value = store.get(GOAL_LOOP_LAST_KEY) as unknown
-  if (!value || typeof value !== "object") return null
-  const record = value as Record<string, unknown>
-  const directory = record["directory"]
-  if (typeof directory !== "string" || directory.trim().length === 0) return null
-  const goal = record["goal"]
-  if (typeof goal !== "string" || goal.trim().length === 0) return null
-  return value as GoalLoopStartInput
 }
 
 // Unpackaged dev on Windows has no installer shortcut, so without this the taskbar and every toast
@@ -361,32 +345,29 @@ const main = Effect.gen(function* () {
     checkForUpdates: () => void showUpdaterDialog(updater, true),
     relaunch,
   }
-  const goalLoopStore = getStore(GOAL_LOOP_STORE)
-  const goalLoop = createGoalLoop({
-    getServer: () => Effect.runPromise(Deferred.await(serverReady)),
-    persist: (state) => {
-      if (!state) {
-        goalLoopStore.delete(GOAL_LOOP_STATE_KEY)
-        return
-      }
-      goalLoopStore.set(GOAL_LOOP_STATE_KEY, state as unknown as Record<string, unknown>)
-    },
-    persistLast: (input) => {
-      goalLoopStore.set(GOAL_LOOP_LAST_KEY, input as unknown as Record<string, unknown>)
-    },
+  const goalLoopStore = getStore(GOAL_LOOP_STORE) as unknown as KeyValueStore
+  const goalLoops = createGoalLoops({
+    create: (hooks) => createGoalLoop({ getServer: () => Effect.runPromise(Deferred.await(serverReady)), ...hooks }),
+    persist: (sessionID, state) => saveState(goalLoopStore, sessionID, state),
+    persistLast: (sessionID, input) => saveLast(goalLoopStore, sessionID, input),
     onEvent: (event) => {
       sendToAllWindows("goal-loop-event", event)
-      if (event.type !== "started" && event.type !== "iteration") {
-        logger.log("goal loop ended", { type: event.type, loopID: event.loopID, reason: event.state.reason })
+      if (event.type !== "started" && event.type !== "iteration" && event.type !== "progress") {
+        logger.log("goal loop ended", {
+          type: event.type,
+          loopID: event.loopID,
+          sessionID: event.state.sessionID,
+          reason: event.state.reason,
+        })
       }
     },
   })
-  goalLoop.adoptOrphan(readGoalLoopRecord(goalLoopStore))
+  goalLoops.adoptOrphans(takeOrphans(goalLoopStore))
   registerIpcHandlers({
     killSidecar: () => killSidecar(),
     relaunch,
-    goalLoop,
-    getGoalLoopLast: () => readGoalLoopLast(goalLoopStore),
+    goalLoops,
+    getGoalLoopLast: (sessionID) => readLast(goalLoopStore, sessionID),
     awaitInitialization: Effect.fnUntraced(
       function* () {
         logger.log("awaiting server ready")

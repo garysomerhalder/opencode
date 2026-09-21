@@ -93,6 +93,26 @@ describe("goal queue runner", () => {
     expect(last?.reason).toBe("boom")
   })
 
+  test("stop stops the loop of the ticket that is running, by its session", async () => {
+    const stopped: Array<string | undefined> = []
+    let count = 0
+    const runner = createQueueRunner({
+      start: async () => {
+        count += 1
+        return { id: `loop-${count}`, sessionID: `ses_${count}` }
+      },
+      subscribe: () => () => undefined,
+      stop: (sessionID?: string) => {
+        stopped.push(sessionID)
+      },
+    })
+    runner.start([item("ABC-1"), item("ABC-2")])
+    await tick()
+    runner.stop()
+    // Other sessions may run their own goal loops; the queue must name its own.
+    expect(stopped).toEqual(["ses_1"])
+  })
+
   test("stop halts the queue with no further starts", async () => {
     const mock = mockDeps()
     const runner = createQueueRunner(mock.deps)

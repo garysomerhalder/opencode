@@ -1,5 +1,6 @@
 import type {
   GoalLoopEvent,
+  GoalLoopPhase,
   GoalLoopModel,
   GoalLoopStartInput,
   GoalLoopState,
@@ -7,7 +8,15 @@ import type {
   GoalTicket,
 } from "@opencode-ai/app/goal-loop/types"
 
-export type { GoalLoopEvent, GoalLoopModel, GoalLoopStartInput, GoalLoopState, GoalLoopStatus, GoalTicket }
+export type {
+  GoalLoopEvent,
+  GoalLoopModel,
+  GoalLoopPhase,
+  GoalLoopStartInput,
+  GoalLoopState,
+  GoalLoopStatus,
+  GoalTicket,
+}
 
 export type GoalLoopServer = {
   url: string
@@ -21,6 +30,13 @@ export type GoalLoopDeps = {
   now?: () => number
   randomID?: () => string
   onEvent?: (event: GoalLoopEvent) => void
+  /**
+   * Live, unpersisted progress: the phase, the last poll and the last prompt. Called on a
+   * phase change and otherwise at most every progressEveryMs, so a UI can show "checked 3s ago"
+   * without the state being written to disk on every poll.
+   */
+  onProgress?: (state: GoalLoopState) => void
+  progressEveryMs?: number
   persist?: (state: GoalLoopState | null) => void
   persistLast?: (input: GoalLoopStartInput) => void
   /** How long a busy session may go without progress before it counts as one error. */
@@ -56,6 +72,7 @@ const DEFAULT_OUTAGE_TOLERANCE_MS = 2 * 60 * 1000
 const DEFAULT_RETRY_BACKOFF_MS = 1000
 const DEFAULT_MAX_BACKOFF_MS = 30 * 1000
 const DEFAULT_COMPACT_AT_TOKENS = 600_000
+const DEFAULT_PROGRESS_EVERY_MS = 10 * 1000
 const HISTORY_LIMIT = 20
 const ACTIVE_POLL_INTERVAL_MS = 2000
 const EXECUTION_START_TIMEOUT_MS = 30 * 1000
@@ -106,12 +123,7 @@ function continuePromptText(goal: string, marker: string, iteration: number, max
 
 export function extractAssistantText(payload: unknown): string {
   const record = (payload ?? {}) as Record<string, unknown>
-  const candidates = [
-    Array.isArray(payload) ? payload : undefined,
-    record["data"],
-    record["messages"],
-    record["items"],
-  ]
+  const candidates = [Array.isArray(payload) ? payload : undefined, record["data"], record["messages"], record["items"]]
   const items = candidates.find((value): value is unknown[] => Array.isArray(value)) ?? []
   const texts: string[] = []
   for (const item of items) {
@@ -298,7 +310,10 @@ export function createGoalLoop(deps: GoalLoopDeps) {
   const maxBackoffMs = deps.maxBackoffMs ?? DEFAULT_MAX_BACKOFF_MS
   const compactAtTokens = deps.compactAtTokens ?? DEFAULT_COMPACT_AT_TOKENS
 
+  const progressEveryMs = deps.progressEveryMs ?? DEFAULT_PROGRESS_EVERY_MS
+
   let active: GoalLoopState | null = null
+  let progressAt = Number.NEGATIVE_INFINITY
   let stopped = false
   let directory = ""
 
@@ -314,7 +329,9 @@ export function createGoalLoop(deps: GoalLoopDeps) {
         ...(init?.headers ?? {}),
       },
     }).catch((error: unknown) => {
-      throw new TransientError(`goal loop request failed: ${path} ${error instanceof Error ? error.message : String(error)}`)
+      throw new TransientError(
+        `goal loop request failed: ${path} ${error instanceof Error ? error.message : String(error)}`,
+      )
     })
     if (res.status >= 500 || res.status === 429) {
       throw new TransientError(`goal loop request failed: ${res.status} ${path} ${(await res.text()).slice(0, 300)}`)
@@ -335,6 +352,19 @@ export function createGoalLoop(deps: GoalLoopDeps) {
     deps.onEvent?.(event)
   }
 
+  // Updates the live fields without persisting: they change on every poll, and
+  // the persisted record only has to survive a restart. The next setState
+  // carries them into the record anyway, because it spreads the current state.
+  function touch(patch: { phase?: GoalLoopPhase; checkedAt?: number; promptedAt?: number }) {
+    const current = active
+    if (!current || current.status !== "running") return
+    const phaseChanged = patch.phase !== undefined && patch.phase !== current.phase
+    active = { ...current, ...patch }
+    if (!phaseChanged && now() - progressAt < progressEveryMs) return
+    progressAt = now()
+    deps.onProgress?.(active)
+  }
+
   function finish(status: Exclude<GoalLoopStatus, "running">, reason: string | null): GoalLoopState {
     const current = active
     if (!current) throw new Error("no active goal loop")
@@ -350,14 +380,10 @@ export function createGoalLoop(deps: GoalLoopDeps) {
     // v1 surface: the desktop UI reads sessions through it, so loop sessions
     // created here show up in lists, tabs, and transcripts. v2-created
     // sessions are invisible to v1 reads (same server, 200 with []).
-    const created = (await request(
-      server,
-      `/session?directory=${encodeURIComponent(input.directory)}`,
-      {
-        method: "POST",
-        body: JSON.stringify({}),
-      },
-    )) as { id?: unknown; data?: { id?: unknown } }
+    const created = (await request(server, `/session?directory=${encodeURIComponent(input.directory)}`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    })) as { id?: unknown; data?: { id?: unknown } }
     const id = created?.data?.id ?? created?.id
     if (typeof id !== "string" || id.length === 0) {
       throw new Error("goal loop session creation returned no id")
@@ -451,6 +477,7 @@ export function createGoalLoop(deps: GoalLoopDeps) {
       track.owed = null
       track.sawBusy = false
       track.sentAt = now()
+      touch({ promptedAt: track.sentAt })
     }
 
     // Sends the owed continue, summarizing the session first when its last
@@ -522,6 +549,7 @@ export function createGoalLoop(deps: GoalLoopDeps) {
       }
       try {
         const busy = await sessionBusy(server, sessionID)
+        touch({ checkedAt: now(), phase: busy ? "turn" : "waiting" })
         track.retries = 0
         if (track.outageSince !== null) {
           const down = seconds(now() - track.outageSince)
@@ -778,10 +806,14 @@ export function createGoalLoop(deps: GoalLoopDeps) {
       completionMarker: marker,
       reason: null,
       updatedAt: now(),
+      phase: "turn",
+      checkedAt: null,
+      promptedAt: null,
     })
     deps.persistLast?.(input)
     emit({ loopID: state.id, type: "started", state })
     await prompt(server, sessionID, firstPromptText(goal, marker), input)
+    touch({ promptedAt: now() })
     void drive(state, server, input, baselineAssistantID)
     return state
   }

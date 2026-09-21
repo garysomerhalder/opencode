@@ -2,7 +2,7 @@ import { onCleanup, onMount } from "solid-js"
 import { useLanguage } from "@/context/language"
 import { usePlatform } from "@/context/platform"
 import { showToast } from "@/utils/toast"
-import type { GoalLoopEvent } from "./types"
+import { TERMINAL_EVENTS, type GoalLoopEvent } from "./types"
 
 const notifiedLoops = new Set<string>()
 
@@ -80,13 +80,13 @@ export function useGoalLoopNotifications() {
     const goalLoop = platform.goalLoop
     if (!goalLoop) return
     const unsubscribe = goalLoop.subscribe((event) => {
-      if (event.type === "started" || event.type === "iteration") return
+      // Only terminal events notify. A "progress" event arrives every few seconds and
+      // must never be taken for an ending (it would also mark the loop as notified).
+      if (!(TERMINAL_EVENTS as readonly string[]).includes(event.type)) return
       if (notifiedLoops.has(event.loopID)) return
       notifiedLoops.add(event.loopID)
       terminalToast(language, event)
-      void platform
-        .notify(terminalTitle(language, event), terminalBody(language, event))
-        .catch(() => undefined)
+      void platform.notify(terminalTitle(language, event), terminalBody(language, event)).catch(() => undefined)
     })
     onCleanup(unsubscribe)
   })
