@@ -418,15 +418,16 @@ it.instance(
 )
 
 it.instance(
-  "is off unless the config turns it on",
+  "is on unless the config turns it off",
   () =>
     Effect.gen(function* () {
       const tool = yield* shell()
-      expect(tool.description).not.toContain("# Long commands")
+      expect(tool.description).toContain("# Long commands")
       const result = yield* tool.execute({ command: say(["plain"]) }, context())
       expect(result.output.trim()).toBe("plain")
     }),
-  // No background_shell key at all: the default.
+  // No background_shell key at all: the default. It is on now that the
+  // background tasks dock shows what keeps running and lets the user stop it.
   {},
   90_000,
 )

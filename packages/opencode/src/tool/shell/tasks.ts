@@ -74,10 +74,11 @@ export type Settings = {
 }
 
 export const DEFAULTS: Settings = {
-  // Off for the first release: nothing in the UI shows a live background
-  // process yet, so a user who presses escape would have no way to see or stop
-  // the trees that keep running. Opt in with `experimental.background_shell`.
-  enabled: false,
+  // On by default. It shipped off until the UI could show a live background
+  // process; the session's background tasks dock now lists each one with its
+  // wake state and a stop button. `experimental.background_shell: false` turns
+  // it off.
+  enabled: true,
   yieldAfterMs: 15_000,
   maxLifetimeMs: 60 * 60 * 1000,
   maxConcurrent: 8,
