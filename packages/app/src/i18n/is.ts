@@ -95,7 +95,6 @@ const desktop = [
   "New Goal Loop...",
   "Start Goal Loop from Ticket...",
   "Goal Loop Wizard...",
-
 ]
 
 export const dict = {
@@ -928,6 +927,20 @@ export const dict = {
   "session.todo.collapse": "Hrun",
   "session.todo.expand": "Stækkaðu",
   "session.todo.progress": "{{done}} af {{total}} verkefnum lokið",
+  "taskDock.header": "Background tasks · {{count}} running",
+  "taskDock.status.running": "running",
+  "taskDock.status.exited": "exited 0",
+  "taskDock.status.failed": "exited {{code}}",
+  "taskDock.status.stopped": "stopped",
+  "taskDock.status.cancelled": "cancelled",
+  "taskDock.status.timedOut": "hit its time limit",
+  "taskDock.status.reaped": "killed: idle, nobody reading",
+  "taskDock.wake.pending": "will wake the agent",
+  "taskDock.wake.delivered": "agent woken",
+  "taskDock.wake.read": "agent already read it",
+  "taskDock.wake.stopped": "stopped, no wake",
+  "taskDock.wake.reaped": "no wake",
+  "taskDock.action.stop": "Stop this task",
   "session.question.progress": "{{current}} af {{total}} spurningum",
   "session.question.minimize": "Lágmarka spurninguna",
   "session.question.restore": "Endurheimta spurningu",

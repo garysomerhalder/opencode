@@ -50,6 +50,8 @@ import type {
   ExperimentalShellTaskListResponses,
   ExperimentalShellTaskStopAllErrors,
   ExperimentalShellTaskStopAllResponses,
+  ExperimentalShellTaskStopErrors,
+  ExperimentalShellTaskStopResponses,
   ExperimentalWorkspaceAdapterListErrors,
   ExperimentalWorkspaceAdapterListResponses,
   ExperimentalWorkspaceCreateErrors,
@@ -970,6 +972,44 @@ export class ShellTask extends HeyApiClient {
       ThrowOnError
     >({
       url: "/experimental/shell/task/stop",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Stop one background shell task
+   *
+   * Stop one background shell task of a session and kill its process tree. Stopping a task that already ended returns it unchanged. A task of another session is not found.
+   */
+  public stop<ThrowOnError extends boolean = false>(
+    parameters: {
+      taskID: string
+      directory?: string
+      workspace?: string
+      sessionID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "taskID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "sessionID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      ExperimentalShellTaskStopResponses,
+      ExperimentalShellTaskStopErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/shell/task/{taskID}/stop",
       ...options,
       ...params,
     })

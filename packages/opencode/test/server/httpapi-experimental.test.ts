@@ -217,11 +217,23 @@ describe("experimental HttpApi", () => {
       expect(stopped.status).toBe(200)
       expect(yield* json(stopped)).toEqual([])
 
-      const stoppedScoped = yield* request(`${ExperimentalPaths.shellTasksStop}?sessionID=${session.id}`, tmp.directory, {
-        method: "POST",
-      })
+      const stoppedScoped = yield* request(
+        `${ExperimentalPaths.shellTasksStop}?sessionID=${session.id}`,
+        tmp.directory,
+        {
+          method: "POST",
+        },
+      )
       expect(stoppedScoped.status).toBe(200)
       expect(yield* json(stoppedScoped)).toEqual([])
+
+      // One task, by id, scoped to its session: an unknown id is a 404, not a silent success.
+      const one = yield* request(
+        `${ExperimentalPaths.shellTaskStop.replace(":taskID", "shl_missing")}?sessionID=${session.id}`,
+        tmp.directory,
+        { method: "POST" },
+      )
+      expect(one.status).toBe(404)
     }),
   )
 

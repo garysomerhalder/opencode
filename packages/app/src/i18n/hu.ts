@@ -95,7 +95,6 @@ const desktop = [
   "New Goal Loop...",
   "Start Goal Loop from Ticket...",
   "Goal Loop Wizard...",
-
 ]
 
 export const dict = {
@@ -932,6 +931,20 @@ export const dict = {
   "session.todo.collapse": "Összeomlás",
   "session.todo.expand": "Bontsa ki",
   "session.todo.progress": "{{done}}/{{total}} todos elkészült",
+  "taskDock.header": "Background tasks · {{count}} running",
+  "taskDock.status.running": "running",
+  "taskDock.status.exited": "exited 0",
+  "taskDock.status.failed": "exited {{code}}",
+  "taskDock.status.stopped": "stopped",
+  "taskDock.status.cancelled": "cancelled",
+  "taskDock.status.timedOut": "hit its time limit",
+  "taskDock.status.reaped": "killed: idle, nobody reading",
+  "taskDock.wake.pending": "will wake the agent",
+  "taskDock.wake.delivered": "agent woken",
+  "taskDock.wake.read": "agent already read it",
+  "taskDock.wake.stopped": "stopped, no wake",
+  "taskDock.wake.reaped": "no wake",
+  "taskDock.action.stop": "Stop this task",
   "session.question.progress": "{{current}}/{{total}} kérdések",
   "session.question.minimize": "Minimalizálja a kérdést",
   "session.question.restore": "Kérdés visszaállítása",

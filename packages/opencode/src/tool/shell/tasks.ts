@@ -28,6 +28,8 @@ import type { SessionID, MessageID } from "@/session/schema"
 import { TRUNCATION_DIR } from "../truncation-dir"
 import { ToolID } from "../schema"
 import { SessionWake, type WakeOps } from "../wake"
+import { ShellTaskEvent } from "@opencode-ai/schema/shell-task-event"
+import { lastLine, shouldPublish, wakeState, type Wake } from "./task-view"
 
 export type Status = "running" | "exited" | "stopped" | "timed_out" | "cancelled"
 
@@ -55,6 +57,10 @@ export type Info = {
   reason?: Reason
   /** Set when the command could not be started at all. */
   error?: string
+  /** The last line of output (computed when listed). */
+  tail?: string
+  /** Whether the finish reaches the agent (computed when listed). */
+  wake?: Wake
 }
 
 export type Settings = {
@@ -196,6 +202,8 @@ const MAX_WAIT_MS = 30_000
 const FINISHED_TAIL_BYTES = 8 * 1024
 /** Finished tasks kept in the registry, newest first. */
 const MAX_FINISHED = 50
+/** Shortest gap between two output-only shell.task.updated events for one task. */
+const PUBLISH_EVERY_MS = 1000
 
 type Chunk = { text: string; size: number }
 
@@ -224,6 +232,10 @@ type Entry = {
   observedTerminal: boolean
   reads: Map<string, { status: Status; offset: number; count: number }>
   cursor: number
+  /** The wake note for this task was delivered. */
+  woke: boolean
+  /** When the last shell.task.updated event for this task went out. */
+  publishedAt?: number
 }
 
 type State = {
@@ -263,7 +275,38 @@ export function lastLines(text: string, maxLines: number, maxBytes: number) {
 }
 
 function snapshot(entry: Entry): Info {
-  return { ...entry.info }
+  const tail = lastLine(entry.tail)
+  return {
+    ...entry.info,
+    ...(tail ? { tail } : {}),
+    wake: wakeState({
+      hasWake: entry.wake !== undefined,
+      status: entry.info.status,
+      reason: entry.info.reason,
+      observedTerminal: entry.observedTerminal,
+      woke: entry.woke,
+    }),
+  }
+}
+
+/** A task as clients see it: the list endpoint and the shell.task.updated event. */
+export function clientInfo(info: Info): ShellTaskEvent.Info {
+  return {
+    id: info.id,
+    sessionID: info.sessionID,
+    command: info.command,
+    cwd: info.cwd,
+    status: info.status,
+    ...(info.pid === undefined ? {} : { pid: info.pid }),
+    exitCode: info.exitCode,
+    startedAt: info.startedAt,
+    ...(info.endedAt === undefined ? {} : { endedAt: info.endedAt }),
+    bytes: info.bytes,
+    ...(info.file ? { file: info.file } : {}),
+    ...(info.reason ? { reason: info.reason } : {}),
+    ...(info.tail ? { tail: info.tail } : {}),
+    ...(info.wake ? { wake: info.wake } : {}),
+  }
 }
 
 /** The `<background-shell-finished>` message a finished task wakes its session with. */
@@ -359,6 +402,21 @@ const layer = Layer.effect(
 
     const flush = (entry: Entry) => Effect.promise(() => entry.queue.catch(() => undefined))
 
+    /**
+     * Tells clients a background task changed: always on a status change
+     * (`force`), otherwise at most once a second while output grows. A task that
+     * never left the foreground is part of its tool call and is not announced.
+     */
+    const publish = Effect.fn("ShellTasks.publish")(function* (entry: Entry, force: boolean) {
+      if (!entry.info.background) return
+      const now = Date.now()
+      if (!shouldPublish({ force, lastAt: entry.publishedAt, now, everyMs: PUBLISH_EVERY_MS })) return
+      entry.publishedAt = now
+      yield* events
+        .publish(ShellTaskEvent.Updated, { sessionID: entry.info.sessionID, task: clientInfo(snapshot(entry)) })
+        .pipe(Effect.ignore)
+    })
+
     const writeFile = (entry: Entry, text: string) => {
       if (!entry.file || text.length === 0) return
       const file = entry.file
@@ -427,6 +485,7 @@ const layer = Layer.effect(
       }
 
       if (entry.onPreview) yield* entry.onPreview(entry.preview).pipe(Effect.ignore)
+      yield* publish(entry, false)
     })
 
     /** Keeps the registry from growing without bound over a long session. */
@@ -461,6 +520,7 @@ const layer = Layer.effect(
         entry.preview = preview(entry.preview, FINISHED_TAIL_BYTES)
       }
       yield* Deferred.succeed(entry.done, snapshot(entry)).pipe(Effect.ignore)
+      yield* publish(entry, true)
       yield* prune()
       return snapshot(entry)
     })
@@ -504,9 +564,14 @@ const layer = Layer.effect(
                 ops: first.wake,
                 sessionID: first.info.sessionID,
                 kind: "background_shell",
-                label: items.length === 1 ? "background command finished" : `${items.length} background commands finished`,
+                label:
+                  items.length === 1 ? "background command finished" : `${items.length} background commands finished`,
                 text: wakeText(items.map((item) => ({ info: item.info, tail: item.tail }))),
               }).pipe(Effect.ignore)
+              for (const item of items) {
+                item.woke = true
+                yield* publish(item, true)
+              }
             }),
           { concurrency: 1, discard: true },
         )
@@ -583,6 +648,7 @@ const layer = Layer.effect(
         observedTerminal: false,
         reads: new Map(),
         cursor: 0,
+        woke: false,
       }
       data.tasks.set(id, entry)
 
@@ -590,9 +656,7 @@ const layer = Layer.effect(
         Effect.gen(function* () {
           const handle = yield* spawner.spawn(input.command)
           entry.info.pid = handle.pid
-          yield* Effect.forkScoped(
-            Stream.runForEach(Stream.decodeText(handle.all), (chunk) => append(entry, chunk)),
-          )
+          yield* Effect.forkScoped(Stream.runForEach(Stream.decodeText(handle.all), (chunk) => append(entry, chunk)))
           const exit = yield* Effect.raceAll([
             handle.exitCode.pipe(
               Effect.map((code) => ({ kind: "exit" as const, code: code as number | null })),
@@ -614,7 +678,10 @@ const layer = Layer.effect(
         // recorded on the entry and the caller raises it.
         Effect.catchCause((cause) =>
           Effect.gen(function* () {
-            entry.info.error = Cause.squash(cause) instanceof Error ? (Cause.squash(cause) as Error).message : String(Cause.squash(cause))
+            entry.info.error =
+              Cause.squash(cause) instanceof Error
+                ? (Cause.squash(cause) as Error).message
+                : String(Cause.squash(cause))
             return yield* settle(entry, "exited", null)
           }),
         ),
@@ -652,14 +719,21 @@ const layer = Layer.effect(
             entry.lastBusyAt = Date.now()
             if (promoteInput.wake) entry.wake = promoteInput.wake
             yield* spill(entry)
-            const lifetime = Math.min(promoteInput.deadlineMs ?? entry.settings.maxLifetimeMs, entry.settings.maxLifetimeMs)
-            const reason: Reason = promoteInput.deadlineMs !== undefined && promoteInput.deadlineMs < entry.settings.maxLifetimeMs ? "deadline" : "lifetime"
+            const lifetime = Math.min(
+              promoteInput.deadlineMs ?? entry.settings.maxLifetimeMs,
+              entry.settings.maxLifetimeMs,
+            )
+            const reason: Reason =
+              promoteInput.deadlineMs !== undefined && promoteInput.deadlineMs < entry.settings.maxLifetimeMs
+                ? "deadline"
+                : "lifetime"
             const remaining = Math.max(0, entry.info.startedAt + lifetime - Date.now())
             const watchdog = Effect.sleep(`${remaining} millis`).pipe(
               Effect.andThen(terminate(entry, "timed_out", reason)),
               Effect.asVoid,
             )
             yield* Effect.forkIn(watchdog, current.scope, { startImmediately: true })
+            yield* publish(entry, true)
             return snapshot(entry)
           }),
         kill: (next, reason) => terminate(entry, next, reason),
@@ -751,15 +825,17 @@ const layer = Layer.effect(
       // Past the output cap the file stopped growing, so serve the live tail
       // instead of silence and say that the middle was dropped.
       const capped = entry.info.outputCapped && offset >= available && entry.info.bytes > from
-      const text = capped
-        ? keepTail(entry.tail, limits.maxBytes)
-        : yield* slice(entry, offset, limits.maxBytes)
+      const text = capped ? keepTail(entry.tail, limits.maxBytes) : yield* slice(entry, offset, limits.maxBytes)
       const nextOffset = capped ? entry.info.bytes : offset + Buffer.byteLength(text, "utf-8")
       const skipped = capped
       const truncated = !capped && nextOffset < available
       entry.lastReadAt = Date.now()
       entry.cursor = nextOffset
-      if (entry.info.status !== "running") entry.observedTerminal = true
+      if (entry.info.status !== "running" && !entry.observedTerminal) {
+        entry.observedTerminal = true
+        // the wake is no longer needed; clients see "read" instead of "pending"
+        yield* publish(entry, true)
+      }
 
       const key = `${sessionID}:${id}`
       const previous = entry.reads.get(key)
