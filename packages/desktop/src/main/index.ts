@@ -1,12 +1,13 @@
+import { execFile } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { mkdirSync, rmSync } from "node:fs"
+import { mkdirSync, readdirSync, rmSync } from "node:fs"
 import * as http from "node:http"
 import { createServer } from "node:net"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { getCACertificates, setDefaultCACertificates } from "node:tls"
 import type { Event } from "electron"
-import { app, BrowserWindow } from "electron"
+import { app, BrowserWindow, shell } from "electron"
 
 import { Deferred, Effect, Fiber } from "effect"
 import contextMenu from "electron-context-menu"
@@ -42,7 +43,9 @@ import {
   setBackgroundColor,
   setDockIcon,
   restoreMainWindows,
+  iconPngPath,
 } from "./windows"
+import { registerDevWindowsIdentity, startMenuPrograms } from "./windows-identity"
 import { createWslServersController } from "./wsl/servers"
 import { createGoalLoop, type GoalLoopStartInput, type GoalLoopState } from "./goal-loop"
 import { getStore } from "./store"
@@ -119,6 +122,34 @@ function readGoalLoopLast(store: { get: (key: string) => unknown }): GoalLoopSta
   return value as GoalLoopStartInput
 }
 
+// Unpackaged dev on Windows has no installer shortcut, so without this the taskbar and every toast
+// header show electron.exe's identity ("Electron", the atom). See windows-identity.ts.
+function registerDevIdentity(appId: string) {
+  const programs = startMenuPrograms(app.getPath("appData"))
+  void registerDevWindowsIdentity(
+    { appId, displayName: APP_NAMES.dev, iconPath: iconPngPath() },
+    {
+      reg: (args) =>
+        new Promise<void>((resolve, reject) =>
+          execFile("reg.exe", args, { windowsHide: true }, (error) => (error ? reject(error) : resolve())),
+        ),
+      shortcuts: () =>
+        readdirSync(programs)
+          .filter((name) => name.toLowerCase().endsWith(".lnk"))
+          .map((name) => join(programs, name)),
+      readShortcut: (path) => {
+        try {
+          return shell.readShortcutLink(path)
+        } catch {
+          return undefined
+        }
+      },
+      removeShortcut: (path) => shell.trashItem(path),
+      log: (message, meta) => writeLog("main", message, meta),
+    },
+  )
+}
+
 function ensureLoopbackNoProxy() {
   const loopback = ["127.0.0.1", "localhost", "::1"]
   const upsert = (key: string) => {
@@ -182,6 +213,7 @@ const main = Effect.gen(function* () {
   initializeOldLayoutEligibility(app.getPath("userData"))
   logger = initLogging()
   initCrashReporter()
+  if (process.platform === "win32" && !app.isPackaged) registerDevIdentity(appId)
 
   const wslServers = createWslServersController(
     app.getVersion(),
