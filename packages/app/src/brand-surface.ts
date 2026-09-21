@@ -68,7 +68,7 @@ export const ALLOWLIST: readonly Allowance[] = [
 
   // ---- Links whose destination genuinely is upstream --------------------------------------------
   ...group(
-    "Menu item that opens the upstream documentation site. The link text names the site it opens, which is truthful; Legatus publishes no docs of its own to point at.",
+    "Label of the Help-menu item that opens upstream's documentation. It is only rendered with the brand off: with the brand on the item is hidden until the brand supplies its own docs link (Brand.links.documentation), so this label never sits next to the Legatus name.",
     ["native:desktop.menu.documentation", "app:desktop.menu.documentation"],
   ),
   ...group(
@@ -338,6 +338,17 @@ export const ALLOWLIST: readonly Allowance[] = [
     ],
   ),
 
+  // ---- Help-menu links, brand-off only ---------------------------------------------------------
+  ...group(
+    "Upstream destination of a Help-menu item, used only when the brand switch is off. With the brand on, resolveDesktopMenu swaps in the brand's own destination or hides the item; desktop-menu.test.ts asserts no branded menu reaches one of these.",
+    [
+      "packages/app/src/desktop-menu.ts:https://discord.com/invite/opencode",
+      "packages/app/src/desktop-menu.ts:https://github.com/anomalyco/opencode/issues/new?template=bug_report.yml",
+      "packages/app/src/desktop-menu.ts:https://github.com/anomalyco/opencode/issues/new?template=feature_request.yml",
+      "packages/app/src/desktop-menu.ts:https://opencode.ai/docs",
+    ],
+  ),
+
   // ---- UPSTREAM_URL -----------------------------------------------------------------------------
   ...group(
     "A link whose destination genuinely is upstream: their docs, changelog feed, issue tracker, Discord or feedback form. The destination stays truthful, and no link text presents it as this product.",
@@ -349,10 +360,6 @@ export const ALLOWLIST: readonly Allowance[] = [
       "packages/app/src/context/highlights.tsx:https://opencode.ai/changelog.json",
       "packages/app/src/pages/error.tsx:https://opencode.ai/desktop-feedback",
       "packages/app/src/pages/layout/helpers.ts:https://opencode.ai/favicon.svg",
-      "packages/app/src/desktop-menu.ts:https://discord.com/invite/opencode",
-      "packages/app/src/desktop-menu.ts:https://github.com/anomalyco/opencode/issues/new?template=bug_report.yml",
-      "packages/app/src/desktop-menu.ts:https://github.com/anomalyco/opencode/issues/new?template=feature_request.yml",
-      "packages/app/src/desktop-menu.ts:https://opencode.ai/docs",
       "packages/app/src/pages/home/home-projects-controller.tsx:https://opencode.ai/desktop-feedback",
       "packages/app/src/pages/layout.tsx:https://opencode.ai/desktop-feedback",
       "packages/ui/src/theme/brand/legatus.ts:https://opencode.ai/desktop-theme.json",
@@ -513,7 +520,9 @@ export const ALLOWLIST: readonly Allowance[] = [
   // ---- THIRD_PARTY (cli/tui) --------------------------------------------------------------------
   ...group(
     "Names OpenCode Zen, a third-party service the user connects to and pays. Renaming it would be false attribution.",
-    ["packages/tui/src/feature-plugins/home/tips-view.tsx:Use {highlight}/connect{/highlight} with OpenCode Zen for curated, tested models"],
+    [
+      "packages/tui/src/feature-plugins/home/tips-view.tsx:Use {highlight}/connect{/highlight} with OpenCode Zen for curated, tested models",
+    ],
   ),
 
   // ---- UPSTREAM_URL (cli/tui) -------------------------------------------------------------------
@@ -533,14 +542,11 @@ export const ALLOWLIST: readonly Allowance[] = [
   ),
 
   // ---- DEV_FIXTURE ------------------------------------------------------------------------------
-  ...group(
-    "A code sample or recorded fixture for developers (an SDK snippet, a stream demo), not product copy.",
-    [
-      "packages/opencode/src/cli/cmd/generate.ts:const client = createOpencodeClient()",
-      'packages/opencode/src/cli/cmd/run/demo.ts:2:   "name": "opencode",',
-      "packages/opencode/src/cli/cmd/run/demo.ts:packages/opencode/src/cli/cmd/run/stream.ts",
-    ],
-  ),
+  ...group("A code sample or recorded fixture for developers (an SDK snippet, a stream demo), not product copy.", [
+    "packages/opencode/src/cli/cmd/generate.ts:const client = createOpencodeClient()",
+    'packages/opencode/src/cli/cmd/run/demo.ts:2:   "name": "opencode",',
+    "packages/opencode/src/cli/cmd/run/demo.ts:packages/opencode/src/cli/cmd/run/stream.ts",
+  ]),
 
   // ---- INTERNAL_ERROR ---------------------------------------------------------------------------
   ...group(
@@ -591,12 +597,47 @@ const MARKUP_TEXT = />([^<>{}"'`]*[A-Za-z][^<>{}"'`]*)</g
  * JSX text node, not a string, and a literals-only scan walks straight past it.
  */
 export function sourceViolations(path: string, text: string, all = false): Hit[] {
+  return scanSource(path, text, UPSTREAM_PATTERN, ALLOWED, all)
+}
+
+/**
+ * The runtime's name. A user of the Legatus desktop app should never be shown "Electron": not in a
+ * dialog, a menu, a title or a notification. Same scanner and same exclusions as the OpenCode pass,
+ * run over the desktop package only (the one place that talks to Electron).
+ *
+ * What it cannot see, and what covers it instead: Windows takes the taskbar and toast identity from
+ * the AppUserModelID, not from any string in the app. `windows-identity.ts` registers it in dev, and
+ * `brand-surface.test.ts` asserts that seam.
+ */
+export const RUNTIME_PATTERN = /electron/i
+
+/** Runtime-name literals that are never shown to the user, each with its reason. */
+export const RUNTIME_ALLOWLIST: readonly Allowance[] = [
+  ...group(
+    "Matches the file name of a Start-menu shortcut's target to find stray dev shortcuts that launch a bare electron.exe. Compared against, never displayed.",
+    ["packages/desktop/src/main/windows-identity.ts:electron.exe"],
+  ),
+]
+
+const RUNTIME_ALLOWED = new Set(RUNTIME_ALLOWLIST.map((entry) => entry.id))
+
+export function runtimeViolations(path: string, text: string, all = false): Hit[] {
+  return scanSource(path, text, RUNTIME_PATTERN, RUNTIME_ALLOWED, all)
+}
+
+function scanSource(
+  path: string,
+  text: string,
+  pattern: RegExp,
+  allowed: { has(id: string): boolean },
+  all: boolean,
+): Hit[] {
   const out: Hit[] = []
   const seen = new Set<string>()
   const add = (value: string) => {
-    if (!UPSTREAM_PATTERN.test(value)) return
+    if (!pattern.test(value)) return
     const id = `${path}:${value}`
-    if (seen.has(id) || (!all && ALLOWED.has(id))) return
+    if (seen.has(id) || (!all && allowed.has(id))) return
     seen.add(id)
     out.push({ id, value })
   }

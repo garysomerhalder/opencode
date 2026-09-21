@@ -1,3 +1,4 @@
+import type { Brand, BrandLink } from "./brand"
 import type { DesktopNativeKey } from "./i18n/desktop-native"
 
 export type DesktopMenuPlatform = "macos" | "windows"
@@ -50,7 +51,10 @@ export type DesktopMenuItem = {
   command?: string
   action?: DesktopMenuAction
   role?: DesktopMenuRole
+  /** Upstream destination, used as-is only when the brand switch is off. */
   href?: string
+  /** Which brand destination replaces `href` when the brand is on. Without one the item is hidden. */
+  link?: BrandLink
   accelerator?: Partial<Record<DesktopMenuPlatform, string>>
   enabled?: "updater"
   platforms?: DesktopMenuPlatform[]
@@ -284,19 +288,31 @@ export const DESKTOP_MENU: DesktopMenu[] = [
     id: "help",
     labelKey: "desktop.menu.help",
     items: [
-      { type: "item", labelKey: "desktop.menu.documentation", href: "https://opencode.ai/docs" },
-      { type: "item", labelKey: "desktop.menu.supportForum", href: "https://discord.com/invite/opencode" },
+      {
+        type: "item",
+        labelKey: "desktop.menu.documentation",
+        href: "https://opencode.ai/docs",
+        link: "documentation",
+      },
+      {
+        type: "item",
+        labelKey: "desktop.menu.supportForum",
+        href: "https://discord.com/invite/opencode",
+        link: "supportForum",
+      },
       { type: "item", labelKey: "desktop.menu.exportLogs", command: "logs.export" },
       { type: "separator" },
       {
         type: "item",
         labelKey: "desktop.menu.shareFeedback",
         href: "https://github.com/anomalyco/opencode/issues/new?template=feature_request.yml",
+        link: "shareFeedback",
       },
       {
         type: "item",
         labelKey: "desktop.menu.reportBug",
         href: "https://github.com/anomalyco/opencode/issues/new?template=bug_report.yml",
+        link: "reportBug",
       },
     ],
   },
@@ -304,4 +320,43 @@ export const DESKTOP_MENU: DesktopMenu[] = [
 
 export function desktopMenuVisible(item: { platforms?: DesktopMenuPlatform[] }, platform: DesktopMenuPlatform) {
   return !item.platforms || item.platforms.includes(platform)
+}
+
+/**
+ * Where a menu link goes. With no brand it is upstream's `href`, unchanged. With a brand it is the
+ * brand's own destination for `link`, or `undefined` when the brand has none; the caller hides the
+ * item then, so a branded build never sends its users to upstream's forum or tracker.
+ */
+export function desktopMenuHref(entry: DesktopMenuItem, brand: Brand | undefined): string | undefined {
+  if (!brand) return entry.href
+  if (!entry.link) return entry.href
+  return brand.links[entry.link]
+}
+
+/**
+ * The menu as a platform renders it: entries for that platform only, link targets resolved for the
+ * brand, links with nowhere to go dropped, and separators left stranded by that tidied away. Both
+ * the macOS native menu and the Windows titlebar menu render from this, so they cannot disagree.
+ */
+export function resolveDesktopMenu(platform: DesktopMenuPlatform, brand: Brand | undefined): DesktopMenu[] {
+  return DESKTOP_MENU.filter((menu) => desktopMenuVisible(menu, platform)).map((menu) => {
+    if (!menu.items) return menu
+    const entries = menu.items.flatMap((entry): DesktopMenuEntry[] => {
+      if (!desktopMenuVisible(entry, platform)) return []
+      if (entry.type === "separator" || (!entry.href && !entry.link)) return [entry]
+      const href = desktopMenuHref(entry, brand)
+      return href ? [{ ...entry, href }] : []
+    })
+    return { ...menu, items: tidySeparators(entries) }
+  })
+}
+
+function tidySeparators(entries: DesktopMenuEntry[]) {
+  const out: DesktopMenuEntry[] = []
+  for (const entry of entries) {
+    if (entry.type === "separator" && (out.length === 0 || out[out.length - 1]!.type === "separator")) continue
+    out.push(entry)
+  }
+  while (out.length > 0 && out[out.length - 1]!.type === "separator") out.pop()
+  return out
 }

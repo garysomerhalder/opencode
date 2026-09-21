@@ -90,9 +90,15 @@ function iconsDir() {
   return app.isPackaged ? join(process.resourcesPath, "icons") : join(root, "../../resources/icons")
 }
 
-function iconPath() {
+/** The window/taskbar icon: the brand set when the brand is on (scripts/copy-icons.ts copies it). */
+export function iconPath() {
   const ext = process.platform === "win32" ? "ico" : "png"
   return join(iconsDir(), `icon.${ext}`)
+}
+
+/** A small PNG of the same icon set, for places that take an image file (the toast header). */
+export function iconPngPath() {
+  return join(iconsDir(), "64x64.png")
 }
 
 function tone() {

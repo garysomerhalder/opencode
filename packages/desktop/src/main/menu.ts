@@ -1,11 +1,7 @@
 import { BrowserWindow, Menu } from "electron"
 import type { MenuItemConstructorOptions } from "electron"
-import {
-  DESKTOP_MENU,
-  desktopMenuVisible,
-  type DesktopMenuEntry,
-  type DesktopMenuRole,
-} from "@opencode-ai/app/desktop-menu"
+import { activeBrand } from "@opencode-ai/app/brand"
+import { resolveDesktopMenu, type DesktopMenuEntry, type DesktopMenuRole } from "@opencode-ai/app/desktop-menu"
 
 import { UPDATER_ENABLED } from "./constants"
 import { runDesktopMenuAction } from "./desktop-menu-actions"
@@ -21,13 +17,11 @@ type Deps = {
 export function createMenu(deps: Deps) {
   if (process.platform !== "darwin") return
 
-  const template = DESKTOP_MENU.filter((menu) => desktopMenuVisible(menu, "macos")).map((menu) => {
+  const template = resolveDesktopMenu("macos", activeBrand()).map((menu) => {
     if (menu.role) return { role: nativeRole(menu.role), label: nativeT(menu.labelKey) }
     return {
       label: nativeT(menu.labelKey),
-      submenu: menu.items
-        ?.filter((entry) => desktopMenuVisible(entry, "macos"))
-        .map((entry) => nativeItem(entry, deps)),
+      submenu: menu.items?.map((entry) => nativeItem(entry, deps)),
     }
   })
 

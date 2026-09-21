@@ -26,8 +26,16 @@ export type Brand = {
   notificationIcon: string
   /** Prefix for files the app writes into the user's folders (the debug-log export). */
   filePrefix: string
+  /**
+   * Where the Help menu's links go with this brand on. A link with no destination here is hidden,
+   * never pointed at upstream's docs, forum or issue tracker under this product's name.
+   */
+  links: Partial<Record<BrandLink, string>>
   messages: Record<string, string>
 }
+
+/** Help-menu destinations a brand can supply. See `resolveDesktopMenu` in desktop-menu.ts. */
+export type BrandLink = "documentation" | "supportForum" | "shareFeedback" | "reportBug"
 
 export const LEGATUS: Brand = {
   id: "legatus",
@@ -38,6 +46,9 @@ export const LEGATUS: Brand = {
   short: "LG",
   notificationIcon: LEGATUS_ICON_DATA_URI,
   filePrefix: "legatus",
+  // Legatus has no public docs, forum or tracker yet, so the Help menu shows none of those links.
+  // Add a destination here and its menu item comes back.
+  links: {},
   messages: {
     "brand.credit": "Built on OpenCode",
   },
