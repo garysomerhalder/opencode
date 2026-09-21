@@ -74,9 +74,7 @@ export const DialogGoalWizard: Component = () => {
     }
   })
 
-  const canStart = createMemo(
-    () => Boolean(goalApi()) && chosen().length > 0 && directory().trim().length > 0,
-  )
+  const canStart = createMemo(() => Boolean(goalApi()) && chosen().length > 0 && directory().trim().length > 0)
 
   const loadTeams = async () => {
     setTeamsLoading(true)
@@ -183,9 +181,9 @@ export const DialogGoalWizard: Component = () => {
     const total = queueTickets.length
     try {
       const runner = createQueueRunner({
-        start: (input) => api.start(input).then((state) => ({ id: state.id })),
+        start: (input) => api.start(input).then((state) => ({ id: state.id, sessionID: state.sessionID })),
         subscribe: (cb) => api.subscribe((event) => cb(event)),
-        stop: () => api.stop(),
+        stop: (sessionID) => api.stop(sessionID),
       })
       let unsubscribe: () => void = () => undefined
       const handle = {
@@ -248,19 +246,13 @@ export const DialogGoalWizard: Component = () => {
   return (
     <Dialog title={language.t("dialog.goalWizard.title")}>
       <div class="flex flex-col gap-3 px-4 py-3">
-        <Show
-          when={available()}
-          fallback={<p class="text-sm">{language.t("dialog.goalWizard.unavailable")}</p>}
-        >
+        <Show when={available()} fallback={<p class="text-sm">{language.t("dialog.goalWizard.unavailable")}</p>}>
           <p class="text-xs text-text-weak">
             {step() + 1} / 4 · {stepTitle()}
           </p>
           <Show when={step() === 0}>
             <p class="text-sm font-medium">{language.t("dialog.goalWizard.team.title")}</p>
-            <Show
-              when={!teamsLoading()}
-              fallback={<p class="text-sm">{language.t("common.loading")}</p>}
-            >
+            <Show when={!teamsLoading()} fallback={<p class="text-sm">{language.t("common.loading")}</p>}>
               <Show
                 when={teamOptions().length > 0}
                 fallback={<p class="text-sm">{language.t("dialog.goalWizard.team.empty")}</p>}
@@ -295,10 +287,7 @@ export const DialogGoalWizard: Component = () => {
                 </Button>
               </div>
             </div>
-            <Show
-              when={!ticketsLoading()}
-              fallback={<p class="text-sm">{language.t("common.loading")}</p>}
-            >
+            <Show when={!ticketsLoading()} fallback={<p class="text-sm">{language.t("common.loading")}</p>}>
               <Show
                 when={tickets().length > 0}
                 fallback={<p class="text-sm">{language.t("dialog.goalWizard.tickets.empty")}</p>}

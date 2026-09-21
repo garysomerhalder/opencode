@@ -7,7 +7,8 @@ import type { DesktopMenuAction } from "@opencode-ai/app/desktop-menu"
 import { parseDesktopNativeBundle, type DesktopNativeBundle } from "@opencode-ai/app/i18n/desktop-native"
 
 import type { FatalRendererError, ServerReadyData, TitlebarTheme } from "../preload/types"
-import type { GoalLoop, GoalLoopStartInput } from "./goal-loop"
+import type { GoalLoopStartInput } from "./goal-loop"
+import type { GoalLoops } from "./goal-loops"
 import { runDesktopMenuAction } from "./desktop-menu-actions"
 import { setForceFocus } from "./debug"
 import { assertAttachmentBudget, createPickedFileAuthorizations } from "./attachment-picker"
@@ -51,8 +52,8 @@ type Deps = {
   updater: UpdaterController
   showUpdater: () => Promise<void> | void
   setBackgroundColor: (color: string) => void
-  goalLoop: GoalLoop
-  getGoalLoopLast: () => GoalLoopStartInput | null
+  goalLoops: GoalLoops
+  getGoalLoopLast: (sessionID?: string) => GoalLoopStartInput | null
   exportDebugLogs: () => Promise<string>
   recordFatalRendererError: (error: FatalRendererError) => Promise<void> | void
   setNativeTranslations: (bundle: DesktopNativeBundle) => void
@@ -115,13 +116,26 @@ export function registerIpcHandlers(deps: Deps) {
     if (!bundle) throw new Error("Invalid native translation bundle")
     deps.setNativeTranslations(bundle)
   })
+  // Session ids come from the renderer: accept only a non-empty string, else "no session".
+  const sessionArg = (value: unknown) => (typeof value === "string" && value.length > 0 ? value : undefined)
   ipcMain.handle("goal-loop-start", (_event: IpcMainInvokeEvent, input: GoalLoopStartInput) => {
     if (!input || typeof input !== "object") throw new Error("Invalid goal loop input")
-    return deps.goalLoop.start(input)
+    return deps.goalLoops.start(input)
   })
-  ipcMain.handle("goal-loop-stop", () => deps.goalLoop.stop())
-  ipcMain.handle("goal-loop-status", () => deps.goalLoop.status())
-  ipcMain.handle("goal-loop-last", () => deps.getGoalLoopLast())
+  ipcMain.handle("goal-loop-stop", (_event: IpcMainInvokeEvent, sessionID: unknown) =>
+    deps.goalLoops.stop(sessionArg(sessionID)),
+  )
+  ipcMain.handle("goal-loop-status", (_event: IpcMainInvokeEvent, sessionID: unknown) =>
+    deps.goalLoops.status(sessionArg(sessionID)),
+  )
+  ipcMain.handle("goal-loop-list", () => deps.goalLoops.list())
+  ipcMain.handle("goal-loop-dismiss", (_event: IpcMainInvokeEvent, sessionID: unknown) => {
+    const id = sessionArg(sessionID)
+    if (id) deps.goalLoops.dismiss(id)
+  })
+  ipcMain.handle("goal-loop-last", (_event: IpcMainInvokeEvent, sessionID: unknown) =>
+    deps.getGoalLoopLast(sessionArg(sessionID)),
+  )
   ipcMain.handle("linear-has-key", async () => (await getLinearApiKey()) !== null)
   ipcMain.handle("linear-set-key", async (_event: IpcMainInvokeEvent, key: unknown) => {
     if (typeof key !== "string" || key.trim().length === 0) throw new Error("linear-invalid-key")
@@ -167,20 +181,17 @@ export function registerIpcHandlers(deps: Deps) {
     if (!key) throw new Error("linear-not-configured")
     return createLinearClient({ getKey: getLinearApiKey }).teams()
   })
-  ipcMain.handle(
-    "linear-comment",
-    async (_event: IpcMainInvokeEvent, args?: { issueId?: unknown; body?: unknown }) => {
-      const key = await getLinearApiKey()
-      if (!key) throw new Error("linear-not-configured")
-      if (!args || typeof args.issueId !== "string" || args.issueId.trim().length === 0) {
-        throw new Error("linear-invalid-issue-id")
-      }
-      if (typeof args.body !== "string" || args.body.trim().length === 0) {
-        throw new Error("linear-invalid-comment-body")
-      }
-      return createLinearClient({ getKey: getLinearApiKey }).comment(args.issueId, args.body)
-    },
-  )
+  ipcMain.handle("linear-comment", async (_event: IpcMainInvokeEvent, args?: { issueId?: unknown; body?: unknown }) => {
+    const key = await getLinearApiKey()
+    if (!key) throw new Error("linear-not-configured")
+    if (!args || typeof args.issueId !== "string" || args.issueId.trim().length === 0) {
+      throw new Error("linear-invalid-issue-id")
+    }
+    if (typeof args.body !== "string" || args.body.trim().length === 0) {
+      throw new Error("linear-invalid-comment-body")
+    }
+    return createLinearClient({ getKey: getLinearApiKey }).comment(args.issueId, args.body)
+  })
   ipcMain.handle("store-get", (_event: IpcMainInvokeEvent, name: string, key: string) => {
     try {
       const store = getStore(name)

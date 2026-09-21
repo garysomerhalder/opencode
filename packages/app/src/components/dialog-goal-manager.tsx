@@ -28,7 +28,12 @@ function glyph(status: string): string {
   }
 }
 
-export const DialogGoalManager: Component = () => {
+/**
+ * With `sessionID`, the dialog belongs to that session: it shows that session's loop, prefills
+ * that session's last goal and directory, and starts the loop in that session. Without it, it
+ * starts a loop in a new session, prefilled from the newest goal of any session.
+ */
+export const DialogGoalManager: Component<{ sessionID?: string; directory?: string }> = (props) => {
   const dialog = useDialog()
   const language = useLanguage()
   const platform = usePlatform()
@@ -39,7 +44,7 @@ export const DialogGoalManager: Component = () => {
   const [loop, setLoop] = createSignal<GoalLoopState | null>(null)
   const [queue, setQueue] = createSignal<QueueStatusSnapshot | null>(getQueueStatus())
   const [goal, setGoal] = createSignal("")
-  const [directory, setDirectory] = createSignal("")
+  const [directory, setDirectory] = createSignal(props.directory ?? "")
   const [busy, setBusy] = createSignal(false)
 
   const api = () => platform.goalLoop
@@ -53,7 +58,7 @@ export const DialogGoalManager: Component = () => {
     const current = api()
     if (!current) return
     void current
-      .status()
+      .status(props.sessionID)
       .then((state) => {
         if (state?.status === "running") {
           setLoop(state)
@@ -64,16 +69,20 @@ export const DialogGoalManager: Component = () => {
       })
       .catch(() => undefined)
     void Promise.resolve()
-      .then(() => current.last?.())
+      .then(() => current.last?.(props.sessionID))
       .then((last: GoalLoopStartInput | null | undefined) => {
         if (!last) return
         if (goal().trim().length === 0 && last.goal) setGoal(last.goal)
         if (directory().trim().length === 0 && last.directory) setDirectory(last.directory)
       })
       .catch(() => undefined)
-    const unsubscribe = current.subscribe((event) =>
-      setLoop(event.state.status === "running" ? event.state : null),
-    )
+    // Other sessions run their own loops: only this dialog's loop may change what it shows.
+    const unsubscribe = current.subscribe((event) => {
+      if (props.sessionID && event.state.sessionID !== props.sessionID) return
+      const shown = loop()
+      if (!props.sessionID && shown && event.state.id !== shown.id) return
+      setLoop(event.state.status === "running" ? event.state : null)
+    })
     const unsubscribeQueue = subscribeQueueStatus((next) => setQueue(next))
     onCleanup(unsubscribe)
     onCleanup(unsubscribeQueue)
@@ -87,7 +96,11 @@ export const DialogGoalManager: Component = () => {
     if (!text || !dir) return
     setBusy(true)
     try {
-      const next = await current.start({ directory: dir, goal: text })
+      const next = await current.start({
+        directory: dir,
+        goal: text,
+        ...(props.sessionID ? { sessionID: props.sessionID } : {}),
+      })
       setLoop(next)
       setTab("active")
       showToast({ title: language.t("toast.goalLoop.started.title") })
@@ -107,7 +120,7 @@ export const DialogGoalManager: Component = () => {
     if (!current) return
     setBusy(true)
     try {
-      await current.stop()
+      await current.stop(running()?.sessionID ?? props.sessionID)
       setLoop(null)
     } catch (err) {
       showToast({
