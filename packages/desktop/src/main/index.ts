@@ -144,7 +144,7 @@ function registerDevIdentity(appId: string) {
           return undefined
         }
       },
-      removeShortcut: (path) => rmSync(path, { force: true }),
+      removeShortcut: (path) => shell.trashItem(path),
       log: (message, meta) => writeLog("main", message, meta),
     },
   )

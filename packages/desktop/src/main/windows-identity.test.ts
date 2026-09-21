@@ -28,7 +28,9 @@ function fakeDeps(
       if (info === "throws") throw new Error("not a shortcut")
       return info
     },
-    removeShortcut: (path) => calls.removed.push(path),
+    removeShortcut: async (path) => {
+      calls.removed.push(path)
+    },
     log: (message) => calls.logs.push(message),
   }
   return { deps, calls }
@@ -79,6 +81,28 @@ describe("dev windows identity", () => {
     const { deps, calls } = fakeDeps({ "Electron.lnk": { target: ELECTRON, appUserModelId: APP_ID } })
     await registerDevWindowsIdentity(identity, deps)
     expect(calls.removed).toEqual(["Electron.lnk"])
+    expect(calls.reg).toEqual(registryCommands(identity))
+  })
+
+  test("a shortcut with our AUMID but any other target is left alone, and each removal is logged once", async () => {
+    const { deps, calls } = fakeDeps({
+      "Electron.lnk": { target: ELECTRON, appUserModelId: APP_ID },
+      "Legatus Dev.lnk": { target: "C:\repo\launch-legatus.cmd", appUserModelId: APP_ID },
+      "Installed.lnk": { target: "C:\Program Files\Legatus\Legatus.exe", appUserModelId: APP_ID },
+    })
+    await registerDevWindowsIdentity(identity, deps)
+    expect(calls.removed).toEqual(["Electron.lnk"])
+    expect(calls.logs.filter((line) => line.startsWith("moved stray dev shortcut"))).toHaveLength(1)
+  })
+
+  test("a failed move to the Recycle Bin is logged, not reported as removed", async () => {
+    const { deps, calls } = fakeDeps({ "Electron.lnk": { target: ELECTRON, appUserModelId: APP_ID } })
+    await registerDevWindowsIdentity(identity, {
+      ...deps,
+      removeShortcut: async () => Promise.reject(new Error("busy")),
+    })
+    expect(calls.logs).toContain("failed to move stray dev shortcut to the Recycle Bin")
+    expect(calls.logs.some((line) => line.startsWith("moved stray dev shortcut"))).toBe(false)
     expect(calls.reg).toEqual(registryCommands(identity))
   })
 
