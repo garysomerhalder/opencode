@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
 import { join, relative, sep } from "node:path"
-import { brandDictionary, LEGATUS } from "./brand"
+import { brandDictionary, feedbackHref, LEGATUS, UPSTREAM_FEEDBACK_URL } from "./brand"
+import { resolveDesktopMenu } from "./desktop-menu"
 import {
   ALLOWLIST,
   describe as describeHits,
@@ -145,6 +146,33 @@ ${describeHits(hits)}
     expect(source).toContain("displayName: APP_NAMES.dev, iconPath: iconPngPath()")
     // APP_NAMES comes from the brand when it is on.
     expect(source).toContain("BRAND?.appNames ??")
+  })
+})
+
+describe("brand surface: no branded link leads to upstream's support channels", () => {
+  test("the brand's own destinations are not upstream's", () => {
+    expect(
+      Object.values(LEGATUS.links).filter((href) => /opencode\.ai|anomalyco|invite\/opencode/i.test(href ?? "")),
+    ).toEqual([])
+  })
+
+  test("feedback buttons and Help-menu links resolve to nothing upstream with the brand on", () => {
+    expect(feedbackHref(LEGATUS)).toBeUndefined()
+    expect(feedbackHref(undefined)).toBe(UPSTREAM_FEEDBACK_URL)
+    for (const platform of ["macos", "windows"] as const) {
+      const hrefs = resolveDesktopMenu(platform, LEGATUS).flatMap((menu) =>
+        (menu.items ?? []).flatMap((entry) => (entry.type === "item" && entry.href ? [entry.href] : [])),
+      )
+      expect(hrefs.filter((href) => /opencode|anomalyco/i.test(href))).toEqual([])
+    }
+  })
+
+  test("upstream's feedback page is named only in the brand module, behind feedbackHref()", () => {
+    const offenders = SOURCE_ROOTS.flatMap((root) => [...walk(root)])
+      .filter((path) => !skipped(`/${rel(path)}`))
+      .filter((path) => readFileSync(path, "utf8").includes("opencode.ai/desktop-feedback"))
+      .map(rel)
+    expect(offenders).toEqual([])
   })
 })
 

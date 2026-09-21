@@ -72,7 +72,7 @@ export const ALLOWLIST: readonly Allowance[] = [
     ["native:desktop.menu.documentation", "app:desktop.menu.documentation"],
   ),
   ...group(
-    "Precedes a button that opens https://opencode.ai/desktop-feedback. The report really does go to the upstream team, so naming them is truthful; sending it to a 'Legatus team' that will not receive it would be a lie.",
+    "Precedes the button that opens upstream's feedback page, and is rendered only with it. With the brand on, feedbackHref() has no destination (Brand.links.feedback is unset), so the whole row is hidden; with the brand off the report really does go to the upstream team, so naming them is truthful.",
     ["app:error.page.report.prefix"],
   ),
 
@@ -358,10 +358,7 @@ export const ALLOWLIST: readonly Allowance[] = [
       "packages/app/src/components/settings-general.tsx:https://opencode.ai/docs/themes/",
       "packages/app/src/components/settings-v2/general.tsx:https://opencode.ai/docs/themes/",
       "packages/app/src/context/highlights.tsx:https://opencode.ai/changelog.json",
-      "packages/app/src/pages/error.tsx:https://opencode.ai/desktop-feedback",
       "packages/app/src/pages/layout/helpers.ts:https://opencode.ai/favicon.svg",
-      "packages/app/src/pages/home/home-projects-controller.tsx:https://opencode.ai/desktop-feedback",
-      "packages/app/src/pages/layout.tsx:https://opencode.ai/desktop-feedback",
       "packages/ui/src/theme/brand/legatus.ts:https://opencode.ai/desktop-theme.json",
     ],
   ),
