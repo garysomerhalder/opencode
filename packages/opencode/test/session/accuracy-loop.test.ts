@@ -45,7 +45,7 @@ import { ModelV2 } from "@opencode-ai/core/model"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { TestInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
-import { TestLLMServer } from "../lib/llm-server"
+import { TestLLMServer, reply } from "../lib/llm-server"
 
 const ref = {
   providerID: ProviderV2.ID.make("test"),
@@ -305,6 +305,33 @@ it.instance("the autonomy section is gone when the flag is off", () =>
     const system = systemOf(hits[0]!)
     expect(system).not.toContain("Working autonomously")
     expect(system).not.toContain("This run is autonomous")
+  }),
+)
+
+it.instance("an autonomous turn stays autonomous after it compacts mid-turn", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useConfig()
+    const prompt = yield* SessionPrompt.Service
+    const chat = yield* session()
+    // test-model: context 100_000, output 10_000 -> usable 90_000. A tool step
+    // that reports 95_000 input tokens makes the loop compact before the next step.
+    yield* llm.push(reply().tool("glob", { pattern: "*.none" }).usage({ input: 95_000, output: 10 }))
+    yield* llm.text("summary")
+    yield* llm.text("done")
+    yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      autonomous: true,
+      parts: [{ type: "text", text: "hi" }],
+    })
+    const hits = yield* llm.hits
+    expect(hits).toHaveLength(3)
+    // hits[1] is the summary request; hits[2] is the worker's first step after compaction.
+    const after = hits[2]!
+    expect(systemOf(after)).toContain("This run is autonomous")
+    const conversation = (after.body.messages as any[]).filter((m) => m?.role !== "system")
+    expect(JSON.stringify(conversation)).not.toContain("ask for clarification")
+    expect(JSON.stringify(conversation)).toContain("Nobody can answer questions")
   }),
 )
 
