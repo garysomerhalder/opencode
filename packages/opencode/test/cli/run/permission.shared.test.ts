@@ -130,13 +130,14 @@ describe("run permission shared", () => {
     })
   })
 
+  // The product name is the Legatus brand (the default; nothing user-visible says OpenCode).
   test("formats always-allow copy for wildcard and explicit patterns", () => {
     expect(permissionAlwaysLines(req({ permission: "bash", always: ["*"] }))).toEqual([
-      "This will allow bash until OpenCode is restarted.",
+      "This will allow bash until Legatus is restarted.",
     ])
 
     expect(permissionAlwaysLines(req({ always: ["src/**/*.ts", "src/**/*.tsx"] }))).toEqual([
-      "This will allow the following patterns until OpenCode is restarted.",
+      "This will allow the following patterns until Legatus is restarted.",
       "- src/**/*.ts",
       "- src/**/*.tsx",
     ])
