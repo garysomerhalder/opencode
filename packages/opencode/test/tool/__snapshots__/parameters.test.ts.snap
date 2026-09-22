@@ -20,6 +20,10 @@ exports[`tool parameters JSON Schema (wire shape) bash 1`] = `
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "properties": {
+    "background": {
+      "description": "Start the command in the background immediately and return a task id. Use it for servers, watchers, and anything you do not need the result of right now. A foreground command that runs long enough moves to the background on its own.",
+      "type": "boolean",
+    },
     "command": {
       "description": "The command to execute",
       "type": "string",
