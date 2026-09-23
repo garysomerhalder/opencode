@@ -829,6 +829,141 @@ describe("session.compaction.prune", () => {
       }),
     ),
   )
+
+  // A session with one old bash output big enough to prune, followed by two more user turns.
+  const seedPrunable = (dir: string, state: { output: string; metadata: Record<string, unknown> }) =>
+    Effect.gen(function* () {
+      const ssn = yield* SessionNs.Service
+      const info = yield* ssn.create({})
+      const user = (text: string) =>
+        Effect.gen(function* () {
+          const msg = yield* ssn.updateMessage({
+            id: MessageID.ascending(),
+            role: "user",
+            sessionID: info.id,
+            agent: "build",
+            model: ref,
+            time: { created: Date.now() },
+          })
+          yield* ssn.updatePart({ id: PartID.ascending(), messageID: msg.id, sessionID: info.id, type: "text", text })
+          return msg
+        })
+      const first = yield* user("first")
+      const assistant = yield* ssn.updateMessage({
+        id: MessageID.ascending(),
+        role: "assistant",
+        sessionID: info.id,
+        mode: "build",
+        agent: "build",
+        path: { cwd: dir, root: dir },
+        cost: 0,
+        tokens: { output: 0, input: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        modelID: ref.modelID,
+        providerID: ref.providerID,
+        parentID: first.id,
+        time: { created: Date.now() },
+        finish: "end_turn",
+      })
+      yield* ssn.updatePart({
+        id: PartID.ascending(),
+        messageID: assistant.id,
+        sessionID: info.id,
+        type: "tool",
+        callID: crypto.randomUUID(),
+        tool: "bash",
+        state: {
+          status: "completed",
+          input: {},
+          output: state.output,
+          title: "done",
+          metadata: state.metadata,
+          time: { start: Date.now(), end: Date.now() },
+        },
+      })
+      yield* user("second")
+      yield* user("third")
+      return info
+    })
+
+  const prunedTool = (sessionID: SessionID) =>
+    Effect.gen(function* () {
+      const msgs = yield* (yield* SessionNs.Service).messages({ sessionID })
+      const part = msgs.flatMap((msg) => msg.parts).find((part) => part.type === "tool")
+      if (part?.type !== "tool" || part.state.status !== "completed") throw new Error("expected a completed tool part")
+      return { ...part, state: part.state }
+    })
+
+  it.live(
+    "prune archives an output that has no archive and leaves a receipt that points at it",
+    provideTmpdirInstance(
+      (dir) =>
+        Effect.gen(function* () {
+          const output = Array.from({ length: 20_000 }, (_, i) => `row ${i} ${"y".repeat(5)}`).join("\n")
+          const info = yield* seedPrunable(dir, { output, metadata: {} })
+          yield* (yield* SessionCompaction.Service).prune({ sessionID: info.id })
+
+          const part = yield* prunedTool(info.id)
+          expect(part.state.time.compacted).toBeNumber()
+          // the stored output is left as it was; only the model's view changes
+          expect(part.state.output).toBe(output)
+          const archive = part.state.metadata.archive as { path: string; bytes: number }
+          expect(archive.bytes).toBe(Buffer.byteLength(output, "utf-8"))
+          expect(yield* Effect.promise(() => Bun.file(archive.path).text())).toBe(output)
+
+          const msgs = yield* (yield* SessionNs.Service).messages({ sessionID: info.id })
+          const [, , tool] = yield* Effect.promise(() =>
+            MessageV2.toModelMessages(msgs.slice(0, 2), createModel({ context: 100_000, output: 32_000 })),
+          )
+          expect(JSON.stringify(tool)).toContain(`[Tool output archived: bash, `)
+          expect(JSON.stringify(tool)).toContain(archive.path.replaceAll("\\", "\\\\"))
+          expect(JSON.stringify(tool)).not.toContain("[Old tool result content cleared]")
+        }),
+      { config: { compaction: { prune: true } } },
+    ),
+  )
+
+  it.live(
+    "prune reuses the archive of an output that was already cut",
+    provideTmpdirInstance(
+      (dir) =>
+        Effect.gen(function* () {
+          const previous = {
+            path: "/already/archived/tool_1",
+            bytes: 999_999,
+            lines: 1,
+            unit: "lines",
+            shown: [],
+            sha256: "x",
+          }
+          const info = yield* seedPrunable(dir, {
+            output: "x".repeat(200_000),
+            metadata: { truncated: true, outputPath: previous.path, archive: previous },
+          })
+          yield* (yield* SessionCompaction.Service).prune({ sessionID: info.id })
+
+          const part = yield* prunedTool(info.id)
+          expect(part.state.time.compacted).toBeNumber()
+          expect(part.state.metadata.archive).toEqual(previous)
+        }),
+      { config: { compaction: { prune: true } } },
+    ),
+  )
+
+  it.live(
+    "with output receipts off, prune writes no archive",
+    provideTmpdirInstance(
+      (dir) =>
+        Effect.gen(function* () {
+          const info = yield* seedPrunable(dir, { output: "x".repeat(200_000), metadata: {} })
+          yield* (yield* SessionCompaction.Service).prune({ sessionID: info.id })
+
+          const part = yield* prunedTool(info.id)
+          expect(part.state.time.compacted).toBeNumber()
+          expect(part.state.metadata.archive).toBeUndefined()
+        }),
+      { config: { compaction: { prune: true }, experimental: { accuracy: { output_receipts: false } } } },
+    ),
+  )
 })
 
 describe("session.compaction.process", () => {

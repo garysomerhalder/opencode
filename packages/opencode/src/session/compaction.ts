@@ -14,7 +14,10 @@ import { Plugin } from "@/plugin"
 import { Config } from "@/config/config"
 import { NotFoundError } from "@/storage/storage"
 
-import { Effect, Layer, Context } from "effect"
+import { Effect, Exit, Layer, Context } from "effect"
+import { Truncate } from "@/tool/truncate"
+import { Receipt } from "@/tool/receipt"
+import { Accuracy } from "./accuracy"
 import { InstanceState } from "@/effect/instance-state"
 import { isOverflow as overflow, usable } from "./overflow"
 import { serviceUse } from "@opencode-ai/core/effect/service-use"
@@ -203,6 +206,7 @@ const layer = Layer.effect(
     const provider = yield* Provider.Service
     const events = yield* EventV2Bridge.Service
     const flags = yield* RuntimeFlags.Service
+    const truncate = yield* Truncate.Service
 
     const isOverflow = Effect.fn("SessionCompaction.isOverflow")(function* (input: {
       tokens: SessionV1.Assistant["tokens"]
@@ -312,8 +316,19 @@ const layer = Layer.effect(
 
       yield* Effect.logInfo("found", { pruned, total })
       if (pruned > PRUNE_MINIMUM) {
+        // With receipts on, a pruned output keeps a way back: an archive the
+        // model's one-line receipt points at (accuracy C, part D). An output the
+        // per-call cap already archived keeps that archive. A failed write fails
+        // open: the part is pruned as before, without a receipt.
+        const receipts = Accuracy.settings(cfg).outputReceipts
         for (const part of toPrune) {
           if (part.state.status === "completed") {
+            if (receipts && !part.state.metadata?.archive && !part.state.metadata?.truncated) {
+              const text = part.state.output
+              const written = yield* Effect.exit(truncate.write(text))
+              if (Exit.isSuccess(written))
+                part.state.metadata = { ...part.state.metadata, archive: Receipt.whole({ path: written.value, text }) }
+            }
             part.state.time.compacted = Date.now()
             yield* session.updatePart(part)
           }
@@ -608,6 +623,7 @@ export const node = LayerNode.make({
     Provider.node,
     EventV2Bridge.node,
     RuntimeFlags.node,
+    Truncate.node,
   ],
 })
 

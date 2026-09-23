@@ -221,6 +221,19 @@ export function archive(input: { path: string; text: string; preview: Preview })
   }
 }
 
+/** The archive of an output the model no longer sees at all (prune): nothing of it is shown. */
+export function whole(input: { path: string; text: string }): Archive {
+  const total = measure(input.text)
+  return {
+    path: input.path,
+    bytes: total.bytes,
+    lines: total.lines,
+    unit: "lines",
+    shown: [],
+    sha256: sha256(input.text),
+  }
+}
+
 function size(bytes: number) {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
