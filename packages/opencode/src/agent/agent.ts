@@ -59,6 +59,16 @@ export type Info = DeepMutable<Schema.Schema.Type<typeof Info>>
 /** The verifier's step cap; config may lower it, never raise it (docs/accuracy-e.md §11.2). */
 export const VERIFIER_STEPS = 40
 
+// maxSteps is the deprecated spelling of steps; config decoding folds it into steps
+const VERIFIER_CONFIGURABLE = new Set(["model", "variant", "temperature", "top_p", "steps", "maxSteps"])
+
+/** A config field that says something: decoding fills options and permission with {} when absent. */
+function isSet(value: unknown) {
+  if (value === undefined) return false
+  if (typeof value === "object" && value !== null && !Array.isArray(value)) return Object.keys(value).length > 0
+  return true
+}
+
 const GeneratedAgent = Schema.Struct({
   identifier: Schema.String,
   whenToUse: Schema.String,
@@ -284,6 +294,29 @@ const layer = Layer.effect(
         }
 
         for (const [key, value] of Object.entries(cfg.agent ?? {})) {
+          // The verifier's identity and rules are not configurable
+          // (docs/accuracy-e.md §11.2): only how it runs.
+          if (key === Permission.VERIFIER) {
+            const item = agents[key]
+            const ignored = Object.entries(value)
+              .filter(([field, setting]) => !VERIFIER_CONFIGURABLE.has(field) && isSet(setting))
+              .map(([field]) => field)
+            if (ignored.length > 0)
+              yield* Effect.logWarning(
+                "agent.verifier: only model, variant, temperature, top_p and steps can be configured; ignoring the rest",
+                { ignored },
+              )
+            if (value.model) item.model = Provider.parseModel(value.model)
+            item.variant = value.variant ?? item.variant
+            item.temperature = value.temperature ?? item.temperature
+            item.topP = value.top_p ?? item.topP
+            item.steps = Math.min(VERIFIER_STEPS, value.steps ?? VERIFIER_STEPS)
+            continue
+          }
+          // ...and no other agent may take its name
+          if (value.name === Permission.VERIFIER)
+            yield* Effect.logWarning(`agent.${key}: the name "${Permission.VERIFIER}" is reserved; keeping "${key}"`)
+          const name = value.name === Permission.VERIFIER ? undefined : value.name
           if (value.disable) {
             delete agents[key]
             continue
@@ -306,7 +339,7 @@ const layer = Layer.effect(
           item.mode = value.mode ?? item.mode
           item.color = value.color ?? item.color
           item.hidden = value.hidden ?? item.hidden
-          item.name = value.name ?? item.name
+          item.name = name ?? item.name
           item.steps = value.steps ?? item.steps
           item.options = mergeDeep(item.options, value.options ?? {})
           item.permission = Permission.merge(item.permission, Permission.fromConfig(value.permission ?? {}))

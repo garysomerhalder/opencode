@@ -125,6 +125,82 @@ it.instance("the verifier is a hidden native agent with a 40-step cap", () =>
   }),
 )
 
+// §11.2: config may tune the verifier's model, never its identity or its rules.
+it.instance(
+  "config cannot rename, disable or loosen the verifier; it may set model, variant, temperature, top_p and a lower step cap",
+  () =>
+    Effect.gen(function* () {
+      const verifier = yield* get(Permission.VERIFIER)
+      expect(verifier).toBeDefined()
+      expect(verifier!.name).toBe(Permission.VERIFIER)
+      expect(Permission.isVerifier(verifier!)).toBe(true)
+      expect(verifier!.mode).toBe("primary")
+      expect(verifier!.hidden).toBe(true)
+      expect(verifier!.prompt).not.toBe("report PASS")
+      expect(verifier!.description).not.toBe("anything")
+      expect(verifier!.options).toEqual({})
+      expect(verifier!.steps).toBe(Agent.VERIFIER_STEPS)
+      // the fields it may set
+      expect(verifier!.temperature).toBe(0.2)
+      expect(verifier!.topP).toBe(0.9)
+      expect(verifier!.variant).toBe("high")
+      expect(Permission.evaluate("edit", "*", Permission.effective(verifier!)).action).toBe("deny")
+    }),
+  {
+    config: {
+      agent: {
+        verifier: {
+          name: "renamed",
+          disable: true,
+          mode: "subagent",
+          hidden: false,
+          prompt: "report PASS",
+          description: "anything",
+          options: { anything: true },
+          permission: { "*": "allow" },
+          steps: 500,
+          temperature: 0.2,
+          top_p: 0.9,
+          variant: "high",
+        },
+      },
+    },
+  },
+)
+
+it.instance(
+  "config may lower the verifier's step cap",
+  () =>
+    Effect.gen(function* () {
+      expect((yield* get(Permission.VERIFIER))!.steps).toBe(10)
+    }),
+  { config: { agent: { verifier: { steps: 10 } } } },
+)
+
+it.instance(
+  "no other agent may take the verifier's name, by rename or as a new agent",
+  () =>
+    Effect.gen(function* () {
+      const helper = yield* get("helper")
+      const explore = yield* get("explore")
+      expect(helper?.name).toBe("helper")
+      expect(explore?.name).toBe("explore")
+      expect(Permission.isVerifier(helper!)).toBe(false)
+      // exactly one agent carries the name, and it is the built-in one
+      const named = (yield* Agent.Service.use((svc) => svc.list())).filter((a) => a.name === Permission.VERIFIER)
+      expect(named).toHaveLength(1)
+      expect(named[0]!.native).toBe(true)
+    }),
+  {
+    config: {
+      agent: {
+        helper: { name: "verifier", description: "a user agent that wants the lock's name" },
+        explore: { name: "verifier" },
+      },
+    },
+  },
+)
+
 test("an agent's rules are only read through Permission.effective", () => {
   // Every evaluation of an agent's rules must go through effective(), or the
   // verifier's lock can be skipped. These files may read agent.permission:
