@@ -105,6 +105,9 @@ const layer = Layer.effect(
     const image = yield* Image.Service
     const events = yield* EventV2Bridge.Service
     const database = yield* Database.Service
+    // Sessions whose encrypted reasoning a provider refused (session id + provider
+    // id). Process-local: a restart clears it and the next refusal arms it again.
+    const refusedReplays = new Set<string>()
 
     const create = Effect.fn("SessionProcessor.create")(function* (input: Input) {
       // Pre-capture snapshot before the LLM stream starts. The AI SDK
@@ -695,20 +698,33 @@ const layer = Layer.effect(
             )
           })
 
+        // Once this provider has refused this session's encrypted reasoning, it
+        // refuses it on every later step too, so those steps go without it from
+        // the first request instead of paying a refusal each.
+        const refusalKey = `${input.sessionID}\u0000${input.model.providerID}`
+        const request = refusedReplays.has(refusalKey)
+          ? { ...streamInput, messages: ReasoningReplay.strip(streamInput.messages) }
+          : streamInput
+
         return yield* Effect.gen(function* () {
-          yield* attempt(streamInput).pipe(
+          yield* attempt(request).pipe(
             // A provider that did not issue the replayed encrypted reasoning refuses
             // the request with a non-retryable 400. Send it once more without that
             // reasoning; a second refusal is an ordinary error.
             Effect.catchIf(
-              (e) => ReasoningReplay.rejected(parse(e)) && ReasoningReplay.carries(streamInput.messages),
+              (e) => ReasoningReplay.rejected(parse(e)) && ReasoningReplay.carries(request.messages),
               () =>
                 Effect.gen(function* () {
-                  yield* Effect.logWarning("provider refused replayed encrypted reasoning; retrying without it", {
-                    "session.id": input.sessionID,
-                    messageID: input.assistantMessage.id,
-                  })
-                  yield* attempt({ ...streamInput, messages: ReasoningReplay.strip(streamInput.messages) })
+                  refusedReplays.add(refusalKey)
+                  yield* Effect.logWarning(
+                    "provider refused replayed encrypted reasoning; this session now replays without it",
+                    {
+                      "session.id": input.sessionID,
+                      "provider.id": input.model.providerID,
+                      messageID: input.assistantMessage.id,
+                    },
+                  )
+                  yield* attempt({ ...request, messages: ReasoningReplay.strip(request.messages) })
                 }),
             ),
             Effect.onInterrupt(() =>

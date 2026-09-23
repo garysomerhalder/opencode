@@ -605,3 +605,65 @@ it.instance(
     }),
   30_000,
 )
+
+it.instance(
+  "after one refusal, the session's next steps go without encrypted reasoning from the first request",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useResponsesConfig()
+      const prompt = yield* SessionPrompt.Service
+      const chat = yield* session()
+      const model = yield* seedEncryptedReasoning(chat.id)
+      yield* llm.error(400, rejectedReplay)
+      yield* llm.text("recovered")
+      yield* prompt.prompt({ sessionID: chat.id, agent: "build", model, parts: [{ type: "text", text: "continue" }] })
+      expect(yield* llm.calls).toBe(2)
+
+      yield* llm.text("next turn")
+      const next = yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        model,
+        parts: [{ type: "text", text: "and then" }],
+      })
+      const hits = yield* llm.hits
+      // one request for the next turn, not a refusal plus a retry
+      expect(hits).toHaveLength(3)
+      expect(JSON.stringify(hits[2]!.body)).not.toContain("gAAAA-foreign-caller")
+      expect(next.parts.some((part) => part.type === "text" && part.text === "next turn")).toBe(true)
+    }),
+  30_000,
+)
+
+it.instance(
+  "a refusal in one session does not strip another session's encrypted reasoning",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useResponsesConfig()
+      const prompt = yield* SessionPrompt.Service
+      const first = yield* session()
+      const firstModel = yield* seedEncryptedReasoning(first.id)
+      yield* llm.error(400, rejectedReplay)
+      yield* llm.text("recovered")
+      yield* prompt.prompt({
+        sessionID: first.id,
+        agent: "build",
+        model: firstModel,
+        parts: [{ type: "text", text: "continue" }],
+      })
+
+      const second = yield* session()
+      const secondModel = yield* seedEncryptedReasoning(second.id)
+      yield* llm.text("fine")
+      yield* prompt.prompt({
+        sessionID: second.id,
+        agent: "build",
+        model: secondModel,
+        parts: [{ type: "text", text: "continue" }],
+      })
+      const hits = yield* llm.hits
+      expect(hits).toHaveLength(3)
+      expect(JSON.stringify(hits[2]!.body)).toContain("gAAAA-foreign-caller")
+    }),
+  30_000,
+)
