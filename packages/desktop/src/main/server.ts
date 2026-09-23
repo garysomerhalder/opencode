@@ -47,7 +47,7 @@ export function preferAppEnv(userDataPath: string) {
   const shellEnv = shell ? loadShellEnv(shell, getLogger()) : null
   Object.assign(process.env, {
     ...shellEnv,
-    ...appEnvDefaults(process.platform),
+    ...appEnvDefaults(process.platform, process.env),
     XDG_STATE_HOME: process.env.XDG_STATE_HOME ?? userDataPath,
   })
   return shellEnv
