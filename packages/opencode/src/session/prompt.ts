@@ -549,6 +549,8 @@ const layer = Layer.effect(
           const args = Shell.args(sh, input.command, cwd)
           let output = ""
           let aborted = false
+          // the goal loop's checks cite it as evidence (accuracy E); unknown when aborted
+          let code: number | undefined
 
           const finish = Effect.uninterruptible(
             Effect.gen(function* () {
@@ -566,7 +568,7 @@ const layer = Layer.effect(
                   time: { ...part.state.time, end: completed },
                   input: part.state.input,
                   title: "",
-                  metadata: { output },
+                  metadata: code === undefined ? { output } : { output, exit: code },
                   output,
                 }
                 yield* sessions.updatePart(part)
@@ -598,7 +600,7 @@ const layer = Layer.effect(
                   }
                 }),
               )
-              yield* handle.exitCode
+              code = yield* handle.exitCode
             }).pipe(Effect.scoped, Effect.orDie),
           ).pipe(Effect.exit)
 

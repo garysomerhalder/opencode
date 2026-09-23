@@ -1702,6 +1702,26 @@ unixNoLLMServer(
   { config: cfg },
 )
 
+// Accuracy E: a check the goal loop runs is evidence only with its exit code.
+noLLMServer.instance(
+  "shell records the command's exit code",
+  () =>
+    Effect.gen(function* () {
+      const { prompt, run, chat } = yield* boot()
+      const failed = completedTool(
+        (yield* prompt.shell({ sessionID: chat.id, agent: "build", command: "exit 3" })).parts,
+      )
+      const passed = completedTool(
+        (yield* prompt.shell({ sessionID: chat.id, agent: "build", command: "echo ok" })).parts,
+      )
+      expect(failed?.state.metadata.exit).toBe(3)
+      expect(passed?.state.metadata.exit).toBe(0)
+      yield* run.assertNotBusy(chat.id)
+    }),
+  { config: cfg },
+  30_000,
+)
+
 unixNoLLMServer(
   "shell completes a fast command on the preferred shell",
   () =>
