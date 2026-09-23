@@ -18,6 +18,7 @@ import { described } from "./metadata"
 import { QueryBoolean } from "./query"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
+import { ShellTaskEvent } from "@opencode-ai/schema/shell-task-event"
 
 const ConsoleStateResponse = Schema.Struct({
   consoleManagedProviders: Schema.mutable(Schema.Array(Schema.String)),
@@ -29,22 +30,15 @@ const CapabilitiesResponse = Schema.Struct({
   backgroundSubagents: Schema.Boolean,
 }).annotate({ identifier: "ExperimentalCapabilities" })
 
-const ShellTaskInfo = Schema.Struct({
-  id: Schema.String,
-  sessionID: SessionID,
-  command: Schema.String,
-  cwd: Schema.String,
-  status: Schema.Literals(["running", "exited", "stopped", "timed_out", "cancelled"]),
-  pid: Schema.optionalKey(NonNegativeInt),
-  exitCode: Schema.NullOr(Schema.Number),
-  startedAt: NonNegativeInt,
-  endedAt: Schema.optionalKey(NonNegativeInt),
-  bytes: NonNegativeInt,
-  file: Schema.optionalKey(Schema.String),
-  reason: Schema.optionalKey(Schema.String),
-}).annotate({ identifier: "ShellTask" })
+// One shape for the list, the stops and the shell.task.updated event.
+const ShellTaskInfo = ShellTaskEvent.Info
 
 const ShellTaskList = Schema.Array(ShellTaskInfo).annotate({ identifier: "ShellTasks" })
+
+export const ShellTaskStopQuery = Schema.Struct({
+  ...WorkspaceRoutingQueryFields,
+  sessionID: SessionID,
+})
 
 export const ShellTaskQuery = Schema.Struct({
   ...WorkspaceRoutingQueryFields,
@@ -122,6 +116,7 @@ export const ExperimentalPaths = {
   sessionBackground: "/experimental/session/:sessionID/background",
   shellTasks: "/experimental/shell/task",
   shellTasksStop: "/experimental/shell/task/stop",
+  shellTaskStop: "/experimental/shell/task/:taskID/stop",
   resource: "/experimental/resource",
 } as const
 
@@ -276,8 +271,7 @@ export const ExperimentalApi = HttpApi.make("experimental")
           OpenApi.annotations({
             identifier: "experimental.shellTask.list",
             summary: "List background shell tasks",
-            description:
-              "List the background shell tasks of this instance, or of one session when sessionID is given.",
+            description: "List the background shell tasks of this instance, or of one session when sessionID is given.",
           }),
         ),
         HttpApiEndpoint.post("shellTasksStop", ExperimentalPaths.shellTasksStop, {
@@ -289,6 +283,19 @@ export const ExperimentalApi = HttpApi.make("experimental")
             summary: "Stop background shell tasks",
             description:
               "Stop every running background shell task and kill its process tree, optionally limited to one session.",
+          }),
+        ),
+        HttpApiEndpoint.post("shellTaskStop", ExperimentalPaths.shellTaskStop, {
+          params: { taskID: Schema.String },
+          query: ShellTaskStopQuery,
+          success: described(ShellTaskInfo, "The stopped background shell task"),
+          error: HttpApiError.NotFound,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "experimental.shellTask.stop",
+            summary: "Stop one background shell task",
+            description:
+              "Stop one background shell task of a session and kill its process tree. Stopping a task that already ended returns it unchanged. A task of another session is not found.",
           }),
         ),
         HttpApiEndpoint.get("resource", ExperimentalPaths.resource, {

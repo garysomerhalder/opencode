@@ -5,7 +5,11 @@ export const OLD_LAYOUT_ELIGIBLE_KEY = "oldLayoutEligible"
 export const WSL_SERVERS_KEY = "wslServers"
 export const GOAL_LOOP_STORE = "goal-loop"
 export const LINEAR_STORE = "linear"
+// Legacy: the single-loop record, read once and migrated into GOAL_LOOP_STATES_KEY.
 export const GOAL_LOOP_STATE_KEY = "state"
 export const GOAL_LOOP_LAST_KEY = "lastInput"
+// One running record and one last input per session (the per-session goal loops).
+export const GOAL_LOOP_STATES_KEY = "states"
+export const GOAL_LOOP_LASTS_KEY = "lastInputs"
 export const PINCH_ZOOM_ENABLED_KEY = "pinchZoomEnabled"
 export const WINDOW_IDS_KEY = "windowIds"

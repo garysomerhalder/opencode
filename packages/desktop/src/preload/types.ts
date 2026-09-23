@@ -187,9 +187,11 @@ export type ElectronAPI = {
   runDesktopMenuAction: (action: DesktopMenuAction) => Promise<void>
   goalLoop: {
     start: (input: GoalLoopStartInput) => Promise<GoalLoopState>
-    stop: () => Promise<GoalLoopState | null>
-    status: () => Promise<GoalLoopState | null>
-    last: () => Promise<GoalLoopStartInput | null>
+    stop: (sessionID?: string) => Promise<GoalLoopState | null>
+    status: (sessionID?: string) => Promise<GoalLoopState | null>
+    list: () => Promise<GoalLoopState[]>
+    dismiss: (sessionID: string) => Promise<void>
+    last: (sessionID?: string) => Promise<GoalLoopStartInput | null>
     onEvent: (cb: (event: GoalLoopEvent) => void) => () => void
   }
   setBackgroundColor: (color: string) => Promise<void>

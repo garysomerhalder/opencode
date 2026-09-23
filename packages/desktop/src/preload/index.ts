@@ -131,9 +131,11 @@ const api: ElectronAPI = {
   runDesktopMenuAction: (action) => ipcRenderer.invoke("run-desktop-menu-action", action),
   goalLoop: {
     start: (input) => ipcRenderer.invoke("goal-loop-start", input),
-    stop: () => ipcRenderer.invoke("goal-loop-stop"),
-    status: () => ipcRenderer.invoke("goal-loop-status"),
-    last: (): Promise<GoalLoopStartInput | null> => ipcRenderer.invoke("goal-loop-last"),
+    stop: (sessionID) => ipcRenderer.invoke("goal-loop-stop", sessionID),
+    status: (sessionID) => ipcRenderer.invoke("goal-loop-status", sessionID),
+    list: () => ipcRenderer.invoke("goal-loop-list"),
+    dismiss: (sessionID) => ipcRenderer.invoke("goal-loop-dismiss", sessionID),
+    last: (sessionID): Promise<GoalLoopStartInput | null> => ipcRenderer.invoke("goal-loop-last", sessionID),
     onEvent: (cb) => {
       const handler = (_: unknown, event: GoalLoopEvent) => cb(event)
       ipcRenderer.on("goal-loop-event", handler)

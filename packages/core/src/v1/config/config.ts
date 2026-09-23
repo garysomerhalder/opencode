@@ -243,7 +243,7 @@ export const Info = Schema.Struct({
         ]),
       ).annotate({
         description:
-          "Background shell tasks: a long foreground command keeps running as a background task instead of being killed",
+          "Background shell tasks: a long foreground command keeps running as a background task instead of being killed (default on; false turns it off)",
       }),
     }),
   ),

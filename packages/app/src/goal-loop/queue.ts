@@ -28,9 +28,11 @@ export type QueueLoopEvent = {
 export type QueueDeps = {
   start(input: { directory: string; goal: string; ticket?: { identifier: string; title: string } | null }): Promise<{
     id: string
+    sessionID?: string | null
   }>
   subscribe(cb: (event: QueueLoopEvent) => void): () => void
-  stop?: () => Promise<unknown> | unknown
+  /** Stops the loop driving `sessionID`; the queue passes the session of its current ticket. */
+  stop?: (sessionID?: string) => Promise<unknown> | unknown
 }
 
 export type QueueRunner = {
@@ -64,6 +66,7 @@ export function createQueueRunner(deps: QueueDeps): QueueRunner {
   let items: QueueItem[] = []
   let index = -1
   let currentLoopID: string | null = null
+  let currentSessionID: string | null = null
   let generation = 0
   let running = false
   let halted = false
@@ -101,6 +104,7 @@ export function createQueueRunner(deps: QueueDeps): QueueRunner {
       })
       if (halted || done || gen !== generation) return
       currentLoopID = result.id
+      currentSessionID = result.sessionID ?? null
     } catch (err) {
       if (halted || done || gen !== generation) return
       halted = true
@@ -137,6 +141,7 @@ export function createQueueRunner(deps: QueueDeps): QueueRunner {
       items = [...next]
       index = -1
       currentLoopID = null
+      currentSessionID = null
       running = items.length > 0
       halted = false
       done = items.length === 0
@@ -148,7 +153,7 @@ export function createQueueRunner(deps: QueueDeps): QueueRunner {
       if (!running || halted || done) return
       halted = true
       try {
-        const result = deps.stop?.()
+        const result = deps.stop?.(currentSessionID ?? undefined)
         if (result instanceof Promise) void result.catch(() => undefined)
       } catch {
         // Halting the queue matters more than stopping the loop.

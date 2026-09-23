@@ -45,7 +45,7 @@ Options:
 exports[`opencode CLI help-text snapshots every documented command emits stable help text: opencode attach --help 1`] = `
 "opencode attach <url>
 
-attach to a running opencode server
+attach to a running Legatus server
 
 Positionals:
   url  http://localhost:4096                                                     [string] [required]
@@ -71,7 +71,7 @@ Options:
 exports[`opencode CLI help-text snapshots every documented command emits stable help text: opencode run --help 1`] = `
 "opencode run [message..]
 
-run opencode with a message
+run Legatus with a message
 
 Positionals:
   message  message to send                                                     [array] [default: []]
@@ -93,7 +93,7 @@ Options:
                                           [string] [choices: "default", "json"] [default: "default"]
   -f, --file         file(s) to attach to message                                            [array]
       --title        title for the session (uses truncated prompt if no value provided)     [string]
-      --attach       attach to a running opencode server (e.g., http://localhost:4096)      [string]
+      --attach       attach to a running Legatus server (e.g., http://localhost:4096)       [string]
   -p, --password     basic auth password (defaults to OPENCODE_SERVER_PASSWORD)             [string]
   -u, --username     basic auth username (defaults to OPENCODE_SERVER_USERNAME or 'opencode')
                                                                                             [string]
@@ -174,7 +174,7 @@ Options:
 exports[`opencode CLI help-text snapshots every documented command emits stable help text: opencode upgrade --help 1`] = `
 "opencode upgrade [target]
 
-upgrade opencode to the latest or a specific version
+upgrade Legatus to the latest or a specific version
 
 Positionals:
   target  version to upgrade to, for ex '0.1.48' or 'v0.1.48'                               [string]
@@ -192,7 +192,7 @@ Options:
 exports[`opencode CLI help-text snapshots every documented command emits stable help text: opencode uninstall --help 1`] = `
 "opencode uninstall
 
-uninstall opencode and remove all related files
+uninstall Legatus and remove all related files
 
 Options:
   -h, --help         show help                                                             [boolean]
@@ -209,7 +209,7 @@ Options:
 exports[`opencode CLI help-text snapshots every documented command emits stable help text: opencode serve --help 1`] = `
 "opencode serve
 
-starts a headless opencode server
+starts a headless Legatus server
 
 Options:
   -h, --help         show help                                                             [boolean]
@@ -229,7 +229,7 @@ Options:
 exports[`opencode CLI help-text snapshots every documented command emits stable help text: opencode web --help 1`] = `
 "opencode web
 
-start opencode server and open web interface
+start Legatus server and open web interface
 
 Options:
   -h, --help         show help                                                             [boolean]
@@ -515,7 +515,7 @@ exports[`opencode CLI help-text snapshots every documented command emits stable 
 log in to a provider
 
 Positionals:
-  url  opencode auth provider                                                               [string]
+  url  Legatus auth provider                                                                [string]
 
 Options:
   -h, --help        show help                                                              [boolean]

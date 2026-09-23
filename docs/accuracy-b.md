@@ -1,13 +1,14 @@
 # Accuracy B: background long commands for the shell tool
 
-Status: implemented on `feat/accuracy-background-shell` and shipped **off by default**. This
-document describes what is built, not a proposal.
+Status: implemented on `feat/accuracy-background-shell`, shipped off by default, and turned **on
+by default** once the UI below existed. This document describes what is built, not a proposal.
 
-It is opt-in for its first release because nothing in the UI shows a live background process
-yet: a user who presses escape has no list, no indicator and no stop button for trees that
-keep running. Two follow-ups turn it on by default — a UI affordance for running tasks, and a
-notice when the idle reaper kills something. Until then `experimental.background_shell` is
-how you get it, and the server endpoints in section 4 are the only way to see and stop tasks.
+It was opt-in for its first release because nothing in the UI showed a live background process:
+a user who pressed escape had no list, no indicator and no stop button for trees that kept
+running. Both follow-ups are now in: the session's background tasks dock (`accuracy-ui.md` §2)
+lists every running task with its elapsed time, last output line, wake state and a stop button,
+and says when the idle reaper killed something. `experimental.background_shell: false` turns
+the feature off.
 
 Model: MiniMax Code (MIT). Its bash tool soft-yields a foreground command to a managed
 background task after 15 s without restarting it, hands back a receipt, exposes
@@ -194,12 +195,12 @@ the matching optional `loop?` on `TaskPromptOps` in `tool/task.ts`.
 
 ## 6. Caps and cleanup
 
-Config (`experimental.background_shell`, **absent means off**; `true`/`false` is also accepted,
-and writing the settings object is itself the opt-in unless it says `enabled: false`):
+Config (`experimental.background_shell`, **absent means on**; `true`/`false` is also accepted,
+and a settings object is on unless it says `enabled: false`):
 
 ```jsonc
 "experimental": { "background_shell": {
-  "enabled": true,              // false, or no key at all = today's behavior exactly
+  "enabled": true,              // false = the old behavior exactly
   "yield_after_ms": 15000,
   "max_lifetime_ms": 3600000,   // 60 min, then timed_out (wakes the session)
   "max_concurrent": 8,          // promoted running tasks per instance
@@ -294,7 +295,7 @@ plus `bun run typecheck`.
 
 ## 11. Open items
 
-- **No UI affordance yet** for a running background task: no list, no indicator, no stop
-  button. This is why the flag ships off.
-- **The idle reaper kills without notice** after 30 minutes of an idle session with no reads.
-  It should say something when it does.
+- ~~No UI affordance for a running background task.~~ Done: the background tasks dock, backed by
+  the `shell.task.updated` event and `POST /experimental/shell/task/:taskID/stop`.
+- ~~The idle reaper kills without notice.~~ Done: the dock keeps the reaped task listed with
+  "killed: idle, nobody reading". There is still no toast or OS notification for it.

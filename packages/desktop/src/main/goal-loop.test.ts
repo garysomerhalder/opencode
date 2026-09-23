@@ -7,6 +7,7 @@ import {
   type GoalLoopEvent,
   type GoalLoopServer,
   type GoalLoopStartInput,
+  type GoalLoopState,
   type GoalTicket,
 } from "./goal-loop"
 
@@ -141,7 +142,12 @@ describe("goal loop driver", () => {
       ],
       calls,
     )
-    const loop = createGoalLoop({ getServer: async () => server, fetchImpl, onEvent: (e) => events.push(e), pollIntervalMs: 5 })
+    const loop = createGoalLoop({
+      getServer: async () => server,
+      fetchImpl,
+      onEvent: (e) => events.push(e),
+      pollIntervalMs: 5,
+    })
     const state = await loop.start({ directory: "/repo", goal: "ship it" })
     expect(state.status).toBe("running")
     expect(state.sessionID).toBe("ses_1")
@@ -149,6 +155,45 @@ describe("goal loop driver", () => {
     expect(loop.status()).toBe(null)
     expect(events.map((e) => e.type)).toEqual(["started", "completed"])
     expect(calls.some((c) => c.startsWith("POST /session?"))).toBe(true)
+  })
+
+  test("reports its phase, last poll and last prompt through onProgress, not onEvent", async () => {
+    const polls = { n: 0 }
+    const events: GoalLoopEvent[] = []
+    const progress: GoalLoopState[] = []
+    let clock = 1_000
+    const fetchImpl = stubFetch(
+      [
+        { method: "POST", path: "/session", respond: () => ({ id: "ses_p" }) },
+        { method: "POST", path: "/session/ses_p/prompt_async", respond: () => ({}) },
+        statusRoutes("ses_p", (call) => call <= 2, polls),
+        {
+          method: "GET",
+          path: "/session/ses_p/message",
+          respond: () => assistantMessages(["all done\nGOAL_COMPLETE"]),
+        },
+      ],
+      [],
+    )
+    const loop = createGoalLoop({
+      getServer: async () => server,
+      fetchImpl,
+      now: () => (clock += 10),
+      onEvent: (e) => events.push(e),
+      onProgress: (state) => progress.push(state),
+      pollIntervalMs: 5,
+    })
+    const state = await loop.start({ directory: "/repo", goal: "ship it" })
+    expect(state.phase).toBe("turn")
+    await waitFor(() => loop.status() === null)
+    // progress never shows up as an event, so the terminal event sequence is unchanged
+    expect(events.map((e) => e.type)).toEqual(["started", "completed"])
+    expect(progress.length).toBeGreaterThan(0)
+    expect(progress[0]!.promptedAt).toBeGreaterThan(0)
+    // the phase changes from a busy turn to waiting once the session goes idle
+    expect(progress[0]!.phase).toBe("turn")
+    expect(typeof progress.at(-1)!.checkedAt).toBe("number")
+    expect(progress.at(-1)!.phase).toBe("waiting")
   })
 
   test("a harness reminder mid-turn does not hide the completion marker", async () => {
@@ -255,7 +300,12 @@ describe("goal loop driver", () => {
       ],
       calls,
     )
-    const loop = createGoalLoop({ getServer: async () => server, fetchImpl, onEvent: (e) => events.push(e), pollIntervalMs: 5 })
+    const loop = createGoalLoop({
+      getServer: async () => server,
+      fetchImpl,
+      onEvent: (e) => events.push(e),
+      pollIntervalMs: 5,
+    })
     await loop.start({ directory: "/repo", goal: "ship it", maxIterations: 2 })
     await waitFor(() => loop.status() === null)
     expect(events.map((e) => e.type)).toEqual(["started", "iteration", "capped"])
@@ -285,7 +335,12 @@ describe("goal loop driver", () => {
       if (url.pathname.endsWith("/message")) return json(assistantMessages(["done\nGOAL_COMPLETE"]))
       throw new Error(`unexpected request: ${method} ${url.pathname}`)
     }) as typeof fetch
-    const loop = createGoalLoop({ getServer: async () => server, fetchImpl, onEvent: (e) => events.push(e), pollIntervalMs: 5 })
+    const loop = createGoalLoop({
+      getServer: async () => server,
+      fetchImpl,
+      onEvent: (e) => events.push(e),
+      pollIntervalMs: 5,
+    })
     const state = await loop.start({ directory: "C:/work/proj", goal: "v1 shape" })
     expect(createURL).toContain(`directory=${encodeURIComponent("C:/work/proj")}`)
     expect(state.sessionID).toBe("ses_7")
@@ -324,7 +379,12 @@ describe("goal loop driver", () => {
       ],
       calls,
     )
-    const loop = createGoalLoop({ getServer: async () => server, fetchImpl, onEvent: (e) => events.push(e), pollIntervalMs: 5 })
+    const loop = createGoalLoop({
+      getServer: async () => server,
+      fetchImpl,
+      onEvent: (e) => events.push(e),
+      pollIntervalMs: 5,
+    })
     await loop.start({ directory: "/repo", goal: "long job" })
     await Bun.sleep(20)
     const stopped = await loop.stop()
@@ -448,7 +508,12 @@ describe("goal loop driver", () => {
       ],
       [],
     )
-    const loop = createGoalLoop({ getServer: async () => server, fetchImpl, onEvent: (e) => events.push(e), pollIntervalMs: 5 })
+    const loop = createGoalLoop({
+      getServer: async () => server,
+      fetchImpl,
+      onEvent: (e) => events.push(e),
+      pollIntervalMs: 5,
+    })
     const ticket: GoalTicket = { identifier: "ABC-123", title: "Fix login" }
     const state = await loop.start({ directory: "/repo", goal: "ship it", ticket })
     expect(state.ticket).toEqual(ticket)
@@ -489,7 +554,12 @@ describe("goal loop driver", () => {
       ],
       [],
     )
-    const loop = createGoalLoop({ getServer: async () => server, fetchImpl, onEvent: (e) => events.push(e), pollIntervalMs: 5 })
+    const loop = createGoalLoop({
+      getServer: async () => server,
+      fetchImpl,
+      onEvent: (e) => events.push(e),
+      pollIntervalMs: 5,
+    })
     const state = await loop.start({ directory: "/repo", goal: "ship it" })
     expect(state.ticket).toBe(null)
     await waitFor(() => loop.status() === null)
@@ -512,7 +582,12 @@ describe("goal loop driver", () => {
       ],
       [],
     )
-    const loop = createGoalLoop({ getServer: async () => server, fetchImpl, onEvent: (e) => events.push(e), pollIntervalMs: 5 })
+    const loop = createGoalLoop({
+      getServer: async () => server,
+      fetchImpl,
+      onEvent: (e) => events.push(e),
+      pollIntervalMs: 5,
+    })
     const state = await loop.start({ directory: "/repo", goal: "long job" })
     expect(state.maxIterations).toBe(null)
     await waitFor(() => loop.status() === null)
@@ -568,7 +643,12 @@ type Reply = {
   // tokens.total the turn reports
   tokens?: number
 }
-type Turn = { startAfter: number; busyFor: number; reply: Reply; message?: { info: Record<string, unknown>; parts: unknown[] } }
+type Turn = {
+  startAfter: number
+  busyFor: number
+  reply: Reply
+  message?: { info: Record<string, unknown>; parts: unknown[] }
+}
 type TurnPlan = { reply: Reply; busyFor?: number; startAfter?: number }
 
 // A small stateful stand-in for the opencode server. Every admitted user
@@ -596,7 +676,10 @@ function fakeServer(sessionID: string, plan: (index: number) => TurnPlan) {
   }
 
   function admit(text: string, turn: TurnPlan) {
-    messages.push({ info: { id: `msg_${String(++state.ids).padStart(4, "0")}`, role: "user" }, parts: [{ type: "text", text }] })
+    messages.push({
+      info: { id: `msg_${String(++state.ids).padStart(4, "0")}`, role: "user" },
+      parts: [{ type: "text", text }],
+    })
     const entry = { startAfter: turn.startAfter ?? 0, busyFor: turn.busyFor ?? 1, reply: turn.reply }
     if (state.current) queue.push(entry)
     else state.current = entry

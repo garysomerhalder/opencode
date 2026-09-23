@@ -88,7 +88,7 @@ function createModel(opts: {
 
 const wide = () => ProviderTest.fake({ model: createModel({ context: 100_000, output: 32_000 }) })
 
-function createUserMessage(sessionID: SessionID, text: string) {
+function createUserMessage(sessionID: SessionID, text: string, options?: { autonomous?: boolean }) {
   return Effect.gen(function* () {
     const ssn = yield* SessionNs.Service
     const msg = yield* ssn.updateMessage({
@@ -98,6 +98,7 @@ function createUserMessage(sessionID: SessionID, text: string) {
       agent: "build",
       model: ref,
       time: { created: Date.now() },
+      ...(options?.autonomous ? { autonomous: true } : {}),
     })
     yield* ssn.updatePart({
       id: PartID.ascending(),
@@ -594,6 +595,25 @@ describe("session.compaction.create", () => {
     ),
   )
 
+  it.live(
+    "carries the turn's autonomous flag onto the compaction message",
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const compact = yield* SessionCompaction.Service
+        const ssn = yield* SessionNs.Service
+        const info = yield* ssn.create({})
+
+        yield* compact.create({ sessionID: info.id, agent: "build", model: ref, auto: true, autonomous: true })
+        yield* compact.create({ sessionID: info.id, agent: "build", model: ref, auto: true })
+
+        const msgs = yield* ssn.messages({ sessionID: info.id })
+        expect(msgs).toHaveLength(2)
+        expect(msgs[0].info.role === "user" && msgs[0].info.autonomous).toBe(true)
+        expect(msgs[1].info.role === "user" && msgs[1].info.autonomous).toBeFalsy()
+      }),
+    ),
+  )
+
   it.live.skip(
     "projects a compaction message to v2 (v2 projector disabled)",
     provideTmpdirInstance(() =>
@@ -935,6 +955,54 @@ describe("session.compaction.process", () => {
     }),
   )
 
+  it.instance(
+    "keeps an autonomous turn autonomous across the continue prompt",
+    Effect.gen(function* () {
+      const ssn = yield* SessionNs.Service
+      const session = yield* ssn.create({})
+      const msg = yield* createUserMessage(session.id, "hello", { autonomous: true })
+      const msgs = yield* ssn.messages({ sessionID: session.id })
+
+      const result = yield* SessionCompaction.use.process({
+        parentID: msg.id,
+        messages: msgs,
+        sessionID: session.id,
+        auto: true,
+      })
+
+      const last = (yield* ssn.messages({ sessionID: session.id })).at(-1)
+
+      expect(result).toBe("continue")
+      expect(last?.info.role).toBe("user")
+      // The loop reads `autonomous` from the newest user message, so the continue
+      // prompt must carry it or the rest of the turn loses the headless section.
+      expect(last?.info.role === "user" && last.info.autonomous).toBe(true)
+      expect(last?.parts[0]).toMatchObject({ type: "text", synthetic: true, metadata: { compaction_continue: true } })
+      if (last?.parts[0]?.type === "text") {
+        expect(last.parts[0].text).not.toContain("ask for clarification")
+        expect(last.parts[0].text).toContain("Nobody can answer questions")
+      }
+    }),
+  )
+
+  it.instance(
+    "leaves an interactive turn's continue prompt as it was",
+    Effect.gen(function* () {
+      const ssn = yield* SessionNs.Service
+      const session = yield* ssn.create({})
+      const msg = yield* createUserMessage(session.id, "hello")
+      const msgs = yield* ssn.messages({ sessionID: session.id })
+
+      yield* SessionCompaction.use.process({ parentID: msg.id, messages: msgs, sessionID: session.id, auto: true })
+
+      const last = (yield* ssn.messages({ sessionID: session.id })).at(-1)
+      expect(last?.info.role === "user" && last.info.autonomous).toBeFalsy()
+      if (last?.parts[0]?.type === "text") {
+        expect(last.parts[0].text).toContain("stop and ask for clarification if you are unsure")
+      }
+    }),
+  )
+
   itCompaction.instance(
     "persists tail_start_id for retained recent turns",
     Effect.gen(function* () {
@@ -1169,6 +1237,30 @@ describe("session.compaction.process", () => {
       expect(
         last?.parts.some((part) => part.type === "text" && part.text.includes("Attached image/png: cat.png")),
       ).toBe(true)
+    }),
+  )
+
+  it.instance(
+    "replays an autonomous turn as autonomous on overflow",
+    Effect.gen(function* () {
+      const ssn = yield* SessionNs.Service
+      const session = yield* ssn.create({})
+      yield* createUserMessage(session.id, "root")
+      yield* createUserMessage(session.id, "image", { autonomous: true })
+      const msg = yield* createUserMessage(session.id, "current", { autonomous: true })
+      const msgs = yield* ssn.messages({ sessionID: session.id })
+
+      const result = yield* SessionCompaction.use.process({
+        parentID: msg.id,
+        messages: msgs,
+        sessionID: session.id,
+        auto: true,
+        overflow: true,
+      })
+
+      const last = (yield* ssn.messages({ sessionID: session.id })).at(-1)
+      expect(result).toBe("continue")
+      expect(last?.info.role === "user" && last.info.autonomous).toBe(true)
     }),
   )
 

@@ -1,8 +1,17 @@
 import { describe, expect, test } from "bun:test"
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
 import { join, relative, sep } from "node:path"
-import { brandDictionary, LEGATUS } from "./brand"
-import { ALLOWLIST, describe as describeHits, dictionaryViolations, sourceViolations, type Hit } from "./brand-surface"
+import { brandDictionary, feedbackHref, LEGATUS, UPSTREAM_FEEDBACK_URL } from "./brand"
+import { resolveDesktopMenu } from "./desktop-menu"
+import {
+  ALLOWLIST,
+  describe as describeHits,
+  dictionaryViolations,
+  RUNTIME_ALLOWLIST,
+  runtimeViolations,
+  sourceViolations,
+  type Hit,
+} from "./brand-surface"
 
 // packages/app/src -> repo root
 const ROOT = join(import.meta.dir, "..", "..", "..")
@@ -60,9 +69,7 @@ async function scanDictionaries(all: boolean) {
       const mod = (await import(join(dir, file))) as { dict?: Record<string, unknown> }
       if (!mod.dict) continue
       const branded = brandDictionary(mod.dict as Record<string, string>, LEGATUS)
-      hits.push(
-        ...dictionaryViolations(name, branded, all).map((hit) => ({ ...hit, value: `${file}: ${hit.value}` })),
-      )
+      hits.push(...dictionaryViolations(name, branded, all).map((hit) => ({ ...hit, value: `${file}: ${hit.value}` })))
     }
   }
   // Outside the app project, so it is loaded by path (like i18n/parity.test.ts) to keep tsgo -b happy.
@@ -91,6 +98,81 @@ describe("brand surface: nothing a user can see still says OpenCode", () => {
   test("every string literal and markup text in the renderer and main-process closure", () => {
     const hits = scanSource(false)
     expect(hits.length === 0 ? "" : `\n${describeHits(hits)}\n`).toBe("")
+  })
+})
+
+function scanRuntime(all: boolean) {
+  const hits: Hit[] = []
+  for (const path of [...walk(join(ROOT, "packages/desktop/src")), ...SOURCE_FILES]) {
+    const id = rel(path)
+    if (skipped(`/${id}`)) continue
+    hits.push(...runtimeViolations(id, readFileSync(path, "utf8"), all))
+  }
+  return hits
+}
+
+describe("brand surface: nothing a user can see says Electron", () => {
+  test("every string literal and markup text in the desktop main process, preload and renderer", () => {
+    const hits = scanRuntime(false)
+    expect(
+      hits.length === 0
+        ? ""
+        : `
+${describeHits(hits)}
+`,
+    ).toBe("")
+  })
+
+  test("every runtime allowance carries a reason and still matches something", () => {
+    expect(RUNTIME_ALLOWLIST.filter((entry) => entry.reason.trim().length < 20).map((entry) => entry.id)).toEqual([])
+    const seen = new Set(scanRuntime(true).map((hit) => hit.id))
+    expect(RUNTIME_ALLOWLIST.map((entry) => entry.id).filter((id) => !seen.has(id))).toEqual([])
+  })
+
+  // Windows draws the taskbar button and the toast header from the app's identity, not from any
+  // string, so no scan sees them. These assert the seams that set that identity.
+  test("every app window is created with the brand icon and the brand title", () => {
+    const source = read("packages/desktop/src/main/windows.ts")
+    const options = source.slice(source.indexOf("new BrowserWindow({"), source.indexOf("webPreferences:"))
+    expect(options).toContain("icon: iconPath(),")
+    expect(options).toContain("title: activeBrand()?.productName")
+    // …and the icon set copied into resources/icons is the brand's when the brand is on.
+    expect(read("packages/desktop/scripts/copy-icons.ts")).toContain('"./icons/legatus"')
+  })
+
+  test("the dev build registers its Windows identity under the brand's dev name", () => {
+    const source = read("packages/desktop/src/main/index.ts")
+    expect(source).toContain('if (process.platform === "win32" && !app.isPackaged) registerDevIdentity(appId)')
+    expect(source).toContain("displayName: APP_NAMES.dev, iconPath: iconPngPath()")
+    // APP_NAMES comes from the brand when it is on.
+    expect(source).toContain("BRAND?.appNames ??")
+  })
+})
+
+describe("brand surface: no branded link leads to upstream's support channels", () => {
+  test("the brand's own destinations are not upstream's", () => {
+    expect(
+      Object.values(LEGATUS.links).filter((href) => /opencode\.ai|anomalyco|invite\/opencode/i.test(href ?? "")),
+    ).toEqual([])
+  })
+
+  test("feedback buttons and Help-menu links resolve to nothing upstream with the brand on", () => {
+    expect(feedbackHref(LEGATUS)).toBeUndefined()
+    expect(feedbackHref(undefined)).toBe(UPSTREAM_FEEDBACK_URL)
+    for (const platform of ["macos", "windows"] as const) {
+      const hrefs = resolveDesktopMenu(platform, LEGATUS).flatMap((menu) =>
+        (menu.items ?? []).flatMap((entry) => (entry.type === "item" && entry.href ? [entry.href] : [])),
+      )
+      expect(hrefs.filter((href) => /opencode|anomalyco/i.test(href))).toEqual([])
+    }
+  })
+
+  test("upstream's feedback page is named only in the brand module, behind feedbackHref()", () => {
+    const offenders = SOURCE_ROOTS.flatMap((root) => [...walk(root)])
+      .filter((path) => !skipped(`/${rel(path)}`))
+      .filter((path) => readFileSync(path, "utf8").includes("opencode.ai/desktop-feedback"))
+      .map(rel)
+    expect(offenders).toEqual([])
   })
 })
 

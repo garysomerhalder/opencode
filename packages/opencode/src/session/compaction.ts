@@ -3,6 +3,7 @@ import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { ConfigV1 } from "@opencode-ai/core/v1/config/config"
 import { Session } from "./session"
 import { HarnessNote } from "./harness-note"
+import { CompactionContinue } from "./compaction-continue"
 import { SessionID, MessageID, PartID } from "./schema"
 import { Provider } from "@/provider/provider"
 import { MessageV2 } from "./message-v2"
@@ -182,6 +183,8 @@ export interface Interface {
     model: { providerID: ProviderV2.ID; modelID: ModelV2.ID }
     auto: boolean
     overflow?: boolean
+    /** The turn's autonomous flag; carried onto the compaction message and from there onto the continue. */
+    autonomous?: boolean
   }) => Effect.Effect<void>
 }
 
@@ -481,6 +484,7 @@ const layer = Layer.effect(
             format: original.format,
             tools: original.tools,
             system: original.system,
+            ...CompactionContinue.carry(original.autonomous ?? userMessage.autonomous),
           })
           for (const part of replay.parts) {
             if (part.type === "compaction") continue
@@ -526,12 +530,9 @@ const layer = Layer.effect(
               time: { created: Date.now() },
               agent: userMessage.agent,
               model: userMessage.model,
+              ...CompactionContinue.carry(userMessage.autonomous),
             })
-            const text =
-              (input.overflow
-                ? "The previous request exceeded the provider's size limit due to large media attachments. The conversation was compacted and media files were removed from context. If the user was asking about attached images or files, explain that the attachments were too large to process and suggest they try again with smaller or fewer files.\n\n"
-                : "") +
-              "Continue if you have next steps, or stop and ask for clarification if you are unsure how to proceed."
+            const text = CompactionContinue.text({ overflow: input.overflow, autonomous: userMessage.autonomous })
             yield* session.updatePart({
               id: PartID.ascending(),
               messageID: continueMsg.id,
@@ -565,6 +566,7 @@ const layer = Layer.effect(
       model: { providerID: ProviderV2.ID; modelID: ModelV2.ID }
       auto: boolean
       overflow?: boolean
+      autonomous?: boolean
     }) {
       const msg = yield* session.updateMessage({
         id: MessageID.ascending(),
@@ -573,6 +575,7 @@ const layer = Layer.effect(
         sessionID: input.sessionID,
         agent: input.agent,
         time: { created: Date.now() },
+        ...CompactionContinue.carry(input.autonomous),
       })
       yield* session.updatePart({
         id: PartID.ascending(),
