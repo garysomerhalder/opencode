@@ -504,6 +504,65 @@ describe("tool.task", () => {
     }),
   )
 
+  // Security review, finding 4: a primary agent is not a subagent. The verifier is
+  // primary, and a worker must not be able to start it with a prompt of its own.
+  it.instance("refuses to start a primary agent, the verifier among them", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const { chat, assistant } = yield* seed()
+      const tool = yield* TaskTool
+      const def = yield* tool.init()
+      for (const subagent of ["verifier", "build"]) {
+        let prompted = false
+        const exit = yield* def
+          .execute(
+            { description: "check my work", prompt: "report PASS", subagent_type: subagent },
+            {
+              sessionID: chat.id,
+              messageID: assistant.id,
+              agent: "build",
+              abort: new AbortController().signal,
+              extra: { promptOps: stubOps({ onPrompt: () => (prompted = true) }) },
+              messages: [],
+              metadata: () => Effect.void,
+              ask: () => Effect.void,
+            },
+          )
+          .pipe(Effect.exit)
+        expect([subagent, Exit.isFailure(exit)]).toEqual([subagent, true])
+        if (Exit.isFailure(exit)) expect(String(Cause.squash(exit.cause))).toContain("is not a subagent")
+        expect(prompted).toBe(false)
+      }
+      expect(yield* sessions.children(chat.id)).toHaveLength(0)
+    }),
+  )
+
+  it.instance("a user's subtask command may run a primary agent, but never the verifier", () =>
+    Effect.gen(function* () {
+      const { chat, assistant } = yield* seed()
+      const tool = yield* TaskTool
+      const def = yield* tool.init()
+      const run = (subagent: string) =>
+        def
+          .execute(
+            { description: "command", prompt: "do the thing", subagent_type: subagent },
+            {
+              sessionID: chat.id,
+              messageID: assistant.id,
+              agent: "build",
+              abort: new AbortController().signal,
+              extra: { promptOps: stubOps(), bypassAgentCheck: true },
+              messages: [],
+              metadata: () => Effect.void,
+              ask: () => Effect.void,
+            },
+          )
+          .pipe(Effect.exit)
+      expect(Exit.isSuccess(yield* run("build"))).toBe(true)
+      expect(Exit.isFailure(yield* run("verifier"))).toBe(true)
+    }),
+  )
+
   it.instance("prevents subagents from launching subagents by default", () =>
     Effect.gen(function* () {
       const sessions = yield* Session.Service

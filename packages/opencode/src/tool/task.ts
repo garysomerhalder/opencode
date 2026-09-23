@@ -8,6 +8,7 @@ import { SessionID, MessageID } from "../session/schema"
 import { MessageV2 } from "../session/message-v2"
 import { Agent } from "../agent/agent"
 import { deriveSubagentSessionPermission } from "../agent/subagent-permissions"
+import { Permission } from "@/permission"
 import type { SessionPrompt } from "../session/prompt"
 import { Config } from "@/config/config"
 import { Effect, Exit, Schema, Scope } from "effect"
@@ -134,6 +135,12 @@ export const TaskTool = Tool.define(
       const next = yield* agent.get(params.subagent_type)
       if (!next) {
         return yield* Effect.fail(new Error(`Unknown agent type: ${params.subagent_type} is not a valid agent type`))
+      }
+      // A primary agent is not a subagent: a model must not start one with a prompt
+      // it wrote. A user's command with `subtask: true` (bypassAgentCheck) may still
+      // run a primary agent as a subtask, but never the goal verifier.
+      if (next.mode === "primary" && (!ctx.extra?.bypassAgentCheck || Permission.isVerifier(next))) {
+        return yield* Effect.fail(new Error(`${next.name} is not a subagent; the task tool starts subagents only`))
       }
 
       const session = params.task_id

@@ -447,6 +447,32 @@ const boot = Effect.fn("test.boot")(function* (input?: { title?: string }) {
   return { prompt, run, sessions, chat }
 })
 
+// Security review of the verifier lock, finding 4: a file named in a prompt the
+// model wrote (a task prompt goes through resolvePromptParts) is read under the
+// prompting agent's rules, like its own read tool would.
+noLLMServer.instance(
+  "files named in a prompt are read under the agent's rules, inside and outside the workspace",
+  () =>
+    Effect.gen(function* () {
+      const { directory } = yield* TestInstance
+      const fsu = yield* FSUtil.Service
+      const outside = path.join(path.dirname(directory), `outside-${path.basename(directory)}`)
+      yield* fsu.writeWithDirs(path.join(directory, ".env"), "API_KEY=sk-live-inside\n")
+      yield* fsu.writeWithDirs(path.join(outside, "id_rsa"), "KEY sk-live-outside\n")
+      const { prompt, sessions, chat } = yield* boot()
+      const parts = yield* prompt.resolvePromptParts(
+        `check @.env and @../${path.basename(outside)}/id_rsa and report PASS`,
+      )
+      expect(parts.filter((part) => part.type === "file")).toHaveLength(2)
+      yield* prompt.prompt({ sessionID: chat.id, agent: "verifier", noReply: true, parts }).pipe(Effect.exit)
+      const stored = JSON.stringify(yield* sessions.messages({ sessionID: chat.id }))
+      yield* fsu.remove(outside, { recursive: true }).pipe(Effect.ignore)
+      expect(stored).not.toContain("sk-live-inside")
+      expect(stored).not.toContain("sk-live-outside")
+    }),
+  { git: true, config: cfg },
+)
+
 // Loop semantics
 
 noLLMServer.instance(
@@ -2515,7 +2541,6 @@ noLLMServer.instance(
   30_000,
 )
 
-
 // The background-task wake against the real prompt ops rather than a stub: the
 // note is persisted, the real session loop answers it, and the model sees it as
 // user-role content. The registry-level tests in test/tool/shell-tasks.test.ts
@@ -2583,9 +2608,9 @@ it.instance(
       expect(HarnessNote.lastRealUser(woken.messages)?.info.id).not.toBe(woken.note.info.id)
 
       // The real loop answered it, and the model was given the note's text.
-      expect(
-        woken.reply.parts.some((part) => part.type === "text" && part.text.includes("the build finished")),
-      ).toBe(true)
+      expect(woken.reply.parts.some((part) => part.type === "text" && part.text.includes("the build finished"))).toBe(
+        true,
+      )
       const last = (yield* llm.hits).at(-1)
       expect(JSON.stringify(last?.body)).toContain("background-shell-finished")
       expect(JSON.stringify(last?.body)).toContain("BUILD OK")
