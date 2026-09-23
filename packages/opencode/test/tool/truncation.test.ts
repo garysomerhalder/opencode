@@ -9,6 +9,7 @@ import { Config } from "@/config/config"
 import { Identifier } from "../../src/id/id"
 import { Process } from "@/util/process"
 import path from "path"
+import { createHash } from "crypto"
 import { testEffect } from "../lib/effect"
 import { writeFileStringScoped } from "../lib/filesystem"
 import { TestConfig } from "../fixture/config"
@@ -34,7 +35,7 @@ describe("Truncate", () => {
         const result = yield* svc.output(content)
 
         expect(result.truncated).toBe(true)
-        expect(result.content).toContain("truncated...")
+        expect(result.content).toContain("lines not shown")
         if (result.truncated) expect(result.outputPath).toBeDefined()
       }),
     )
@@ -57,7 +58,7 @@ describe("Truncate", () => {
         const result = yield* svc.output(lines, { maxLines: 10 })
 
         expect(result.truncated).toBe(true)
-        expect(result.content).toContain("...90 lines truncated...")
+        expect(result.content).toContain("... 90 lines not shown ...")
       }),
     )
 
@@ -68,11 +69,11 @@ describe("Truncate", () => {
         const result = yield* svc.output(content, { maxBytes: 100 })
 
         expect(result.truncated).toBe(true)
-        expect(result.content).toContain("truncated...")
+        expect(result.content).toContain("bytes not shown")
       }),
     )
 
-    it.live("truncates from head by default", () =>
+    it.live("keeps the head and the tail by default", () =>
       Effect.gen(function* () {
         const svc = yield* Truncate.Service
         const lines = Array.from({ length: 10 }, (_, i) => `line${i}`).join("\n")
@@ -81,10 +82,69 @@ describe("Truncate", () => {
         expect(result.truncated).toBe(true)
         expect(result.content).toContain("line0")
         expect(result.content).toContain("line1")
-        expect(result.content).toContain("line2")
-        expect(result.content).not.toContain("line9")
+        expect(result.content).toContain("line9")
+        expect(result.content).not.toContain("line5")
       }),
     )
+
+    it.live("the error on the last line of a 5000-line output reaches the model", () =>
+      Effect.gen(function* () {
+        const svc = yield* Truncate.Service
+        const text = Array.from({ length: 4999 }, (_, i) => `ok ${i}`).join("\n") + "\nerror: 3 tests failed"
+        const result = yield* svc.output(text, { tool: "bash", call: "call_7" })
+
+        expect(result.truncated).toBe(true)
+        expect(result.content).toContain("error: 3 tests failed")
+      }),
+    )
+
+    it.live("a cut output is an envelope whose receipt matches the archive", () =>
+      Effect.gen(function* () {
+        const svc = yield* Truncate.Service
+        const text = Array.from({ length: 20411 }, (_, i) => `row ${i + 1}`).join("\n")
+        const result = yield* svc.output(text, { maxLines: 120, tool: "bash", call: "call_9" })
+        if (!result.truncated || !result.archive) throw new Error("expected an archived result")
+        const { archive } = result
+
+        expect(archive.path).toBe(result.outputPath)
+        expect(archive.bytes).toBe(Buffer.byteLength(text, "utf-8"))
+        expect(archive.lines).toBe(20411)
+        expect(archive.unit).toBe("lines")
+        expect(archive.shown).toEqual([
+          [1, 60],
+          [20352, 20411],
+        ])
+        expect(archive.sha256).toBe(createHash("sha256").update(text).digest("hex"))
+        expect(result.content.split("\n")[0]).toBe(
+          `<tool-output-archived tool="bash" call="call_9" bytes="${archive.bytes}" lines="20411" shown="lines 1-60, 20352-20411">`,
+        )
+        expect(result.content).toContain(`Full output: ${archive.path}`)
+        expect(result.content).toContain("Do not rerun it to see more output.")
+        expect(Truncate.metadata(result)).toEqual({ truncated: true, outputPath: archive.path, archive })
+
+        const fsys = yield* FSUtil.Service
+        expect(yield* fsys.readFileString(archive.path)).toBe(text)
+      }),
+    )
+
+    describe("with output receipts off", () => {
+      const legacyIt = configuredIt({ experimental: { accuracy: { output_receipts: false } } })
+      legacyIt.live("keeps the head-only preview and prose hint from before", () =>
+        Effect.gen(function* () {
+          const lines = Array.from({ length: 100 }, (_, i) => `line${i}`).join("\n")
+          const result = yield* (yield* Truncate.Service).output(lines, { maxLines: 10 })
+          if (!result.truncated) throw new Error("expected truncated")
+
+          expect(result.content.startsWith("line0\nline1")).toBe(true)
+          expect(result.content).toContain("...90 lines truncated...")
+          expect(result.content).toContain("The tool call succeeded but the output was truncated")
+          expect(result.content).not.toContain("line99")
+          expect(result.content).not.toContain("<tool-output-archived")
+          expect(result.archive).toBeUndefined()
+          expect(Truncate.metadata(result)).toEqual({ truncated: true, outputPath: result.outputPath })
+        }),
+      )
+    })
 
     it.live("truncates from tail when direction is tail", () =>
       Effect.gen(function* () {
@@ -132,7 +192,7 @@ describe("Truncate", () => {
           const content = Array.from({ length: 100 }, (_, i) => `line${i}`).join("\n")
           const result = yield* (yield* Truncate.Service).output(content)
           expect(result.truncated).toBe(true)
-          expect(result.content).toContain("...90 lines truncated...")
+          expect(result.content).toContain("... 90 lines not shown ...")
         }),
       )
 
@@ -143,7 +203,7 @@ describe("Truncate", () => {
           const content = "a".repeat(1000)
           const result = yield* (yield* Truncate.Service).output(content)
           expect(result.truncated).toBe(true)
-          expect(result.content).toContain("bytes truncated...")
+          expect(result.content).toContain("bytes not shown")
         }),
       )
 
@@ -160,7 +220,7 @@ describe("Truncate", () => {
       )
     })
 
-    it.live("large single-line file truncates with byte message", () =>
+    it.live("large file over the byte limit keeps whole lines within it", () =>
       Effect.gen(function* () {
         const svc = yield* Truncate.Service
         const fsys = yield* FSUtil.Service
@@ -168,7 +228,7 @@ describe("Truncate", () => {
         const result = yield* svc.output(content)
 
         expect(result.truncated).toBe(true)
-        expect(result.content).toContain("bytes truncated...")
+        expect(result.content).toContain("lines not shown")
         expect(Buffer.byteLength(content, "utf-8")).toBeGreaterThan(Truncate.MAX_BYTES)
       }),
     )
@@ -180,8 +240,8 @@ describe("Truncate", () => {
         const result = yield* svc.output(lines, { maxLines: 10 })
 
         expect(result.truncated).toBe(true)
-        expect(result.content).toContain("The tool call succeeded but the output was truncated")
-        expect(result.content).toContain("Grep")
+        expect(result.content).toContain("Full output:")
+        expect(result.content).toContain("grep")
         if (!result.truncated) throw new Error("expected truncated")
         expect(result.outputPath).toBeDefined()
         expect(result.outputPath).toContain("tool_")
@@ -213,7 +273,7 @@ describe("Truncate", () => {
         const result = yield* svc.output(lines, { maxLines: 10 }, agent as any)
 
         expect(result.truncated).toBe(true)
-        expect(result.content).toContain("Grep")
+        expect(result.content).toContain("grep")
         expect(result.content).not.toContain("Task tool")
       }),
     )

@@ -2080,10 +2080,11 @@ export type Config = {
       runaway_guard_threshold?: number
       todo_reminder?: boolean
       todo_reminder_interval?: number
+      output_receipts?: boolean
     }
     policies?: Array<ConfigV2ExperimentalPolicy>
     /**
-     * Background shell tasks: a long foreground command keeps running as a background task instead of being killed
+     * Background shell tasks: a long foreground command keeps running as a background task instead of being killed (default on; false turns it off)
      */
     background_shell?:
       | boolean

@@ -206,9 +206,14 @@ export const Info = Schema.Struct({
           todo_reminder_interval: Schema.optional(PositiveInt).annotate({
             description: "Steps between periodic todo completion reminders (default 5)",
           }),
+          output_receipts: Schema.optional(Schema.Boolean).annotate({
+            description:
+              "Cut tool output keeps its head and tail inside a receipt that gives the size, the part shown and the path of the full output; prune leaves a receipt instead of a blank (default true)",
+          }),
         }),
       ).annotate({
-        description: "Agent accuracy harness: autonomy prompt, runaway guard and todo completion reminders",
+        description:
+          "Agent accuracy harness: autonomy prompt, runaway guard, todo completion reminders and tool-output receipts",
       }),
       policies: Schema.optional(Schema.mutable(Schema.Array(ConfigExperimental.Policy))).annotate({
         description: "Policy statements applied to supported resources, such as provider access",

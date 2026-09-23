@@ -13,6 +13,7 @@ export interface Settings {
   readonly runawayGuardThreshold: number
   readonly todoReminder: boolean
   readonly todoReminderInterval: number
+  readonly outputReceipts: boolean
 }
 
 export function settings(config: ConfigV1.Info): Settings {
@@ -24,6 +25,7 @@ export function settings(config: ConfigV1.Info): Settings {
     runawayGuardThreshold: Math.max(2, Math.trunc(accuracy.runaway_guard_threshold ?? DEFAULT_THRESHOLD)),
     todoReminder: accuracy.todo_reminder !== false,
     todoReminderInterval: Math.max(1, Math.trunc(accuracy.todo_reminder_interval ?? DEFAULT_INTERVAL)),
+    outputReceipts: accuracy.output_receipts !== false,
   }
 }
 
