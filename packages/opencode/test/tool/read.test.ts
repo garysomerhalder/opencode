@@ -313,6 +313,25 @@ describe("tool.read env file permissions", () => {
 })
 
 describe("tool.read truncation", () => {
+  it.instance("a missing archived tool output says it expired, not just not found", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const gone = path.join(Truncate.DIR, "tool_expired_0000000000000000")
+      const err = yield* fail(test.directory, { filePath: gone })
+      expect(err.message).toContain("Archived tool output expired")
+      expect(err.message).toContain("7 days")
+    }),
+  )
+
+  it.instance("a missing file elsewhere is still not found", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const err = yield* fail(test.directory, { filePath: path.join(test.directory, "nope.txt") })
+      expect(err.message).toContain("File not found")
+      expect(err.message).not.toContain("expired")
+    }),
+  )
+
   it.instance("truncates large file by bytes and sets truncated metadata", () =>
     Effect.gen(function* () {
       const test = yield* TestInstance

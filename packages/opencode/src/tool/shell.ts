@@ -1,6 +1,8 @@
-import { Effect, Stream } from "effect"
+import { Effect, Fiber, Stream } from "effect"
 import os from "os"
 import { createWriteStream } from "node:fs"
+import { createHash } from "node:crypto"
+import { Receipt } from "./receipt"
 import * as Tool from "./tool"
 import path from "path"
 import { containsPath, type InstanceContext } from "../project/instance-context"
@@ -235,6 +237,7 @@ function tail(text: string, maxLines: number, maxBytes: number) {
 
   const out: string[] = []
   let bytes = 0
+  let partial = false
   for (let i = lines.length - 1; i >= 0 && out.length < maxLines; i--) {
     const size = Buffer.byteLength(lines[i], "utf-8") + (out.length > 0 ? 1 : 0)
     if (bytes + size > maxBytes) {
@@ -244,6 +247,7 @@ function tail(text: string, maxLines: number, maxBytes: number) {
         if (start < 0) start = 0
         while (start < buf.length && (buf[start] & 0xc0) === 0x80) start++
         out.unshift(buf.subarray(start).toString("utf-8"))
+        partial = true
       }
       break
     }
@@ -253,6 +257,32 @@ function tail(text: string, maxLines: number, maxBytes: number) {
   return {
     text: out.join("\n"),
     cut: true,
+    partial,
+  }
+}
+
+// Totals of everything a command printed, counted as it streams, so a cut
+// output's archive metadata can describe the saved file (accuracy C).
+function counter() {
+  const hash = createHash("sha256")
+  let bytes = 0
+  let newlines = 0
+  return {
+    add(chunk: string, size: number) {
+      hash.update(chunk)
+      bytes += size
+      for (let i = 0; i < chunk.length; i++) if (chunk.charCodeAt(i) === 10) newlines++
+    },
+    archive(path: string, end: { text: string; partial?: boolean }) {
+      return Receipt.tail({
+        path,
+        bytes,
+        lines: newlines + 1,
+        sha256: hash.digest("hex"),
+        shown: end.text,
+        partial: end.partial === true,
+      })
+    },
   }
 }
 
@@ -440,6 +470,7 @@ export const ShellTool = Tool.define(
     ) {
       const limits = yield* trunc.limits()
       const keep = limits.maxBytes * 2
+      const total = counter()
       let full = ""
       let last = ""
       const list: Chunk[] = []
@@ -486,9 +517,10 @@ export const ShellTool = Tool.define(
           yield* Effect.addFinalizer(closeSink)
           const handle = yield* spawner.spawn(cmd(input.shell, input.command, input.cwd, input.env))
 
-          yield* Effect.forkScoped(
+          const reader = yield* Effect.forkScoped(
             Stream.runForEach(Stream.decodeText(handle.all), (chunk) => {
               const size = Buffer.byteLength(chunk, "utf-8")
+              total.add(chunk, size)
               list.push({ text: chunk, size })
               used += size
               while (used > keep && list.length > 1) {
@@ -556,6 +588,10 @@ export const ShellTool = Tool.define(
             expired = true
             yield* handle.kill({ forceKillAfter: "3 seconds" }).pipe(Effect.orDie)
           }
+          // Let the reader take the last chunks off the pipe before the result is
+          // built: the exit can be seen first (see ShellTasks.DRAIN_MS).
+          if (exit.kind === "exit")
+            yield* Fiber.await(reader).pipe(Effect.timeout(`${ShellTasks.DRAIN_MS} millis`), Effect.ignore)
 
           return exit.kind === "exit" ? exit.code : null
         }),
@@ -592,6 +628,7 @@ export const ShellTool = Tool.define(
           exit: code,
           truncated: cut,
           ...(cut && file ? { outputPath: file } : {}),
+          ...(cut && file && limits.receipts ? { archive: total.archive(file, end) } : {}),
         },
         output,
       }
@@ -650,6 +687,25 @@ export const ShellTool = Tool.define(
             cut && file ? `...output truncated...\n\nFull output saved to: ${file}\n\n${body}` : body,
             ...(note ? [`\n<shell_metadata>\n${note}\n</shell_metadata>`] : []),
           ].join("")
+          // Archive metadata describes the saved file, so it is read back once.
+          // A file that hit the output cap is not the whole output: no archive.
+          const archive =
+            cut && file && limits.receipts && !result.info.outputCapped
+              ? yield* (result.info.file ? fs.readFileString(file) : Effect.succeed(result.raw)).pipe(
+                  Effect.map((text) => {
+                    const measured = Receipt.measure(text)
+                    return Receipt.tail({
+                      path: file,
+                      bytes: measured.bytes,
+                      lines: measured.lines,
+                      sha256: Receipt.sha256(text),
+                      shown: end.text,
+                      partial: end.partial === true,
+                    })
+                  }),
+                  Effect.catch(() => Effect.succeed(undefined)),
+                )
+              : undefined
           return {
             title: input.command,
             metadata: {
@@ -657,6 +713,7 @@ export const ShellTool = Tool.define(
               exit: result.info.exitCode,
               truncated: cut,
               ...(cut && file ? { outputPath: file } : {}),
+              ...(archive ? { archive } : {}),
             },
             output,
           }

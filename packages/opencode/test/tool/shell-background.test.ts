@@ -467,3 +467,91 @@ it.instance(
   { config: { experimental: { background_shell: false } } },
   90_000,
 )
+
+it.instance(
+  "the result of a finished command includes the end of its output, even when it exits right after printing",
+  () =>
+    Effect.gen(function* () {
+      const tool = yield* shell()
+      // ~150 KB in one write, then exit: seen live, the exit arrived when the
+      // reader had taken only the first 74 KB off the pipe, and the result's
+      // tail stopped there.
+      const code = "process.stdout.write(String.fromCharCode(97).repeat(Number(Bun.argv[1])) + Bun.argv[2])"
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const result = yield* tool.execute(
+          { command: run(code, [String(Truncate.MAX_BYTES * 3), "END-OF-OUTPUT"]) },
+          context(),
+        )
+        expect(result.output).toContain("END-OF-OUTPUT")
+      }
+    }),
+  settle({ yield_after_ms: 60_000 }),
+  120_000,
+)
+
+it.instance(
+  "with background tasks disabled, the result also includes the end of the output",
+  () =>
+    Effect.gen(function* () {
+      const tool = yield* shell()
+      const code = "process.stdout.write(String.fromCharCode(97).repeat(Number(Bun.argv[1])) + Bun.argv[2])"
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const result = yield* tool.execute(
+          { command: run(code, [String(Truncate.MAX_BYTES * 3), "END-OF-OUTPUT"]) },
+          context(),
+        )
+        expect(result.output).toContain("END-OF-OUTPUT")
+      }
+    }),
+  { config: { experimental: { background_shell: false } } },
+  120_000,
+)
+
+it.instance(
+  "a finished command whose output spilled to a file carries archive metadata for the whole file",
+  () =>
+    Effect.gen(function* () {
+      const tool = yield* shell()
+      const count = Truncate.MAX_BYTES * 3
+      const result = yield* tool.execute(
+        { command: run("process.stdout.write(String.fromCharCode(97).repeat(Number(Bun.argv[1])))", [String(count)]) },
+        context(),
+      )
+      const metadata = result.metadata as { outputPath?: string; archive?: Record<string, any> }
+      expect(metadata.archive?.path).toBe(metadata.outputPath)
+      const saved = yield* (yield* FSUtil.Service).readFileString(metadata.outputPath!)
+      expect(saved.length).toBe(count)
+      expect(metadata.archive?.bytes).toBe(count)
+      expect(metadata.archive?.sha256).toBe(new Bun.CryptoHasher("sha256").update(saved).digest("hex"))
+      expect(metadata.archive?.unit).toBe("bytes")
+      expect(metadata.archive?.shown[0][1]).toBe(count)
+    }),
+  // A generous yield threshold: this is about a command that finishes in the foreground.
+  settle({ yield_after_ms: 60_000 }),
+  90_000,
+)
+
+it.instance(
+  "with background tasks disabled, a cut output still carries archive metadata for the whole saved file",
+  () =>
+    Effect.gen(function* () {
+      const tool = yield* shell()
+      // 3 x 50 KB on one stream: spills to a file while it runs
+      const count = Truncate.MAX_BYTES * 3
+      const result = yield* tool.execute(
+        { command: run("process.stdout.write(String.fromCharCode(98).repeat(Number(Bun.argv[1])))", [String(count)]) },
+        context(),
+      )
+      const metadata = result.metadata as { outputPath?: string; archive?: Record<string, any> }
+      expect(metadata.archive?.path).toBe(metadata.outputPath)
+      const saved = yield* (yield* FSUtil.Service).readFileString(metadata.outputPath!)
+      expect(saved.length).toBe(count)
+      expect(metadata.archive?.bytes).toBe(count)
+      expect(metadata.archive?.sha256).toBe(new Bun.CryptoHasher("sha256").update(saved).digest("hex"))
+      // one long line: the tail is its end, in bytes
+      expect(metadata.archive?.unit).toBe("bytes")
+      expect(metadata.archive?.shown[0][1]).toBe(count)
+    }),
+  { config: { experimental: { background_shell: false } } },
+  90_000,
+)

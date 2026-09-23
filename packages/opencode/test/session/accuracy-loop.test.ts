@@ -701,3 +701,76 @@ it.instance(
   // One request and no backoff; the budget only covers a loaded machine.
   60_000,
 )
+
+// C. tool-output step budget (#5, docs/accuracy-c.md)
+
+// 100 matching lines of ~230 bytes: ~25 KB of grep output, under the 50 KB
+// per-call cap, over an 8 KB step budget.
+const bigSearch = Effect.fn("test.bigSearch")(function* (directory: string) {
+  const fs = yield* FSUtil.Service
+  const secret = "sk-live-budget-9f8e7d6c5b4a"
+  const lines = Array.from({ length: 100 }, (_, i) => `needle ${i} ${secret} ${"x".repeat(200)}`)
+  yield* fs.writeWithDirs(path.join(directory, "big.txt"), lines.join("\n"))
+  return { secret }
+})
+
+const toolResults = (hit: { body: Record<string, unknown> }) =>
+  JSON.stringify((hit.body.messages as unknown[])?.filter((m: any) => m?.role === "tool") ?? [])
+
+it.instance(
+  "with the step budget on, an over-budget step reaches the next request as a receipt, and the archive holds it all",
+  () =>
+    Effect.gen(function* () {
+      const { llm, directory } = yield* useConfig({
+        output_budget: true,
+        output_budget_step_bytes: 8192,
+        output_budget_floor_bytes: 1024,
+      })
+      yield* bigSearch(directory)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* session()
+      yield* llm.tool("grep", { pattern: "needle", path: directory })
+      yield* llm.text("done")
+      yield* prompt.prompt({ sessionID: chat.id, agent: "build", parts: [{ type: "text", text: "find" }] })
+
+      const hits = yield* llm.hits
+      expect(hits).toHaveLength(2)
+      const next = toolResults(hits[1]!)
+      expect(next).toContain('<tool-output-archived tool=\\"grep\\"')
+      expect(next).toContain("needle 0")
+
+      const msgs = yield* sessions.messages({ sessionID: chat.id })
+      const tool = msgs.flatMap((msg) => msg.parts).find((part) => part.type === "tool" && part.tool === "grep")
+      if (tool?.type !== "tool" || tool.state.status !== "completed") throw new Error("expected a completed grep")
+      // stored once on the part; the stored output itself is untouched
+      expect(tool.state.metadata.budget).toEqual({ maxBytes: 8192 })
+      expect(tool.state.output).not.toContain("<tool-output-archived")
+      const archive = tool.state.metadata.archive as { path: string; bytes: number }
+      expect(archive.bytes).toBe(Buffer.byteLength(tool.state.output, "utf-8"))
+      const fs = yield* FSUtil.Service
+      expect(yield* fs.readFileString(archive.path)).toBe(tool.state.output)
+    }),
+  60_000,
+)
+
+it.instance(
+  "with the step budget off (the default), the next request carries the output as it is today",
+  () =>
+    Effect.gen(function* () {
+      const { llm, directory } = yield* useConfig()
+      const { secret } = yield* bigSearch(directory)
+      const prompt = yield* SessionPrompt.Service
+      const chat = yield* session()
+      yield* llm.tool("grep", { pattern: "needle", path: directory })
+      yield* llm.text("done")
+      yield* prompt.prompt({ sessionID: chat.id, agent: "build", parts: [{ type: "text", text: "find" }] })
+
+      const hits = yield* llm.hits
+      const next = toolResults(hits[1]!)
+      expect(next).not.toContain("<tool-output-archived")
+      expect(next).toContain("needle 99")
+      expect(next).toContain(secret)
+    }),
+  60_000,
+)

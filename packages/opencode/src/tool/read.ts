@@ -7,6 +7,7 @@ import { LSP } from "@/lsp/lsp"
 import DESCRIPTION from "./read.txt"
 import { InstanceState } from "@/effect/instance-state"
 import { assertExternalDirectoryEffect } from "./external-directory"
+import { TRUNCATION_DIR } from "./truncation-dir"
 import { Instruction } from "../session/instruction"
 import { isPdfAttachment, sniffAttachmentMime } from "@/util/media"
 
@@ -74,6 +75,15 @@ export const ReadTool = Tool.define<
     const scope = yield* Scope.Scope
 
     const miss = Effect.fn("ReadTool.miss")(function* (filepath: string) {
+      // A receipt outlived its archive (accuracy C): say why, so the model does
+      // not take it for a wrong path.
+      if (FSUtil.contains(TRUNCATION_DIR, filepath)) {
+        return yield* Effect.fail(
+          new Error(
+            `Archived tool output expired: ${filepath}\n\nArchives of cut tool output are kept for 7 days. Run the command again only if you still need its output.`,
+          ),
+        )
+      }
       const dir = path.dirname(filepath)
       const base = path.basename(filepath)
       const items = yield* fs.readDirectory(dir).pipe(

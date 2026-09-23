@@ -205,6 +205,12 @@ const FINISHED_TAIL_BYTES = 8 * 1024
 const MAX_FINISHED = 50
 /** Shortest gap between two output-only shell.task.updated events for one task. */
 const PUBLISH_EVERY_MS = 1000
+/**
+ * How long a finished command's output reader may keep draining the pipe after
+ * the exit is seen. The pipe normally closes with the process; a grandchild that
+ * inherited it and keeps running is not waited for past this.
+ */
+export const DRAIN_MS = 2000
 
 type Chunk = { text: string; size: number }
 
@@ -657,7 +663,9 @@ const layer = Layer.effect(
         Effect.gen(function* () {
           const handle = yield* spawner.spawn(input.command)
           entry.info.pid = handle.pid
-          yield* Effect.forkScoped(Stream.runForEach(Stream.decodeText(handle.all), (chunk) => append(entry, chunk)))
+          const reader = yield* Effect.forkScoped(
+            Stream.runForEach(Stream.decodeText(handle.all), (chunk) => append(entry, chunk)),
+          )
           const exit = yield* Effect.raceAll([
             handle.exitCode.pipe(
               Effect.map((code) => ({ kind: "exit" as const, code: code as number | null })),
@@ -671,6 +679,10 @@ const layer = Layer.effect(
             yield* Effect.sleep("50 millis")
             return yield* settle(entry, exit.value.status, null, exit.value.reason)
           }
+          // The exit can be seen before the reader has taken the last chunks off
+          // the pipe (seen live: 74 KB of a 150 KB output read at exit). Settling
+          // then cut the end off the result, which is where a build's verdict is.
+          yield* Fiber.await(reader).pipe(Effect.timeout(`${DRAIN_MS} millis`), Effect.ignore)
           return yield* settle(entry, "exited", exit.code)
         }),
       ).pipe(

@@ -58,7 +58,7 @@ const fakeTruncate = Truncate.Service.of({
   cleanup: () => Effect.void,
   write: () => Effect.succeed("output.txt"),
   output: (text: string) => Effect.succeed({ content: text, truncated: false }),
-  limits: () => Effect.succeed({ maxLines: 2000, maxBytes: 50 * 1024 }),
+  limits: () => Effect.succeed({ maxLines: 2000, maxBytes: 50 * 1024, receipts: true }),
 } satisfies Truncate.Interface)
 
 const layer = Layer.mergeAll(

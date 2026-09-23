@@ -775,6 +775,87 @@ describe("session.message-v2.toModelMessage", () => {
     ])
   })
 
+  describe("tool-output receipts (accuracy C)", () => {
+    const toolTurn = (state: { output: string; metadata: Record<string, unknown>; compacted?: number }) => [
+      {
+        info: userInfo("m-user"),
+        parts: [{ ...basePart("m-user", "u1"), type: "text", text: "run tool" }] as SessionV1.Part[],
+      },
+      {
+        info: assistantInfo("m-assistant", "m-user"),
+        parts: [
+          {
+            ...basePart("m-assistant", "a1"),
+            type: "tool",
+            callID: "call-1",
+            tool: "bash",
+            state: {
+              status: "completed",
+              input: { cmd: "make" },
+              output: state.output,
+              title: "Shell",
+              metadata: state.metadata,
+              time: { start: 0, end: 1, ...(state.compacted ? { compacted: state.compacted } : {}) },
+            },
+          },
+        ] as SessionV1.Part[],
+      },
+    ]
+    const resultText = async (input: SessionV1.WithParts[]) => {
+      const messages = await MessageV2.toModelMessages(input, model)
+      const tool = messages.find((message) => message.role === "tool")
+      const content = tool?.content[0]
+      if (!content || content.type !== "tool-result" || content.output.type !== "text")
+        throw new Error("no text result")
+      return content.output.value
+    }
+    const output = Array.from({ length: 5000 }, (_, i) => `compile ${i}`).join("\n") + "\nerror: 1 failed"
+    const archive = {
+      path: "/tmp/truncation/tool_budget",
+      bytes: Buffer.byteLength(output, "utf-8"),
+      lines: 5001,
+      unit: "lines",
+      shown: [],
+      sha256: "0".repeat(64),
+    }
+
+    test("a part with a stored budget reaches the model as an envelope with head and tail", async () => {
+      const text = await resultText(toolTurn({ output, metadata: { budget: { maxBytes: 4096 }, archive } }))
+      expect(text.startsWith('<tool-output-archived tool="bash" call="call-1"')).toBe(true)
+      expect(text).toContain("compile 0")
+      expect(text).toContain("error: 1 failed")
+      expect(text).toContain(`Full output: ${archive.path}`)
+      expect(text).toMatch(/shown="lines 1-\d+, \d+-5001"/)
+      expect(Buffer.byteLength(text, "utf-8")).toBeLessThan(4096 + 1024)
+    })
+
+    test("the same budgeted part converts to identical text every time (prompt cache)", async () => {
+      const input = toolTurn({ output, metadata: { budget: { maxBytes: 4096 }, archive } })
+      expect(await resultText(input)).toBe(await resultText(input))
+    })
+
+    test("a part without a budget is unchanged", async () => {
+      expect(await resultText(toolTurn({ output, metadata: { archive } }))).toBe(output)
+    })
+
+    test("a budget without an archive to point at is ignored", async () => {
+      expect(await resultText(toolTurn({ output, metadata: { budget: { maxBytes: 4096 } } }))).toBe(output)
+    })
+
+    test("a pruned part with an archive is a one-line receipt", async () => {
+      const text = await resultText(toolTurn({ output, metadata: { archive }, compacted: 5 }))
+      expect(text).toBe(
+        `[Tool output archived: bash, ${(archive.bytes / 1024).toFixed(1)} KB, ${archive.path}. Read it again with read or grep if you need it; do not rerun.]`,
+      )
+    })
+
+    test("a pruned part without an archive still reads as cleared", async () => {
+      expect(await resultText(toolTurn({ output, metadata: {}, compacted: 5 }))).toBe(
+        "[Old tool result content cleared]",
+      )
+    })
+  })
+
   test("truncates tool output when requested", async () => {
     const userID = "m-user"
     const assistantID = "m-assistant"

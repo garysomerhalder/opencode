@@ -35,6 +35,8 @@ import { isMedia } from "@/util/media"
 import type { SystemError } from "bun"
 import type { Provider } from "@/provider/provider"
 import { Effect, Schema } from "effect"
+import { Receipt } from "@/tool/receipt"
+import { OutputBudget } from "./output-budget"
 
 /** Error shape thrown by Bun's fetch() when gzip/br decompression fails mid-stream */
 interface FetchDecompressionError extends Error {
@@ -45,6 +47,14 @@ interface FetchDecompressionError extends Error {
 
 export const SYNTHETIC_ATTACHMENT_PROMPT = "Attached media from tool result:"
 export { isMedia }
+
+// A pruned output with an archive (accuracy C, part D: prune writes one when
+// receipts are on) becomes a one-line receipt; without one it is cleared as before.
+function prunedText(tool: string, metadata: Record<string, unknown> | undefined) {
+  const archive = metadata?.archive as Partial<Receipt.Archive> | undefined
+  if (typeof archive?.path !== "string" || typeof archive.bytes !== "number") return "[Old tool result content cleared]"
+  return Receipt.pruned({ tool, bytes: archive.bytes, path: archive.path })
+}
 
 function truncateToolOutput(text: string, maxChars?: number) {
   if (!maxChars || text.length <= maxChars) return text
@@ -298,9 +308,19 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
         if (part.type === "tool") {
           toolNames.add(part.tool)
           if (part.state.status === "completed") {
+            // A stored step budget (accuracy C, part C) cuts only this view of
+            // the output; the stored output stays whole.
             const outputText = part.state.time.compacted
-              ? "[Old tool result content cleared]"
-              : truncateToolOutput(part.state.output, options?.toolOutputMaxChars)
+              ? prunedText(part.tool, part.state.metadata)
+              : truncateToolOutput(
+                  OutputBudget.view({
+                    tool: part.tool,
+                    callID: part.callID,
+                    output: part.state.output,
+                    metadata: part.state.metadata,
+                  }) ?? part.state.output,
+                  options?.toolOutputMaxChars,
+                )
             const attachments = part.state.time.compacted || options?.stripMedia ? [] : (part.state.attachments ?? [])
 
             // For providers that don't support media in tool results, extract media files

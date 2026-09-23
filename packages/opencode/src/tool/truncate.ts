@@ -6,6 +6,8 @@ import type { Agent } from "../agent/agent"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { evaluate } from "@/permission/evaluate"
 import { Config } from "@/config/config"
+import { Accuracy } from "@/session/accuracy"
+import { Receipt } from "./receipt"
 import { ToolID } from "./schema"
 import { TRUNCATION_DIR } from "./truncation-dir"
 
@@ -16,12 +18,31 @@ export const MAX_BYTES = 50 * 1024
 export const DIR = TRUNCATION_DIR
 export const GLOB = path.join(TRUNCATION_DIR, "*")
 
-export type Result = { content: string; truncated: false } | { content: string; truncated: true; outputPath: string }
+export type Result =
+  | { content: string; truncated: false }
+  | { content: string; truncated: true; outputPath: string; archive?: Receipt.Archive }
 
 export interface Options {
   maxLines?: number
   maxBytes?: number
-  direction?: "head" | "tail"
+  /**
+   * Which part of a cut output the model sees. With output receipts on (the
+   * default) it is the head and the tail; with them off, the head, as before.
+   */
+  direction?: Receipt.Direction
+  /** Named in the receipt, so the model knows which call it belongs to. */
+  tool?: string
+  call?: string
+}
+
+/** The tool-part metadata for a truncation result: `truncated`, and `outputPath` / `archive` when it was cut. */
+export function metadata(result: Result) {
+  if (!result.truncated) return { truncated: false as const }
+  return {
+    truncated: true as const,
+    outputPath: result.outputPath,
+    ...(result.archive && { archive: result.archive }),
+  }
 }
 
 function hasTaskTool(agent?: Agent.Info) {
@@ -38,9 +59,11 @@ export interface Interface {
    */
   readonly output: (text: string, options?: Options, agent?: Agent.Info) => Effect.Effect<Result>
   /**
-   * Resolved truncation limits: values from `tool_output` in opencode config, or MAX_LINES / MAX_BYTES if unset.
+   * Resolved truncation limits: values from `tool_output` in opencode config, or MAX_LINES / MAX_BYTES if unset,
+   * and whether cut output carries receipts (experimental.accuracy.output_receipts, default on), for tools
+   * that cut their own output.
    */
-  readonly limits: () => Effect.Effect<{ maxLines: number; maxBytes: number }>
+  readonly limits: () => Effect.Effect<{ maxLines: number; maxBytes: number; receipts: boolean }>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Truncate") {}
@@ -72,27 +95,54 @@ const layer = Layer.effect(
       return file
     })
 
-    const limits = Effect.fn("Truncate.limits")(function* () {
+    // Without a Config service (tests, scripts) the defaults apply: the built-in
+    // limits, and receipts on.
+    const settings = Effect.fn("Truncate.settings")(function* () {
       const configSvc = yield* Effect.serviceOption(Config.Service)
-      if (Option.isNone(configSvc)) return { maxLines: MAX_LINES, maxBytes: MAX_BYTES }
+      if (Option.isNone(configSvc)) return { maxLines: MAX_LINES, maxBytes: MAX_BYTES, receipts: true }
       const cfg = yield* configSvc.value.get().pipe(Effect.catch(() => Effect.succeed(undefined)))
       return {
         maxLines: cfg?.tool_output?.max_lines ?? MAX_LINES,
         maxBytes: cfg?.tool_output?.max_bytes ?? MAX_BYTES,
+        receipts: cfg ? Accuracy.settings(cfg).outputReceipts : true,
       }
     })
 
+    const limits = Effect.fn("Truncate.limits")(function* () {
+      return yield* settings()
+    })
+
     const output = Effect.fn("Truncate.output")(function* (text: string, options: Options = {}, agent?: Agent.Info) {
-      const resolved = yield* limits()
+      const resolved = yield* settings()
       const maxLines = options.maxLines ?? resolved.maxLines
       const maxBytes = options.maxBytes ?? resolved.maxBytes
-      const direction = options.direction ?? "head"
       const lines = text.split("\n")
       const totalBytes = Buffer.byteLength(text, "utf-8")
 
       if (lines.length <= maxLines && totalBytes <= maxBytes) {
         return { content: text, truncated: false } as const
       }
+
+      if (resolved.receipts) {
+        const preview = Receipt.preview(text, { maxLines, maxBytes, direction: options.direction ?? "both" })
+        const file = yield* write(text)
+        const archive = Receipt.archive({ path: file, text, preview })
+        return {
+          content: Receipt.envelope({
+            tool: options.tool,
+            call: options.call,
+            archive,
+            preview,
+            delegate: hasTaskTool(agent),
+          }),
+          truncated: true,
+          outputPath: file,
+          archive,
+        } as const
+      }
+
+      // Receipts off: the head-only preview and prose hint from before accuracy C.
+      const direction = options.direction === "tail" ? "tail" : "head"
 
       const out: string[] = []
       let i = 0
