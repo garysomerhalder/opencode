@@ -667,3 +667,37 @@ it.instance(
     }),
   30_000,
 )
+
+// Reliability: a usage limit closes the turn (#45)
+
+it.instance(
+  "a usage-limit 429 closes the turn with a visible error instead of retrying behind an open turn",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useConfig()
+      const prompt = yield* SessionPrompt.Service
+      const status = yield* SessionStatus.Service
+      const chat = yield* session()
+      yield* llm.error(429, {
+        type: "error",
+        error: {
+          type: "GoUsageLimitError",
+          message: "Subscription quota exceeded. You can continue using free models.",
+        },
+        metadata: { workspace: "wrk_1", limitName: "5 hour" },
+      })
+      yield* llm.text("never reached")
+      const result = yield* prompt.prompt({ sessionID: chat.id, agent: "build", parts: [{ type: "text", text: "hi" }] })
+      // one request: the limit is not retried
+      expect(yield* llm.calls).toBe(1)
+      expect(result.info.role).toBe("assistant")
+      if (result.info.role !== "assistant") return
+      // the turn is closed, with the readable message, not left open with no parts and no error
+      expect(result.info.time.completed).toBeDefined()
+      expect(result.info.error?.name).toBe("APIError")
+      expect(JSON.stringify(result.info.error)).toContain("5 hour usage limit reached.")
+      expect((yield* status.get(chat.id)).type).toBe("idle")
+    }),
+  // One request and no backoff; the budget only covers a loaded machine.
+  60_000,
+)

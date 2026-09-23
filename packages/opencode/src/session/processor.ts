@@ -654,7 +654,9 @@ const layer = Layer.effect(
           stack: e instanceof Error ? e.stack : undefined,
         })
         const cfg = yield* config.get()
-        const error = overflowFromOpaque400(parse(e), cfg)
+        // A terminal provider error (a usage limit, a very long retry-after) ends the
+        // turn with its readable message, including when the limit resets.
+        const error = SessionRetry.close(overflowFromOpaque400(parse(e), cfg), input.model.providerID)
         if (SessionV1.ContextOverflowError.isInstance(error)) {
           if (cfg.compaction?.auto === false && !ctx.assistantMessage.summary) {
             ctx.assistantMessage.error = error
