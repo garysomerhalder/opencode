@@ -234,6 +234,34 @@ export function whole(input: { path: string; text: string }): Archive {
   }
 }
 
+/**
+ * The archive of an output that shows its end only (the shell tool's tail).
+ * The totals describe the saved file; they are counted while the output
+ * streams, since a spilled output is never held in memory whole.
+ */
+export function tail(input: {
+  path: string
+  bytes: number
+  lines: number
+  sha256: string
+  /** The tail text the model sees. */
+  shown: string
+  /** The tail is the end of one line too long to show whole. */
+  partial: boolean
+}): Archive {
+  const seen = measure(input.shown)
+  return {
+    path: input.path,
+    bytes: input.bytes,
+    lines: input.lines,
+    unit: input.partial ? "bytes" : "lines",
+    shown: input.partial
+      ? [[input.bytes - seen.bytes + 1, input.bytes]]
+      : [[input.lines - seen.lines + 1, input.lines]],
+    sha256: input.sha256,
+  }
+}
+
 function size(bytes: number) {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`

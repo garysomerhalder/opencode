@@ -5,6 +5,7 @@ import { Cause, Effect, Exit, Layer } from "effect"
 import type * as Scope from "effect/Scope"
 import os from "os"
 import path from "path"
+import { createHash } from "crypto"
 import { Config } from "@/config/config"
 import { Shell } from "@opencode-ai/core/shell"
 import { ShellTool } from "../../src/tool/shell"
@@ -1200,6 +1201,44 @@ describe("tool.shell truncation", () => {
         expect(lines.length).toBe(lineCount)
         expect(lines[0]).toBe("1")
         expect(lines[lineCount - 1]).toBe(String(lineCount))
+      }),
+    ),
+  )
+
+  // Accuracy C: the shell keeps its own tail text, and carries the same archive
+  // metadata as every other cut output, describing the file it saved.
+  const archiveOf = (result: { metadata: unknown }) =>
+    (result.metadata as { archive?: Record<string, any>; outputPath?: string }).archive
+
+  it.live("a cut output carries archive metadata that matches the saved file", () =>
+    runIn(
+      projectRoot,
+      Effect.gen(function* () {
+        const lineCount = Truncate.MAX_LINES + 100
+        const result = yield* run({ command: fill("lines", lineCount) })
+        mustTruncate(result)
+        const archive = archiveOf(result)
+        const filepath = (result.metadata as { outputPath?: string }).outputPath
+        expect(archive?.path).toBe(filepath)
+
+        const saved = yield* (yield* FSUtil.Service).readFileString(filepath!)
+        expect(archive?.bytes).toBe(Buffer.byteLength(saved, "utf-8"))
+        expect(archive?.lines).toBe(saved.split("\n").length)
+        expect(archive?.sha256).toBe(createHash("sha256").update(saved).digest("hex"))
+        // the shell shows the end: the shown range runs to the last line
+        expect(archive?.unit).toBe("lines")
+        expect(archive?.shown).toHaveLength(1)
+        expect(archive?.shown[0][1]).toBe(archive?.lines)
+      }),
+    ),
+  )
+
+  it.live("a small output has no archive", () =>
+    runIn(
+      projectRoot,
+      Effect.gen(function* () {
+        const result = yield* run({ command: fill("lines", 1) })
+        expect(archiveOf(result)).toBeUndefined()
       }),
     ),
   )

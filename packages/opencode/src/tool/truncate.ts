@@ -59,9 +59,11 @@ export interface Interface {
    */
   readonly output: (text: string, options?: Options, agent?: Agent.Info) => Effect.Effect<Result>
   /**
-   * Resolved truncation limits: values from `tool_output` in opencode config, or MAX_LINES / MAX_BYTES if unset.
+   * Resolved truncation limits: values from `tool_output` in opencode config, or MAX_LINES / MAX_BYTES if unset,
+   * and whether cut output carries receipts (experimental.accuracy.output_receipts, default on), for tools
+   * that cut their own output.
    */
-  readonly limits: () => Effect.Effect<{ maxLines: number; maxBytes: number }>
+  readonly limits: () => Effect.Effect<{ maxLines: number; maxBytes: number; receipts: boolean }>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Truncate") {}
@@ -107,8 +109,7 @@ const layer = Layer.effect(
     })
 
     const limits = Effect.fn("Truncate.limits")(function* () {
-      const resolved = yield* settings()
-      return { maxLines: resolved.maxLines, maxBytes: resolved.maxBytes }
+      return yield* settings()
     })
 
     const output = Effect.fn("Truncate.output")(function* (text: string, options: Options = {}, agent?: Agent.Info) {
