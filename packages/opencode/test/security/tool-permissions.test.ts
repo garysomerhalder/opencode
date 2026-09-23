@@ -288,3 +288,32 @@ describe("finding 6: paths are matched as the file system resolves them", () => 
     }),
   )
 })
+
+describe("finding 9: the verifier may read .env.example, like the default rules", () => {
+  it.instance("read and grep show the verifier .env.example, and still not .env.local", () =>
+    Effect.gen(function* () {
+      const directory = yield* workspace()
+      yield* Effect.promise(async () => {
+        await fs.writeFile(path.join(directory, ".env.example"), "API_KEY=your-key-here\n")
+        await fs.writeFile(path.join(directory, ".env.local"), `API_KEY=${SECRET}\n`)
+      })
+      const read = yield* call(Permission.VERIFIER, "read", { filePath: path.join(directory, ".env.example") })
+      expect(read.output).toContain("your-key-here")
+      const local = yield* call(Permission.VERIFIER, "read", { filePath: path.join(directory, ".env.local") })
+      expect(local.output + local.error).not.toContain(SECRET)
+      const grep = yield* call(Permission.VERIFIER, "grep", { pattern: "API_KEY", include: "*.env*" })
+      expect(grep.output).toContain("your-key-here")
+      expect(grep.output).not.toContain(SECRET)
+    }),
+  )
+
+  // The allow names the path; the file opened is matched too, so a stream name that
+  // ends in .env.example still opens (and is denied as) .env.
+  windows("a stream name ending in .env.example does not open .env", () =>
+    Effect.gen(function* () {
+      const directory = yield* workspace()
+      const result = yield* call(Permission.VERIFIER, "read", { filePath: path.join(directory, ".env:x.env.example") })
+      expect(result.output + result.error).not.toContain(SECRET)
+    }),
+  )
+})

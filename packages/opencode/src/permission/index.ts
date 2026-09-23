@@ -262,8 +262,10 @@ export const VERIFIER = "verifier"
  */
 export const VERIFIER_LOCK = fromConfig({
   "*": "deny",
-  // MCP resources are asked as read `mcp:<server>:<uri>`: not files in the workspace
-  read: { "*": "allow", "mcp:*": "deny", "*.env": "deny", "*.env.*": "deny" },
+  // MCP resources are asked as read `mcp:<server>:<uri>`: not files in the workspace.
+  // .env.example holds no secrets and is allowed, as in the default rules; the read
+  // rules also match the file opened, so a name ending in it cannot open .env.
+  read: { "*": "allow", "mcp:*": "deny", "*.env": "deny", "*.env.*": "deny", "*.env.example": "allow" },
   grep: "allow",
   glob: "allow",
   lsp: "allow",
