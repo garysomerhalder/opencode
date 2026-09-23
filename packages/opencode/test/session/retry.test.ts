@@ -427,6 +427,100 @@ describe("session.retry.retryable", () => {
   })
 })
 
+// A provider error that waiting will not fix within the session's patience closes
+// the turn with a visible error instead of leaving it open behind a retry.
+describe("session.retry.terminal", () => {
+  const limit = (type: string, headers?: Record<string, string>) =>
+    Schema.decodeUnknownSync(SessionV1.APIError.Schema)(
+      new SessionV1.APIError({
+        message: "Subscription quota exceeded. You can continue using free models.",
+        isRetryable: true,
+        statusCode: 429,
+        responseHeaders: headers,
+        responseBody: JSON.stringify({
+          type: "error",
+          error: { type, message: "Subscription quota exceeded." },
+          metadata: { workspace: "wrk_1", limitName: "5 hour" },
+        }),
+      }).toObject(),
+    )
+  const rateLimited = (retryAfter: string) =>
+    Schema.decodeUnknownSync(SessionV1.APIError.Schema)(
+      new SessionV1.APIError({
+        message: "Too Many Requests",
+        isRetryable: true,
+        statusCode: 429,
+        responseHeaders: { "retry-after": retryAfter },
+      }).toObject(),
+    )
+
+  test("a Go usage limit is terminal, with the reset time in the message", () => {
+    const result = SessionRetry.terminal(limit("GoUsageLimitError", { "retry-after": "19380" }), "opencode-go")
+    expect(result?.message).toContain("5 hour usage limit reached. It will reset in 5 hours 23 minutes.")
+  })
+
+  test("a Go usage limit without a retry-after is still terminal", () => {
+    expect(SessionRetry.terminal(limit("GoUsageLimitError"), "opencode-go")).toBeDefined()
+  })
+
+  test("a free-tier limit is terminal", () => {
+    expect(SessionRetry.terminal(limit("FreeUsageLimitError"), "opencode")?.message).toBe(
+      SessionRetry.GO_UPSELL_MESSAGE,
+    )
+  })
+
+  test("a rate limit that asks to wait longer than the retry budget is terminal and says how long", () => {
+    const result = SessionRetry.terminal(rateLimited("3600"), "test")
+    expect(result?.message).toBe("Too Many Requests. Retry after 1 hour.")
+  })
+
+  test("a short rate limit stays retryable", () => {
+    expect(SessionRetry.terminal(rateLimited("30"), "test")).toBeUndefined()
+    expect(SessionRetry.retryable(rateLimited("30"), "test")).toBeDefined()
+  })
+
+  test("non-retryable and transient errors are not terminal here", () => {
+    const server = Schema.decodeUnknownSync(SessionV1.APIError.Schema)(
+      new SessionV1.APIError({ message: "boom", isRetryable: true, statusCode: 503 }).toObject(),
+    )
+    expect(SessionRetry.terminal(server, "test")).toBeUndefined()
+    expect(SessionRetry.terminal(wrap("anything"), "test")).toBeUndefined()
+  })
+
+  test("close rewrites a terminal error's message and keeps everything else", () => {
+    const error = limit("GoUsageLimitError", { "retry-after": "900" })
+    const closed = SessionRetry.close(error, "opencode-go")
+    expect(closed.name).toBe("APIError")
+    expect(SessionV1.APIError.isInstance(closed) && closed.data.message).toContain("It will reset in 15 minutes")
+    expect(SessionV1.APIError.isInstance(closed) && closed.data.statusCode).toBe(429)
+    expect(SessionV1.APIError.isInstance(closed) && closed.data.responseHeaders).toEqual({ "retry-after": "900" })
+    // a non-terminal error is returned as it is
+    const other = apiError()
+    expect(SessionRetry.close(other, "test")).toBe(other)
+  })
+
+  it.instance("the policy does not retry a terminal error, but announces it once", () =>
+    Effect.gen(function* () {
+      const announced: { attempt: number; reason?: string }[] = []
+      const step = yield* Schedule.toStepWithMetadata(
+        SessionRetry.policy({
+          provider: "opencode-go",
+          parse: Schema.decodeUnknownSync(SessionV1.APIError.Schema),
+          set: (info) =>
+            Effect.sync(() => {
+              announced.push({ attempt: info.attempt, reason: info.action?.reason })
+            }),
+        }),
+      )
+      const exit = yield* Effect.exit(step(limit("GoUsageLimitError", { "retry-after": "19380" })))
+      // the schedule is done: no retry is scheduled
+      expect(exit._tag).toBe("Failure")
+      // the upsell dialogs still see the limit
+      expect(announced).toEqual([{ attempt: 1, reason: "account_rate_limit" }])
+    }),
+  )
+})
+
 describe("session.message-v2.fromError", () => {
   test.concurrent(
     "converts ECONNRESET socket errors to retryable APIError",

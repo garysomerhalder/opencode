@@ -29,6 +29,8 @@ export const RETRY_JITTER_FACTOR = 0.25
 export const RETRY_MAX_DELAY_NO_HEADERS = 30_000 // 30 seconds
 export const RETRY_MAX_DELAY = 2_147_483_647 // max 32-bit signed integer for setTimeout
 export const RETRY_MAX_RETRIES = 5
+/** Longest provider-requested wait the turn stays open for; beyond it the error is terminal. */
+export const RETRY_MAX_WAIT = 10 * 60 * 1000
 
 const RETRYABLE_MESSAGE_PATTERNS = [
   /429|500|502|503|504|524/i,
@@ -114,20 +116,9 @@ export function retryable(error: Err, provider: string) {
       const workspace = str(body?.metadata?.workspace)
       const limitName = str(body?.metadata?.limitName)
       const retryAfter = num(error.data.responseHeaders?.["retry-after"])
-      const resetIn = iife(() => {
-        if (retryAfter === undefined) return ""
-        const seconds = Math.max(0, Math.ceil(retryAfter))
-        const days = Math.floor(seconds / 86_400)
-        const hours = Math.floor((seconds % 86_400) / 3_600)
-        const minutes = Math.ceil((seconds % 3_600) / 60)
-        const unit = (value: number, name: string) => `${value} ${name}${value === 1 ? "" : "s"}`
+      const reset = retryAfter === undefined ? "" : ` It will reset in ${humanize(retryAfter)}.`
 
-        if (days > 0) return hours > 0 ? `${unit(days, "day")} ${unit(hours, "hour")}` : unit(days, "day")
-        if (hours > 0) return minutes > 0 ? `${unit(hours, "hour")} ${unit(minutes, "minute")}` : unit(hours, "hour")
-        return minutes > 0 ? unit(minutes, "minute") : "less than a minute"
-      })
-
-      const message = `${limitName ? `${limitName} usage limit` : "Usage limit"} reached. It will reset in ${resetIn}. To continue using this model now, enable usage from your available balance`
+      const message = `${limitName ? `${limitName} usage limit` : "Usage limit"} reached.${reset} To continue using this model now, enable usage from your available balance`
 
       const link = `https://opencode.ai/workspace/${workspace}/go`
       return {
@@ -152,6 +143,44 @@ export function retryable(error: Err, provider: string) {
   if (lower.includes("exhausted") || lower.includes("unavailable")) return { message: "Provider is overloaded" }
   if (matchesRetryableMessage(message)) return { message }
   return undefined
+}
+
+/**
+ * A provider error that waiting will not fix within the turn: a usage limit
+ * (it resets in hours), or a rate limit whose retry-after is longer than
+ * RETRY_MAX_WAIT. Retrying one of these left the assistant turn open, with no
+ * parts and no error, for as long as the limit lasted, so the session looked
+ * busy forever. The turn is closed with this message instead.
+ */
+export function terminal(error: Err, provider: string): Retryable | undefined {
+  if (!SessionV1.APIError.isInstance(error)) return undefined
+  const retry = retryable(error, provider)
+  if (!retry) return undefined
+  const body = error.data.responseBody ?? ""
+  if (body.includes("GoUsageLimitError") || body.includes("FreeUsageLimitError")) return retry
+  const wait = delay(1, error, 0)
+  if (!error.data.responseHeaders || wait <= RETRY_MAX_WAIT) return undefined
+  return { ...retry, message: `${retry.message.replace(/\.$/, "")}. Retry after ${humanize(wait / 1000)}.` }
+}
+
+/** The error the turn ends with: a terminal error carries its readable message; anything else is unchanged. */
+export function close<E extends Err>(error: E, provider: string): E {
+  const done = terminal(error, provider)
+  if (!done || !SessionV1.APIError.isInstance(error)) return error
+  // Same error kind (APIError), only the message and retryability change.
+  return new SessionV1.APIError({ ...error.data, message: done.message, isRetryable: false }).toObject() as E
+}
+
+/** "5 hours 23 minutes", "15 minutes", "less than a minute". */
+function humanize(value: number) {
+  const seconds = Math.max(0, Math.ceil(value))
+  const days = Math.floor(seconds / 86_400)
+  const hours = Math.floor((seconds % 86_400) / 3_600)
+  const minutes = Math.ceil((seconds % 3_600) / 60)
+  const unit = (count: number, name: string) => `${count} ${name}${count === 1 ? "" : "s"}`
+  if (days > 0) return hours > 0 ? `${unit(days, "day")} ${unit(hours, "hour")}` : unit(days, "day")
+  if (hours > 0) return minutes > 0 ? `${unit(hours, "hour")} ${unit(minutes, "minute")}` : unit(hours, "hour")
+  return minutes > 0 ? unit(minutes, "minute") : "less than a minute"
 }
 
 function matchesRetryableMessage(value: unknown) {
@@ -190,6 +219,20 @@ export function policy(opts: {
       const error = opts.parse(meta.input)
       const retry = retryable(error, opts.provider)
       if (!retry) return Cause.done(meta.attempt)
+      const end = terminal(error, opts.provider)
+      if (end)
+        // Not retried. The status is still announced once, so clients that react to
+        // a limit (the Go upsell dialogs) keep working; the turn then ends with the error.
+        return Effect.gen(function* () {
+          const now = yield* Clock.currentTimeMillis
+          yield* opts.set({
+            attempt: meta.attempt,
+            message: end.message,
+            action: end.action,
+            next: now + delay(meta.attempt, SessionV1.APIError.isInstance(error) ? error : undefined),
+          })
+          return yield* Cause.done(meta.attempt)
+        })
       if (meta.attempt > RETRY_MAX_RETRIES) return Cause.done(meta.attempt)
       return Effect.gen(function* () {
         const wait = delay(meta.attempt, SessionV1.APIError.isInstance(error) ? error : undefined)
