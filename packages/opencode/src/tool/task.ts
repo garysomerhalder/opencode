@@ -146,6 +146,16 @@ export const TaskTool = Tool.define(
       const session = params.task_id
         ? yield* sessions.get(SessionID.make(params.task_id)).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
         : undefined
+      // Resuming continues a task this session started, with the same agent. Any
+      // other session (the goal verifier's, another task's, the user's) is not a
+      // task of this one, and a task is not resumed under another agent's rules.
+      if (session && (session.parentID !== ctx.sessionID || session.agent !== next.name)) {
+        return yield* Effect.fail(
+          new Error(
+            `task_id ${params.task_id} is not a ${next.name} task started by this session; leave task_id out to start a new one`,
+          ),
+        )
+      }
       const childPermission = deriveSubagentSessionPermission({
         parentSessionPermission: parent.permission ?? [],
         subagent: next,
