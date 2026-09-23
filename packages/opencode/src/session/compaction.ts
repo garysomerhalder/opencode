@@ -14,7 +14,10 @@ import { Plugin } from "@/plugin"
 import { Config } from "@/config/config"
 import { NotFoundError } from "@/storage/storage"
 
-import { Effect, Exit, Layer, Context } from "effect"
+import { Cause, Effect, Exit, Layer, Context } from "effect"
+import { Checkpoint } from "./checkpoint"
+import { Todo } from "./todo"
+import { ShellTasks } from "@/tool/shell/tasks"
 import { Truncate } from "@/tool/truncate"
 import { Receipt } from "@/tool/receipt"
 import { Accuracy } from "./accuracy"
@@ -117,6 +120,23 @@ function completedCompactions(messages: SessionV1.WithParts[]) {
   })
 }
 
+/** What a checkpoint note carries forward to the next compaction. */
+type CheckpointMetadata = {
+  n?: number
+  task?: string
+  taskSince?: "session" | "compaction"
+  files?: Checkpoint.ChangedFile[]
+}
+
+function mergeFiles(...lists: ReadonlyArray<Checkpoint.ChangedFile>[]) {
+  const totals = new Map<string, { additions: number; deletions: number }>()
+  for (const file of lists.flat()) {
+    const total = totals.get(file.file) ?? { additions: 0, deletions: 0 }
+    totals.set(file.file, { additions: total.additions + file.additions, deletions: total.deletions + file.deletions })
+  }
+  return [...totals.entries()].map(([file, total]) => ({ file, ...total }))
+}
+
 function preserveRecentBudget(input: { cfg: ConfigV1.Info; model: Provider.Model }) {
   return (
     input.cfg.compaction?.preserve_recent_tokens ??
@@ -130,6 +150,11 @@ function turns(messages: SessionV1.WithParts[]) {
     const msg = messages[i]
     if (msg.info.role !== "user") continue
     if (msg.parts.some((part) => part.type === "compaction")) continue
+    // A harness note (a reminder, a background-task wake, a compaction
+    // checkpoint) belongs to the turn it was written into; counting it as a
+    // turn would push a real turn out of `tail_turns`. Prune counts turns the
+    // same way.
+    if (HarnessNote.isNote(msg)) continue
     result.push({
       start: i,
       end: messages.length,
@@ -207,6 +232,71 @@ const layer = Layer.effect(
     const events = yield* EventV2Bridge.Service
     const flags = yield* RuntimeFlags.Service
     const truncate = yield* Truncate.Service
+    const todos = yield* Todo.Service
+    const shellTasks = yield* ShellTasks.Service
+
+    // Accuracy D, part A: after a successful summary, a harness note of kind
+    // "checkpoint" built from the host's own records (Checkpoint.build). It is
+    // persisted before the replay and continue messages, so the model reads it
+    // after the summary. A compaction only sees the messages since the previous
+    // one, so the task and the file totals are carried forward in the previous
+    // checkpoint's metadata. Fails open: a record that cannot be built is
+    // logged and the compaction stands.
+    const writeCheckpoint = Effect.fn("SessionCompaction.checkpoint")(function* (input: {
+      sessionID: SessionID
+      user: SessionV1.User
+      messages: SessionV1.WithParts[]
+      head: SessionV1.WithParts[]
+    }) {
+      const previous = input.messages
+        .flatMap((message) =>
+          message.parts.flatMap((part) =>
+            part.type === "reminder" && part.kind === "checkpoint"
+              ? [{ created: message.info.time.created, metadata: (part.metadata ?? {}) as CheckpointMetadata }]
+              : [],
+          ),
+        )
+        .toSorted((a, b) => b.created - a.created)[0]
+      const since = previous?.created ?? Number.NEGATIVE_INFINITY
+      const files = mergeFiles(
+        previous?.metadata.files ?? [],
+        Checkpoint.files(input.messages.filter((message) => message.info.time.created > since)),
+      )
+      const written = yield* todos.written(input.sessionID)
+      const n = (previous?.metadata.n ?? 0) + 1
+      const task = previous?.metadata.task ?? Checkpoint.task(input.messages)
+      // A session that compacted before checkpoints existed has no carried
+      // task: its own first message is gone, and the one found is only the
+      // first since that compaction.
+      const taskSince =
+        previous?.metadata.taskSince ??
+        (previous === undefined && completedCompactions(input.messages).length > 0 ? "compaction" : "session")
+      const text = Checkpoint.build({
+        n,
+        now: Date.now(),
+        task,
+        taskSince,
+        todos: yield* todos.get(input.sessionID),
+        todosWrittenAt: written,
+        stepsSince: Checkpoint.stepsSince(input.messages, written),
+        tasks: (yield* shellTasks.running(input.sessionID)).map((item) => ({
+          id: item.id,
+          command: item.command,
+          startedAt: item.startedAt,
+        })),
+        files,
+        archives: Checkpoint.archives(input.head),
+      })
+      const note = HarnessNote.build({
+        user: input.user,
+        kind: "checkpoint",
+        label: "Checkpoint",
+        text,
+        metadata: { n, ...(task === undefined ? {} : { task }), taskSince, files } satisfies CheckpointMetadata,
+      })
+      yield* session.updateMessage(note.info)
+      yield* session.updatePart(note.part)
+    })
 
     const isOverflow = Effect.fn("SessionCompaction.isOverflow")(function* (input: {
       tokens: SessionV1.Assistant["tokens"]
@@ -408,6 +498,7 @@ const layer = Layer.effect(
           buildPrompt({
             previousSummary,
             context: [conversation],
+            untrustedHistory: Accuracy.settings(cfg).compactionCheckpoint,
           }),
           ...compacting.context,
         ]
@@ -487,6 +578,22 @@ const layer = Layer.effect(
           ...compactionPart,
           tail_start_id: selected.tail_start_id,
         })
+      }
+
+      if (result === "continue" && !processor.message.error && Accuracy.settings(cfg).compactionCheckpoint) {
+        yield* writeCheckpoint({
+          sessionID: input.sessionID,
+          user: userMessage,
+          messages: input.messages,
+          head: selected.head,
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("compaction checkpoint not written", {
+              "session.id": input.sessionID,
+              cause: Cause.pretty(cause),
+            }),
+          ),
+        )
       }
 
       if (result === "continue" && input.auto) {
@@ -627,6 +734,8 @@ export const node = LayerNode.make({
     EventV2Bridge.node,
     RuntimeFlags.node,
     Truncate.node,
+    Todo.node,
+    ShellTasks.node,
   ],
 })
 

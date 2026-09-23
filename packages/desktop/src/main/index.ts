@@ -410,7 +410,12 @@ const main = Effect.gen(function* () {
   }
   const goalLoopStore = getStore(GOAL_LOOP_STORE) as unknown as KeyValueStore
   const goalLoops = createGoalLoops({
-    create: (hooks) => createGoalLoop({ getServer: () => Effect.runPromise(Deferred.await(serverReady)), ...hooks }),
+    create: (hooks) =>
+      createGoalLoop({
+        getServer: () => Effect.runPromise(Deferred.await(serverReady)),
+        warn: (message, detail) => writeLog("main", message, detail, "warn"),
+        ...hooks,
+      }),
     persist: (sessionID, state) => saveState(goalLoopStore, sessionID, state),
     persistLast: (sessionID, input) => saveLast(goalLoopStore, sessionID, input),
     onEvent: (event) => {

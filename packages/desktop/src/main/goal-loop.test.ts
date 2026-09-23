@@ -658,7 +658,14 @@ type TurnPlan = { reply: Reply; busyFor?: number; startAfter?: number }
 // posted mid-turn sorts after it.
 // `violations` counts prompts the loop sent while a turn was still queued or
 // running, i.e. a double-send into a busy session.
-function fakeServer(sessionID: string, plan: (index: number) => TurnPlan) {
+// `serverCompactAt` models the server's own threshold (autonomous turns compact at
+// 150K by default): a turn that finishes at or above it is followed, in the same
+// turn, by a compaction message and its summary, as the real loop writes them.
+function fakeServer(
+  sessionID: string,
+  plan: (index: number) => TurnPlan,
+  options: { serverCompactAt?: number; onServerCompact?: () => void } = {},
+) {
   const messages: unknown[] = []
   const queue: Turn[] = []
   const calls: string[] = []
@@ -673,6 +680,7 @@ function fakeServer(sessionID: string, plan: (index: number) => TurnPlan) {
     // status polls the session stays busy after a summarize
     summaryBusy: 0,
     summaries: [] as { body: unknown; beforePrompt: number }[],
+    serverCompactions: 0,
   }
 
   function admit(text: string, turn: TurnPlan) {
@@ -700,6 +708,25 @@ function fakeServer(sessionID: string, plan: (index: number) => TurnPlan) {
     turn.message.info["providerID"] = "opencode-go"
     turn.message.info["modelID"] = "muse-spark-1.3-contributor"
     turn.message.parts.push({ type: "text", text: turn.reply.text })
+    if (options.serverCompactAt !== undefined && (turn.reply.tokens ?? 0) >= options.serverCompactAt) {
+      state.serverCompactions += 1
+      messages.push({
+        info: { id: `msg_${String(++state.ids).padStart(4, "0")}`, role: "user" },
+        parts: [{ type: "compaction", auto: true }],
+      })
+      messages.push({
+        info: {
+          id: `msg_${String(++state.ids).padStart(4, "0")}`,
+          role: "assistant",
+          summary: true,
+          tokens: tokens(turn.reply.tokens ?? 0),
+          providerID: "opencode-go",
+          modelID: "muse-spark-1.3-contributor",
+        },
+        parts: [{ type: "text", text: "server summary" }],
+      })
+      options.onServerCompact?.()
+    }
   }
 
   function poll(): boolean {
@@ -787,6 +814,7 @@ function fakeServer(sessionID: string, plan: (index: number) => TurnPlan) {
     },
     external: admit,
     summaries: () => state.summaries,
+    serverCompactions: () => state.serverCompactions,
     // history of a reused session: one finished assistant turn of `total` tokens
     seed: (total: number) => {
       messages.push({ info: { id: `msg_${String(++state.ids).padStart(4, "0")}`, role: "user" }, parts: [] })
@@ -1193,10 +1221,12 @@ describe("goal loop failed turns and context size", () => {
           : { reply: { text: "done\nGOAL_COMPLETE", tokens: 90_000 } },
       )
       const model = { providerID: "opencode-go", modelID: "muse-spark-1.3-contributor" }
+      const warnings: { message: string; detail: Record<string, unknown> }[] = []
       const loop = createGoalLoop({
         getServer: async () => server,
         fetchImpl: fake.fetchImpl,
         onEvent: (e) => events.push(e),
+        warn: (message, detail) => warnings.push({ message, detail }),
         pollIntervalMs: 2,
         maxConsecutiveErrors: 1,
       })
@@ -1208,9 +1238,72 @@ describe("goal loop failed turns and context size", () => {
       // the summary turn is not a loop turn: one continue, and not while busy
       expect(fake.prompts()).toBe(2)
       expect(fake.violations()).toBe(0)
+      // the backstop fired, so it says why it had to: the server's own threshold did not
+      expect(warnings).toHaveLength(1)
+      expect(warnings[0]!.message).toContain("server's compaction threshold")
+      expect(warnings[0]!.detail).toMatchObject({ tokens: 700_000, backstopAt: 600_000 })
     },
     SLOW_HOST_MS + 5_000,
   )
+
+  // The server compacts autonomous turns at 150K by default (overflow.ts
+  // AUTONOMOUS_COMPACT_AT, tested server-side in accuracy-loop.test.ts). With the
+  // server doing that, the goal loop's 600K backstop never fires; the control
+  // arm, with the server's compaction off, shows the same run does reach it.
+  const growingSession = (serverCompactAt: number | undefined) => {
+    let context = 0
+    const fake = fakeServer(
+      "ses_growing",
+      (index) => {
+        context += 60_000
+        // the last turn stays small so no compaction summary hides its completion marker
+        return index === 11
+          ? { reply: { text: "done\nGOAL_COMPLETE", tokens: 20_000 } }
+          : { reply: { text: "working", tokens: context } }
+      },
+      // after a server compaction the session carries on from ~110K
+      { serverCompactAt, onServerCompact: () => (context = 110_000) },
+    )
+    return fake
+  }
+
+  for (const arm of [
+    { name: "with the server compacting at its 150K default, the 600K backstop never fires", at: 150_000 },
+    { name: "control: with the server's compaction off, the same run reaches the backstop", at: undefined },
+  ])
+    test(
+      arm.name,
+      async () => {
+        const events: GoalLoopEvent[] = []
+        const warnings: string[] = []
+        const fake = growingSession(arm.at)
+        const loop = createGoalLoop({
+          getServer: async () => server,
+          fetchImpl: fake.fetchImpl,
+          onEvent: (e) => events.push(e),
+          warn: (message) => warnings.push(message),
+          pollIntervalMs: 2,
+          maxConsecutiveErrors: 1,
+        })
+        await loop.start({
+          directory: "/repo",
+          goal: "long autonomous run",
+          model: { providerID: "opencode-go", modelID: "muse-spark-1.3-contributor" },
+        })
+        await waitFor(() => loop.status() === null, SLOW_HOST_MS)
+        expect(events.at(-1)?.type).toBe("completed")
+        if (arm.at !== undefined) {
+          expect(fake.serverCompactions()).toBeGreaterThan(0)
+          expect(fake.summaries()).toHaveLength(0)
+          expect(warnings).toHaveLength(0)
+        } else {
+          expect(fake.serverCompactions()).toBe(0)
+          expect(fake.summaries().length).toBeGreaterThan(0)
+          expect(warnings.length).toBe(fake.summaries().length)
+        }
+      },
+      SLOW_HOST_MS + 5_000,
+    )
 
   test(
     "a non-retryable 400 on a large context compacts once and recovers",

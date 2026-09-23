@@ -16,6 +16,11 @@ export const Event = SessionTodo.Event
 export interface Interface {
   readonly update: (input: { sessionID: SessionID; todos: ReadonlyArray<Info> }) => Effect.Effect<void>
   readonly get: (sessionID: SessionID) => Effect.Effect<Info[]>
+  /**
+   * When the list was last written. `update` replaces every row, so the rows'
+   * creation time is the time of the last write. Undefined for no list.
+   */
+  readonly written: (sessionID: SessionID) => Effect.Effect<number | undefined>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SessionTodo") {}
@@ -65,7 +70,17 @@ const layer = Layer.effect(
       }))
     })
 
-    return Service.of({ update, get })
+    const written = Effect.fn("Todo.written")(function* (sessionID: SessionID) {
+      const rows = yield* db
+        .select({ time: TodoTable.time_created })
+        .from(TodoTable)
+        .where(eq(TodoTable.session_id, sessionID))
+        .all()
+        .pipe(Effect.orDie)
+      return rows.length === 0 ? undefined : Math.max(...rows.map((row) => row.time))
+    })
+
+    return Service.of({ update, get, written })
   }),
 )
 
