@@ -2,6 +2,7 @@ import { ConfigV1 } from "@opencode-ai/core/v1/config/config"
 import { Database } from "@opencode-ai/core/database/database"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
+import { MessageID, PartID } from "../../src/session/schema"
 import { expect } from "bun:test"
 import { Effect, Layer } from "effect"
 import path from "path"
@@ -439,4 +440,168 @@ it.instance(
       expect(injected.some((note) => note.kind.includes("todo_periodic"))).toBe(true)
     }),
   20000,
+)
+
+// Reliability: a provider that refuses replayed encrypted reasoning (#44)
+
+/** A Responses-API provider on the test server, so encrypted reasoning is serialized into the request. */
+const useResponsesConfig = Effect.fn("test.useResponsesConfig")(function* () {
+  const { directory } = yield* TestInstance
+  const llm = yield* TestLLMServer
+  const fs = yield* FSUtil.Service
+  const config = {
+    provider: {
+      oa: {
+        name: "Responses",
+        id: "oa",
+        env: [],
+        npm: "@ai-sdk/openai",
+        models: {
+          "oa-model": {
+            ...provider.test.models["test-model"],
+            id: "oa-model",
+            name: "Responses Model",
+            reasoning: true,
+          },
+        },
+        options: { apiKey: "test-key", baseURL: llm.url },
+      },
+    },
+  }
+  yield* fs.writeWithDirs(
+    path.join(directory, "opencode.json"),
+    JSON.stringify({ $schema: "https://opencode.ai/config.json", ...config }),
+  )
+  return { llm }
+})
+
+/** A finished earlier turn whose reasoning carries encrypted content another caller was issued. */
+const seedEncryptedReasoning = Effect.fn("test.seedEncryptedReasoning")(function* (sessionID: Session.Info["id"]) {
+  const sessions = yield* Session.Service
+  const { directory } = yield* TestInstance
+  const model = { providerID: ProviderV2.ID.make("oa"), modelID: ModelV2.ID.make("oa-model") }
+  const user = yield* sessions.updateMessage({
+    id: MessageID.ascending(),
+    role: "user",
+    sessionID,
+    agent: "build",
+    model,
+    time: { created: Date.now() },
+  })
+  yield* sessions.updatePart({
+    id: PartID.ascending(),
+    messageID: user.id,
+    sessionID,
+    type: "text",
+    text: "earlier question",
+  })
+  const assistant = yield* sessions.updateMessage({
+    id: MessageID.ascending(),
+    role: "assistant",
+    sessionID,
+    parentID: user.id,
+    mode: "build",
+    agent: "build",
+    path: { cwd: directory, root: directory },
+    cost: 0,
+    tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
+    modelID: model.modelID,
+    providerID: model.providerID,
+    finish: "stop",
+    time: { created: Date.now(), completed: Date.now() },
+  })
+  yield* sessions.updatePart({
+    id: PartID.ascending(),
+    messageID: assistant.id,
+    sessionID,
+    type: "reasoning",
+    text: "thinking about it",
+    metadata: { openai: { itemId: "rs_foreign", reasoningEncryptedContent: "gAAAA-foreign-caller" } },
+    time: { start: Date.now(), end: Date.now() },
+  })
+  yield* sessions.updatePart({
+    id: PartID.ascending(),
+    messageID: assistant.id,
+    sessionID,
+    type: "text",
+    text: "earlier answer",
+  })
+  return model
+})
+
+const rejectedReplay = {
+  error: {
+    message: "reasoning encrypted_content was not issued to this caller",
+    type: "invalid_request_error",
+    param: "input",
+    code: null,
+  },
+}
+
+it.instance(
+  "a refused encrypted-reasoning replay is retried once without it, and the turn completes",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useResponsesConfig()
+      const prompt = yield* SessionPrompt.Service
+      const chat = yield* session()
+      const model = yield* seedEncryptedReasoning(chat.id)
+      yield* llm.error(400, rejectedReplay)
+      yield* llm.text("recovered")
+      const result = yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        model,
+        parts: [{ type: "text", text: "continue" }],
+      })
+      const hits = yield* llm.hits
+      expect(hits).toHaveLength(2)
+      // the first request replayed the encrypted reasoning as it was stored
+      expect(JSON.stringify(hits[0]!.body)).toContain("gAAAA-foreign-caller")
+      // the retry carried neither the encrypted reasoning nor its item id
+      expect(JSON.stringify(hits[1]!.body)).not.toContain("gAAAA-foreign-caller")
+      expect(JSON.stringify(hits[1]!.body)).not.toContain("rs_foreign")
+      expect(result.info.role === "assistant" && result.info.error).toBeFalsy()
+      expect(result.parts.some((part) => part.type === "text" && part.text === "recovered")).toBe(true)
+    }),
+  30_000,
+)
+
+it.instance(
+  "encrypted reasoning the provider accepts is replayed unchanged",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useResponsesConfig()
+      const prompt = yield* SessionPrompt.Service
+      const chat = yield* session()
+      const model = yield* seedEncryptedReasoning(chat.id)
+      yield* llm.text("fine")
+      yield* prompt.prompt({ sessionID: chat.id, agent: "build", model, parts: [{ type: "text", text: "continue" }] })
+      const hits = yield* llm.hits
+      expect(hits).toHaveLength(1)
+      expect(JSON.stringify(hits[0]!.body)).toContain("gAAAA-foreign-caller")
+    }),
+  30_000,
+)
+
+it.instance(
+  "a second refusal after the stripped retry ends the turn with the error, not a loop",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useResponsesConfig()
+      const prompt = yield* SessionPrompt.Service
+      const chat = yield* session()
+      const model = yield* seedEncryptedReasoning(chat.id)
+      yield* llm.error(400, rejectedReplay)
+      yield* llm.error(400, rejectedReplay)
+      const result = yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        model,
+        parts: [{ type: "text", text: "continue" }],
+      })
+      expect(yield* llm.calls).toBe(2)
+      expect(result.info.role === "assistant" && result.info.error?.name).toBe("APIError")
+    }),
+  30_000,
 )

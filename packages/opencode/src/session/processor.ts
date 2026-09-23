@@ -16,6 +16,7 @@ import { isNearOverflow, isOverflow } from "./overflow"
 import { PartID } from "./schema"
 import type { SessionID } from "./schema"
 import { SessionRetry } from "./retry"
+import { ReasoningReplay } from "./reasoning-replay"
 import { SessionStatus } from "./status"
 import { SessionSummary } from "./summary"
 import type { Provider } from "@/provider/provider"
@@ -680,19 +681,36 @@ const layer = Layer.effect(
         reminder = undefined
         ctx.shouldBreak = (yield* config.get()).experimental?.continue_loop_on_deny !== true
 
-        return yield* Effect.gen(function* () {
-          yield* Effect.gen(function* () {
+        const attempt = (request: LLM.StreamInput) =>
+          Effect.gen(function* () {
             ctx.currentText = undefined
             ctx.reasoningMap = {}
             yield* status.set(ctx.sessionID, { type: "busy" })
-            const stream = llm.stream(streamInput)
+            const stream = llm.stream(request)
 
             yield* stream.pipe(
               Stream.tap((event) => handleEvent(event)),
               Stream.takeUntil(() => ctx.needsCompaction),
               Stream.runDrain,
             )
-          }).pipe(
+          })
+
+        return yield* Effect.gen(function* () {
+          yield* attempt(streamInput).pipe(
+            // A provider that did not issue the replayed encrypted reasoning refuses
+            // the request with a non-retryable 400. Send it once more without that
+            // reasoning; a second refusal is an ordinary error.
+            Effect.catchIf(
+              (e) => ReasoningReplay.rejected(parse(e)) && ReasoningReplay.carries(streamInput.messages),
+              () =>
+                Effect.gen(function* () {
+                  yield* Effect.logWarning("provider refused replayed encrypted reasoning; retrying without it", {
+                    "session.id": input.sessionID,
+                    messageID: input.assistantMessage.id,
+                  })
+                  yield* attempt({ ...streamInput, messages: ReasoningReplay.strip(streamInput.messages) })
+                }),
+            ),
             Effect.onInterrupt(() =>
               Effect.gen(function* () {
                 aborted = true
