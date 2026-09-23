@@ -14,9 +14,18 @@
 import { createHash } from "crypto"
 import type { SessionV1 } from "@opencode-ai/core/v1/session"
 
-/** The record never exceeds this, whatever the inputs. */
+/**
+ * The record never exceeds this, whatever the inputs: every line is capped, and
+ * past the cap sections are trimmed in reverse priority (archives, files,
+ * background tasks, completed todos, open todos from the end), and as a last
+ * resort the task statement is cut shorter. Each trimmed section says so.
+ */
 export const MAX_BYTES = 6 * 1024
 const TASK_BYTES = 4 * 1024
+const MIN_TASK_BYTES = 256
+/** One todo line, one command, one path. */
+const LINE_BYTES = 300
+const GOAL_BYTES = 500
 const MAX_FILES = 20
 const MAX_ARCHIVES = 10
 
@@ -71,19 +80,23 @@ export function contentKey(content: string) {
 }
 
 export function build(input: Input): string {
-  // Trimmed in reverse priority until the record fits: archives, files, tasks,
-  // then completed todos. The task statement and open todos are never trimmed.
+  const isOpen = (todo: Todo) => todo.status !== "completed"
   const shown = {
     archives: input.archives.slice(0, MAX_ARCHIVES),
     files: input.files.slice(0, MAX_FILES),
     tasks: [...input.tasks],
-    completed: input.todos.filter((todo) => todo.status === "completed").length,
+    completed: input.todos.filter((todo) => !isOpen(todo)).length,
+    open: input.todos.filter(isOpen).length,
+    taskBytes: TASK_BYTES,
   }
+  // reverse priority; the last one shrinks the task statement itself
   const trimmers = [
     () => shown.archives.length > 0 && (shown.archives.pop(), true),
     () => shown.files.length > 0 && (shown.files.pop(), true),
     () => shown.tasks.length > 0 && (shown.tasks.pop(), true),
     () => shown.completed > 0 && (shown.completed--, true),
+    () => shown.open > 0 && (shown.open--, true),
+    () => shown.taskBytes > MIN_TASK_BYTES && ((shown.taskBytes = Math.floor(shown.taskBytes / 2)), true),
   ]
   let text = render(input, shown)
   while (Buffer.byteLength(text, "utf-8") > MAX_BYTES && trimmers.some((trim) => trim())) text = render(input, shown)
@@ -92,17 +105,28 @@ export function build(input: Input): string {
 
 function render(
   input: Input,
-  shown: { archives: Archived[]; files: ChangedFile[]; tasks: RunningTask[]; completed: number },
+  shown: {
+    archives: Archived[]
+    files: ChangedFile[]
+    tasks: RunningTask[]
+    completed: number
+    open: number
+    taskBytes: number
+  },
 ) {
   const record: string[] = []
 
   if (input.task !== undefined && input.task.trim() !== "") {
-    const cut = Buffer.byteLength(input.task, "utf-8") > TASK_BYTES
-    const task = cut ? Buffer.from(input.task, "utf-8").subarray(0, TASK_BYTES).toString("utf-8") : input.task
+    const cut = Buffer.byteLength(input.task, "utf-8") > shown.taskBytes
+    const task = cut ? clip(input.task, shown.taskBytes) : input.task
     record.push(
       "Task, as the user wrote it (first message of the session, verbatim):",
       indent(task),
-      ...(cut ? ["  [task statement cut at 4 KB]"] : []),
+      ...(cut
+        ? [
+            `  [task statement cut at ${shown.taskBytes >= 1024 ? `${shown.taskBytes / 1024} KB` : `${shown.taskBytes} bytes`}]`,
+          ]
+        : []),
       "",
     )
   }
@@ -114,31 +138,38 @@ function render(
         ? ""
         : ` (last written ${ago(input.now - input.todosWrittenAt)}${input.stepsSince === undefined ? "" : `, ${input.stepsSince} steps ago`})`
     record.push(`Todo list, from todowrite${when}. Statuses are as the agent declared them, unless marked verified:`)
-    // completed items beyond the shown count are hidden, the oldest-listed kept
+    // items beyond the shown counts are hidden, the earliest-listed kept
     let completedLeft = shown.completed
-    const hidden = input.todos.filter((todo) => todo.status === "completed").length - shown.completed
+    let openLeft = shown.open
+    const hiddenCompleted = input.todos.filter((todo) => todo.status === "completed").length - shown.completed
+    const hiddenOpen = input.todos.filter((todo) => todo.status !== "completed").length - shown.open
     input.todos.forEach((todo, index) => {
       if (todo.status === "completed") {
         if (completedLeft === 0) return
         completedLeft--
       }
+      if (todo.status !== "completed") {
+        if (openLeft === 0) return
+        openLeft--
+      }
       const at = input.verified?.get(contentKey(todo.content))
       const status = at === undefined ? todo.status : `${todo.status} · verified ${ago(input.now - at)}`
-      record.push(`  ${index + 1}. [${status}] ${todo.content}`)
+      record.push(`  ${index + 1}. [${line(status)}] ${line(todo.content)}`)
     })
-    if (hidden > 0) record.push(`  (${hidden} completed items not shown)`)
+    if (hiddenOpen > 0) record.push(`  (+${hiddenOpen} more open todos not shown, over the size cap)`)
+    if (hiddenCompleted > 0) record.push(`  (${hiddenCompleted} completed items not shown)`)
   }
   record.push("")
 
   if (shown.tasks.length > 0 || input.tasks.length > 0) {
     record.push("Background tasks (still running; you will be told when they finish, do not rerun):")
     for (const task of shown.tasks)
-      record.push(`  ${task.id} · running ${elapsed(input.now - task.startedAt)} · ${task.command}`)
+      record.push(`  ${line(task.id)} · running ${elapsed(input.now - task.startedAt)} · ${line(task.command)}`)
     const more = input.tasks.length - shown.tasks.length
     if (more > 0) record.push(`  (${more} more not shown)`)
   }
   if (input.files.length > 0) {
-    const listed = shown.files.map((file) => `${file.file} (+${file.additions} −${file.deletions})`)
+    const listed = shown.files.map((file) => `${line(file.file)} (+${file.additions} −${file.deletions})`)
     const more = input.files.length - shown.files.length
     record.push(`Files changed in this session: ${[...listed, ...(more > 0 ? [`… (${more} more)`] : [])].join(", ")}`)
   }
@@ -147,12 +178,15 @@ function render(
     record.push(
       shown.archives.length > 0
         ? `Archived tool output you may need again: ${shown.archives
-            .map((item) => `${item.path} (${item.tool}${item.bytes === undefined ? "" : `, ${size(item.bytes)}`})`)
+            .map(
+              (item) =>
+                `${line(item.path)} (${line(item.tool)}${item.bytes === undefined ? "" : `, ${size(item.bytes)}`})`,
+            )
             .join(", ")}${more > 0 ? `, … (${more} more archived outputs not shown)` : ""}`
         : `Archived tool output: ${more} not shown (over the size cap); read or grep them by path from earlier receipts.`,
     )
   }
-  if (input.goal) record.push(`Goal loop: ${input.goal}`)
+  if (input.goal) record.push(`Goal loop: ${line(input.goal, GOAL_BYTES)}`)
 
   return [
     `<checkpoint n="${input.n}" at="${new Date(input.now).toISOString()}">`,
@@ -241,6 +275,24 @@ export function stepsSince(messages: ReadonlyArray<Message>, since: number | und
   const oldest = Math.min(...messages.map((message) => message.info.time.created))
   if (messages.length === 0 || since < oldest) return undefined
   return messages.filter((message) => message.info.role === "assistant" && message.info.time.created > since).length
+}
+
+/** One item of the record, capped. */
+function line(text: string, bytes = LINE_BYTES) {
+  return Buffer.byteLength(text, "utf-8") > bytes ? `${clip(text, bytes)}…` : text
+}
+
+/** The first `bytes` bytes of a string, never splitting a character. */
+function clip(text: string, bytes: number) {
+  let used = 0
+  let end = 0
+  for (const char of text) {
+    const size = Buffer.byteLength(char, "utf-8")
+    if (used + size > bytes) break
+    used += size
+    end += char.length
+  }
+  return text.slice(0, end)
 }
 
 function indent(text: string) {

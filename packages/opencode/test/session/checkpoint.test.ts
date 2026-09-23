@@ -132,6 +132,20 @@ describe("Checkpoint.build", () => {
     expect(text).toMatch(/archived outputs not shown|Archived tool output: \d+ not shown/)
   })
 
+  test("oversized open todos and goal still fit the cap: each line is capped, the rest counted", () => {
+    const text = Checkpoint.build(
+      base({
+        task: "x".repeat(4_000),
+        goal: "g".repeat(5_000),
+        todos: Array.from({ length: 60 }, (_, i) => ({ content: `open ${i} ${"o".repeat(2_000)}`, status: "pending" })),
+      }),
+    )
+    expect(Buffer.byteLength(text, "utf-8")).toBeLessThanOrEqual(Checkpoint.MAX_BYTES)
+    expect(text).toMatch(/\+\d+ more open todos/)
+    expect(text).toContain("[pending] open 0 ")
+    expect(text.endsWith("</checkpoint>")).toBe(true)
+  })
+
   test("never includes tool output text, only paths and sizes", () => {
     const text = Checkpoint.build(base({ archives: [{ path: "/a/tool_9", tool: "bash", bytes: 10 }] }))
     expect(text).toContain("/a/tool_9 (bash, 10 B)")
