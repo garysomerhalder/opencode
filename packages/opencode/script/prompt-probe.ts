@@ -39,6 +39,10 @@ const bytes = (value: unknown) => Buffer.byteLength(typeof value === "string" ? 
 const k = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(2)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : `${n}`)
 const tok = (n: number) => k(Math.round(n * ratio))
 
+// Parsed before anything is started, so a bad --config leaks no server or temp dir.
+const extraConfig: Record<string, unknown> = args.config ? JSON.parse(args.config) : {}
+const capturedModel = "capture/probe"
+
 async function capture(dir: string) {
   let body: any
   const got = Promise.withResolvers<void>()
@@ -66,7 +70,6 @@ async function capture(dir: string) {
     },
   })
   const temp = mkdtempSync(path.join(tmpdir(), "prompt-probe-"))
-  const extraConfig: Record<string, unknown> = args.config ? JSON.parse(args.config) : {}
   const config = {
     provider: {
       capture: {
@@ -76,8 +79,8 @@ async function capture(dir: string) {
         models: { probe: { name: "Probe", tool_call: true, limit: { context: 1_048_576, output: 131_072 } } },
       },
     },
-    model: "capture/probe",
-    small_model: "capture/probe",
+    model: capturedModel,
+    small_model: capturedModel,
     // --config: extra opencode.json content to measure a change, e.g.
     // '{"permission":{"linear_*":"deny"}}' or a skill allowlist
     ...extraConfig,
@@ -90,7 +93,7 @@ async function capture(dir: string) {
           name,
           {
             ...((extraConfig.agent as Record<string, object> | undefined)?.[name] ?? {}),
-            model: "capture/probe",
+            model: capturedModel,
           },
         ]),
       ),
@@ -122,20 +125,24 @@ async function capture(dir: string) {
   let stderr = ""
   child.stderr?.on("data", (data) => (stderr += data.toString()))
   const exited = new Promise<void>((done) => child.once("exit", () => done()))
+  // an early exit without a request fails now, not after the full timeout
+  exited.then(() => got.reject(new Error(`opencode run exited before sending a request\n${stderr.slice(-2000)}`)))
   const timer = setTimeout(
     () => got.reject(new Error(`no request within ${args.timeout} ms\n${stderr.slice(-2000)}`)),
     Number(args.timeout),
   )
   try {
-    await Promise.race([got.promise, exited.then(() => got.promise)])
+    await got.promise
   } finally {
     clearTimeout(timer)
-    // the run starts MCP servers as its own children: stop the whole tree
-    if (process.platform === "win32" && child.pid)
+    // The run starts MCP servers as its own children: stop the whole tree, and
+    // only while the child still runs, so a reused PID is never targeted.
+    const running = child.exitCode === null && child.signalCode === null
+    if (running && process.platform === "win32" && child.pid)
       await new Promise((done) =>
         spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore" }).once("exit", done),
       )
-    else child.kill()
+    if (running && process.platform !== "win32") child.kill()
     await Promise.race([exited, new Promise((done) => setTimeout(done, 5000))])
     server.stop(true)
     try {
