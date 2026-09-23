@@ -88,7 +88,7 @@ const getAvailableTools = Effect.fn("Cli.debug.agent.getAvailableTools")(functio
 function resolveTools(agent: Agent.Info, availableTools: { id: string }[]) {
   const disabled = Permission.disabled(
     availableTools.map((tool) => tool.id),
-    agent.permission,
+    Permission.effective(agent),
   )
   const resolved: Record<string, boolean> = {}
   for (const tool of availableTools) {
@@ -169,7 +169,7 @@ const createToolContext = Effect.fn("Cli.debug.agent.createToolContext")(functio
   }
   yield* sessionSvc.updateMessage(message)
 
-  const ruleset = Permission.merge(agent.permission, session.permission ?? [])
+  const ruleset = Permission.effective(agent, session.permission)
 
   return {
     sessionID: session.id,

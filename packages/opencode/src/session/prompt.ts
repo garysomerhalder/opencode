@@ -363,7 +363,7 @@ const layer = Layer.effect(
               .ask({
                 ...req,
                 sessionID,
-                ruleset: Permission.merge(taskAgent.permission, session.permission ?? []),
+                ruleset: Permission.effective(taskAgent, session.permission),
               })
               .pipe(Effect.orDie),
         })
@@ -1376,9 +1376,7 @@ const layer = Layer.effect(
             const questionAvailable =
               tools["question"] !== undefined &&
               lastUser.tools?.["question"] !== false &&
-              !Permission.disabled(["question"], Permission.merge(agent.permission, session.permission ?? [])).has(
-                "question",
-              )
+              !Permission.disabled(["question"], Permission.effective(agent, session.permission)).has("question")
             const autonomous = Accuracy.autonomous({
               autonomous: lastUser.autonomous,
               questionAvailable,

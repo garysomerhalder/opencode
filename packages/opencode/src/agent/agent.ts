@@ -14,6 +14,7 @@ import PROMPT_COMPACTION from "./prompt/compaction.txt"
 import PROMPT_EXPLORE from "./prompt/explore.txt"
 import PROMPT_SUMMARY from "./prompt/summary.txt"
 import PROMPT_TITLE from "./prompt/title.txt"
+import PROMPT_VERIFIER from "./prompt/verifier.txt"
 import { Permission } from "@/permission"
 import { mergeDeep, pipe, sortBy, values } from "remeda"
 import { Global } from "@opencode-ai/core/global"
@@ -54,6 +55,9 @@ export const Info = Schema.Struct({
   steps: Schema.optional(Schema.Finite),
 }).annotate({ identifier: "Agent" })
 export type Info = DeepMutable<Schema.Schema.Type<typeof Info>>
+
+/** The verifier's step cap; config may lower it, never raise it (docs/accuracy-e.md §11.2). */
+export const VERIFIER_STEPS = 40
 
 const GeneratedAgent = Schema.Struct({
   identifier: Schema.String,
@@ -261,6 +265,21 @@ const layer = Layer.effect(
               user,
             ),
             prompt: PROMPT_SUMMARY,
+          },
+          // Accuracy E: the goal loop's independent read-only verifier. Its real
+          // rules are Permission.VERIFIER_LOCK, which Permission.effective() appends
+          // after these, the user's and the session's, so nothing can loosen them.
+          // Hidden and primary, so it is not offered to the task tool.
+          [Permission.VERIFIER]: {
+            name: Permission.VERIFIER,
+            description: "Independent read-only verifier for goal loops. Cites evidence; cannot change anything.",
+            mode: "primary",
+            native: true,
+            hidden: true,
+            steps: VERIFIER_STEPS,
+            permission: Permission.merge(defaults, Permission.fromConfig({ "*": "deny" }), user),
+            prompt: PROMPT_VERIFIER,
+            options: {},
           },
         }
 

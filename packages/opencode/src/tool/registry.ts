@@ -271,9 +271,8 @@ const layer = Layer.effect(
 
     const describeTask = Effect.fn("ToolRegistry.describeTask")(function* (agent: Agent.Info) {
       const items = (yield* agents.list()).filter((item) => item.mode !== "primary")
-      const filtered = items.filter(
-        (item) => Permission.evaluate("task", item.name, agent.permission).action !== "deny",
-      )
+      const ruleset = Permission.effective(agent)
+      const filtered = items.filter((item) => Permission.evaluate("task", item.name, ruleset).action !== "deny")
       const list = filtered.toSorted((a, b) => a.name.localeCompare(b.name))
       const description = list
         .map(
@@ -289,7 +288,7 @@ const layer = Layer.effect(
       permission?: PermissionV1.Ruleset
     }) {
       if (!codeMode) return
-      const ruleset = Permission.merge(input.agent.permission, input.permission ?? [])
+      const ruleset = Permission.effective(input.agent, input.permission)
       const tools = Permission.visibleTools(yield* mcp.tools(), ruleset)
       if (Object.keys(tools).length === 0) return
       return codeMode.describeCatalog(tools, Object.keys(yield* mcp.clients()).map(McpCatalog.sanitize))
@@ -304,7 +303,7 @@ const layer = Layer.effect(
         // Reading or stopping a background shell task is meaningless for an
         // agent that cannot run shell commands in the first place.
         if (tool.id === ShellOutputTool.id || tool.id === ShellStopTool.id) {
-          return Permission.evaluate(ShellID.ToolID, "*", input.agent.permission).action !== "deny"
+          return Permission.evaluate(ShellID.ToolID, "*", Permission.effective(input.agent)).action !== "deny"
         }
 
         const usePatch =

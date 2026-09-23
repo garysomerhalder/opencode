@@ -4,7 +4,9 @@ import { InstanceState } from "@/effect/instance-state"
 import { Wildcard } from "@opencode-ai/core/util/wildcard"
 import { Deferred, Effect, Layer, Context } from "effect"
 import os from "os"
+import path from "path"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
+import { TRUNCATION_DIR } from "@/tool/truncation-dir"
 import { EventV2Bridge } from "@/event-v2-bridge"
 
 export const Event = PermissionV1.Event
@@ -203,6 +205,46 @@ export function fromConfig(permission: ConfigPermissionV1.Info) {
 
 export function merge(...rulesets: PermissionV1.Ruleset[]): PermissionV1.Rule[] {
   return rulesets.flat()
+}
+
+/** The built-in read-only verifier (accuracy E, docs/accuracy-e.md). */
+export const VERIFIER = "verifier"
+
+/**
+ * The verifier's fixed ruleset: reads and lookups, the verdict tool, archived
+ * tool output, nothing else. Nothing is `ask`, since nobody answers inside a
+ * goal loop. effective() appends it after every other rule.
+ */
+export const VERIFIER_LOCK = fromConfig({
+  "*": "deny",
+  read: { "*": "allow", "*.env": "deny", "*.env.*": "deny" },
+  grep: "allow",
+  glob: "allow",
+  lsp: "allow",
+  verdict: "allow",
+  external_directory: { "*": "deny", [path.join(TRUNCATION_DIR, "*")]: "allow" },
+})
+
+/**
+ * The built-in verifier, by identity: a native agent (config cannot make one)
+ * under the name the agent service reserves for it. agent.ts keeps config from
+ * renaming it or giving another agent its name.
+ */
+export function isVerifier(agent: { name: string; native?: boolean }) {
+  return agent.native === true && agent.name === VERIFIER
+}
+
+/**
+ * The ruleset a request is evaluated against: the agent's rules, then the
+ * session's, then, for the verifier, its lock. Every evaluation of an agent's
+ * rules goes through here (a test enforces it), so the lock is always last
+ * and nothing from config or the session can loosen it.
+ */
+export function effective(
+  agent: { name: string; native?: boolean; permission: PermissionV1.Ruleset },
+  session: PermissionV1.Ruleset = [],
+): PermissionV1.Rule[] {
+  return merge(agent.permission ?? [], session, isVerifier(agent) ? VERIFIER_LOCK : [])
 }
 
 export function disabled(tools: string[], ruleset: PermissionV1.Ruleset): Set<string> {

@@ -4,7 +4,7 @@ import { Cause, Duration, Effect, Layer, Option, Schedule, Context } from "effec
 import path from "path"
 import type { Agent } from "../agent/agent"
 import { FSUtil } from "@opencode-ai/core/fs-util"
-import { evaluate } from "@/permission/evaluate"
+import { effective, evaluate } from "@/permission/evaluate"
 import { Config } from "@/config/config"
 import { Accuracy } from "@/session/accuracy"
 import { Receipt } from "./receipt"
@@ -46,8 +46,9 @@ export function metadata(result: Result) {
 }
 
 function hasTaskTool(agent?: Agent.Info) {
-  if (!agent?.permission) return false
-  return evaluate("task", "*", agent.permission).action !== "deny"
+  const ruleset = agent ? effective(agent) : []
+  if (ruleset.length === 0) return false
+  return evaluate("task", "*", ruleset).action !== "deny"
 }
 
 export interface Interface {
