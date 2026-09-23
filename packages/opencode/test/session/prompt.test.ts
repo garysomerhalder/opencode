@@ -1631,6 +1631,26 @@ unixNoLLMServer(
   { config: cfg },
 )
 
+// Accuracy E: a check the goal loop runs is evidence only with its exit code.
+noLLMServer.instance(
+  "shell records the command's exit code",
+  () =>
+    Effect.gen(function* () {
+      const { prompt, run, chat } = yield* boot()
+      const failed = completedTool(
+        (yield* prompt.shell({ sessionID: chat.id, agent: "build", command: "exit 3" })).parts,
+      )
+      const passed = completedTool(
+        (yield* prompt.shell({ sessionID: chat.id, agent: "build", command: "echo ok" })).parts,
+      )
+      expect(failed?.state.metadata.exit).toBe(3)
+      expect(passed?.state.metadata.exit).toBe(0)
+      yield* run.assertNotBusy(chat.id)
+    }),
+  { config: cfg },
+  30_000,
+)
+
 unixNoLLMServer(
   "shell completes a fast command on the preferred shell",
   () =>
@@ -2515,7 +2535,6 @@ noLLMServer.instance(
   30_000,
 )
 
-
 // The background-task wake against the real prompt ops rather than a stub: the
 // note is persisted, the real session loop answers it, and the model sees it as
 // user-role content. The registry-level tests in test/tool/shell-tasks.test.ts
@@ -2583,9 +2602,9 @@ it.instance(
       expect(HarnessNote.lastRealUser(woken.messages)?.info.id).not.toBe(woken.note.info.id)
 
       // The real loop answered it, and the model was given the note's text.
-      expect(
-        woken.reply.parts.some((part) => part.type === "text" && part.text.includes("the build finished")),
-      ).toBe(true)
+      expect(woken.reply.parts.some((part) => part.type === "text" && part.text.includes("the build finished"))).toBe(
+        true,
+      )
       const last = (yield* llm.hits).at(-1)
       expect(JSON.stringify(last?.body)).toContain("background-shell-finished")
       expect(JSON.stringify(last?.body)).toContain("BUILD OK")
