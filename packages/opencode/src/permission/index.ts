@@ -15,6 +15,16 @@ export interface Interface {
   readonly ask: (input: PermissionV1.AskInput) => Effect.Effect<void, PermissionV1.Error>
   readonly reply: (input: PermissionV1.ReplyInput) => Effect.Effect<void, PermissionV1.NotFoundError>
   readonly list: () => Effect.Effect<ReadonlyArray<PermissionV1.Request>>
+  /**
+   * What ask() would do, without asking: "deny" when any pattern is denied,
+   * "ask" when any would need an answer, else "allow". For tools that return
+   * many paths or file contents and must leave out what the agent may not read.
+   */
+  readonly check: (input: {
+    permission: string
+    patterns: ReadonlyArray<string>
+    ruleset: PermissionV1.Ruleset
+  }) => Effect.Effect<PermissionV1.Action>
 }
 
 interface PendingEntry {
@@ -37,6 +47,22 @@ export function evaluate(permission: string, pattern: string, ...rulesets: Permi
       pattern: "*",
     }
   )
+}
+
+/**
+ * The rule that decides a request. An explicit deny in the ruleset is final;
+ * "always" approvals only lift an ask. Approvals are shared by every session
+ * of the directory, and a denied pattern is never asked about, so an approval
+ * that reaches a deny was given under another agent.
+ */
+function decide(
+  permission: string,
+  pattern: string,
+  ruleset: PermissionV1.Ruleset,
+  approved: PermissionV1.Ruleset,
+): PermissionV1.Rule {
+  const own = evaluate(permission, pattern, ruleset)
+  return own.action === "deny" ? own : evaluate(permission, pattern, ruleset, approved)
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Permission") {}
@@ -66,17 +92,25 @@ const layer = Layer.effect(
       }),
     )
 
+    const check = Effect.fn("Permission.check")(function* (input: {
+      permission: string
+      patterns: ReadonlyArray<string>
+      ruleset: PermissionV1.Ruleset
+    }) {
+      const { approved } = yield* InstanceState.get(state)
+      const actions = input.patterns.map((pattern) => decide(input.permission, pattern, input.ruleset, approved).action)
+      if (actions.includes("deny")) return "deny" as const
+      if (actions.includes("ask")) return "ask" as const
+      return "allow" as const
+    })
+
     const ask = Effect.fn("Permission.ask")(function* (input: PermissionV1.AskInput) {
       const { approved, pending } = yield* InstanceState.get(state)
       const { ruleset, ...request } = input
       let needsAsk = false
 
       for (const pattern of request.patterns) {
-        // An explicit deny is final; "always" approvals only lift an ask. Approvals
-        // are shared by every session of the directory, and a denied pattern is never
-        // asked about, so an approval that reaches a deny was given under another agent.
-        const own = evaluate(request.permission, pattern, ruleset)
-        const rule = own.action === "deny" ? own : evaluate(request.permission, pattern, ruleset, approved)
+        const rule = decide(request.permission, pattern, ruleset, approved)
         yield* Effect.logInfo("evaluated", { permission: request.permission, pattern, action: rule })
         if (rule.action === "deny") {
           return yield* new PermissionV1.DeniedError({
@@ -177,7 +211,7 @@ const layer = Layer.effect(
       return Array.from(pending.values(), (item) => item.info)
     })
 
-    return Service.of({ ask, reply, list })
+    return Service.of({ ask, reply, list, check })
   }),
 )
 

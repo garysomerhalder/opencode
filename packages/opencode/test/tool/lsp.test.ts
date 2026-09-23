@@ -12,6 +12,7 @@ import { MessageID, SessionID } from "../../src/session/schema"
 import { Tool } from "@/tool/tool"
 import { Truncate } from "@/tool/truncate"
 import { LspTool } from "../../src/tool/lsp"
+import { pathToFileURL } from "url"
 import { disposeAllInstances, TestInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 
@@ -28,9 +29,11 @@ const ctx = {
   messages: [],
   metadata: () => Effect.void,
   ask: () => Effect.void,
+  check: () => Effect.succeed("allow" as const),
 }
 
 const workspaceSymbolQueries: string[] = []
+let workspaceSymbols: unknown[] = []
 
 const lsp = Layer.succeed(
   LSP.Service,
@@ -48,7 +51,7 @@ const lsp = Layer.succeed(
     workspaceSymbol: (query) =>
       Effect.sync(() => {
         workspaceSymbolQueries.push(query)
-        return []
+        return workspaceSymbols as any
       }),
     prepareCallHierarchy: () => Effect.succeed([]),
     incomingCalls: () => Effect.succeed([]),
@@ -94,7 +97,63 @@ const asks = () => {
   }
 }
 
+// The verifier's rules (accuracy E): what lsp shows must follow them like read does.
+const verifierRules = Permission.effective({ name: Permission.VERIFIER, native: true, permission: [] })
+const verifierCtx: Tool.Context = {
+  ...ctx,
+  agent: Permission.VERIFIER,
+  ask: (req) =>
+    req.patterns.some((pattern) => Permission.evaluate(req.permission, pattern, verifierRules).action !== "allow")
+      ? Effect.die(new Error(`denied: ${req.permission} ${req.patterns.join(", ")}`))
+      : Effect.void,
+  check: (req) =>
+    Effect.succeed(
+      req.patterns.some((pattern) => Permission.evaluate(req.permission, pattern, verifierRules).action === "deny")
+        ? "deny"
+        : "allow",
+    ),
+}
+
 describe("tool.lsp", () => {
+  describe("read rules", () => {
+    it.instance(
+      "a file lookup asks the read rules for the file",
+      () =>
+        Effect.gen(function* () {
+          const dir = (yield* TestInstance).directory
+          const file = path.join(dir, ".env")
+          yield* put(file)
+          const exit = yield* run({ operation: "hover", filePath: file, line: 1, character: 1 }, verifierCtx).pipe(
+            Effect.exit,
+          )
+          expect(exit._tag).toBe("Failure")
+          expect(String(exit._tag === "Failure" ? exit.cause : "")).toContain("denied: read")
+        }),
+      { git: true },
+    )
+
+    it.instance(
+      "workspaceSymbol leaves out locations in files the agent may not read",
+      () =>
+        Effect.gen(function* () {
+          const dir = (yield* TestInstance).directory
+          const file = path.join(dir, "test.ts")
+          yield* put(file)
+          workspaceSymbols = [
+            { name: "API_KEY", location: { uri: pathToFileURL(path.join(dir, ".env")).href } },
+            { name: "x", location: { uri: pathToFileURL(file).href } },
+          ]
+          const result = yield* run(
+            { operation: "workspaceSymbol", filePath: file, line: 1, character: 1 },
+            verifierCtx,
+          )
+          workspaceSymbols = []
+          expect((result.metadata.result as { name: string }[]).map((item) => item.name)).toEqual(["x"])
+        }),
+      { git: true },
+    )
+  })
+
   describe("permission metadata", () => {
     it.instance(
       "keeps cursor details for position-based operations",

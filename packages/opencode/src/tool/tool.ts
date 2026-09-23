@@ -2,6 +2,7 @@ import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { Effect, Schema } from "effect"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import type { JSONSchema7 } from "@ai-sdk/provider"
+import path from "path"
 import type { MessageV2 } from "../session/message-v2"
 import type { Permission } from "../permission"
 import type { SessionID, MessageID } from "../session/schema"
@@ -43,6 +44,32 @@ export type Context<M extends Metadata = Metadata> = {
   messages: SessionV1.WithParts[]
   metadata(input: { title?: string; metadata?: M }): Effect.Effect<void>
   ask(input: Omit<PermissionV1.Request, "id" | "sessionID" | "tool">): Effect.Effect<void>
+  /**
+   * What ask() would decide for these patterns, without asking anyone. Tools
+   * that return many paths or file contents (grep, glob, lsp) use it to leave
+   * out what the agent may not read, through readable() below, which fails
+   * closed when a context has no check.
+   */
+  check?(input: { permission: string; patterns: ReadonlyArray<string> }): Effect.Effect<PermissionV1.Action>
+}
+
+/**
+ * Whether a tool may show the agent this file's path ("path") or its content
+ * ("content"): the agent's read rules decide, as the read tool's ask would.
+ * A deny hides both; content also needs an allow, since there is nobody to
+ * ask in the middle of a search. A context without check() hides everything.
+ */
+export function readable(ctx: Context, worktree: string, file: string, need: "path" | "content") {
+  const patterns = readPatterns(worktree, file)
+  if (!ctx.check) return Effect.succeed(false)
+  return ctx
+    .check({ permission: "read", patterns })
+    .pipe(Effect.map((action) => (need === "path" ? action !== "deny" : action === "allow")))
+}
+
+/** The patterns the read rules are matched against for a file, as the read tool asks them. */
+export function readPatterns(worktree: string, file: string) {
+  return [path.relative(worktree, file)]
 }
 
 export interface ExecuteResult<M extends Metadata = Metadata> {

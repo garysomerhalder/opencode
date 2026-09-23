@@ -68,7 +68,7 @@ export const GrepTool = Tool.define(
           })
           if (result.length === 0) return empty
 
-          const rows = result.map((item) => ({
+          const found = result.map((item) => ({
             path: path.resolve(
               requestedInfo?.type === "Directory" ? requested : path.dirname(requested),
               item.entry.path,
@@ -76,11 +76,21 @@ export const GrepTool = Tool.define(
             line: item.line,
             text: item.text,
           }))
+          // A match prints file content: only from files the agent may read
+          // without asking (ripgrep searches hidden files, and include can name
+          // any glob, so .env files match like any other).
+          const allowed = new Map<string, boolean>()
+          for (const file of new Set(found.map((row) => row.path)))
+            allowed.set(file, yield* Tool.readable(ctx, ins.worktree, file, "content"))
+          const rows = found.filter((row) => allowed.get(row.path))
+          const hidden = [...allowed.values()].filter((ok) => !ok).length
+          const note =
+            hidden > 0 ? `(${hidden} matching files not shown: reading them is denied or needs approval)` : ""
+          if (rows.length === 0) return hidden > 0 ? { ...empty, output: `No files found\n${note}` } : empty
 
           const limit = 100
-          const truncated = rows.length === limit
+          const truncated = found.length === limit
           const final = rows
-          if (final.length === 0) return empty
 
           const total = rows.length
           const hasMore = truncated || result.length === limit
@@ -100,6 +110,7 @@ export const GrepTool = Tool.define(
             output.push("")
             output.push("(Results truncated. Consider using a more specific path or pattern.)")
           }
+          if (note) output.push("", note)
 
           return {
             title: params.pattern,

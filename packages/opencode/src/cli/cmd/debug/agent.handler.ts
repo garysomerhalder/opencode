@@ -189,5 +189,11 @@ const createToolContext = Effect.fn("Cli.debug.agent.createToolContext")(functio
         }
       })
     },
+    check(req: { permission: string; patterns: ReadonlyArray<string> }) {
+      return Effect.sync(() => {
+        const actions = req.patterns.map((pattern) => Permission.evaluate(req.permission, pattern, ruleset).action)
+        return actions.includes("deny") ? "deny" : actions.includes("ask") ? "ask" : "allow"
+      })
+    },
   }
 })

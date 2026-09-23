@@ -87,6 +87,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
           ruleset: Permission.effective(input.agent, input.session.permission),
         })
         .pipe(Effect.orDie),
+    check: (req) => permission.check({ ...req, ruleset: Permission.effective(input.agent, input.session.permission) }),
   })
 
   for (const item of yield* registry.tools({

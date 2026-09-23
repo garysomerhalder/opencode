@@ -4,7 +4,7 @@ import path from "path"
 import { LSP } from "@/lsp/lsp"
 import DESCRIPTION from "./lsp.txt"
 import { InstanceState } from "@/effect/instance-state"
-import { pathToFileURL } from "url"
+import { fileURLToPath, pathToFileURL } from "url"
 import { assertExternalDirectoryEffect } from "./external-directory"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 
@@ -59,6 +59,14 @@ export const LspTool = Tool.define(
             always: ["*"],
             metadata: meta,
           })
+          // hover and symbols carry the file's content: the read rules apply to it
+          if (args.operation !== "workspaceSymbol")
+            yield* ctx.ask({
+              permission: "read",
+              patterns: Tool.readPatterns(instance.worktree, file),
+              always: ["*"],
+              metadata: {},
+            })
 
           const uri = pathToFileURL(file).href
           const position = { file, line: args.line - 1, character: args.character - 1 }
@@ -79,7 +87,7 @@ export const LspTool = Tool.define(
 
           yield* lsp.touchFile(file, "document")
 
-          const result: unknown[] = yield* (() => {
+          const raw: unknown[] = yield* (() => {
             switch (args.operation) {
               case "goToDefinition":
                 return lsp.definition(position)
@@ -101,6 +109,13 @@ export const LspTool = Tool.define(
                 return lsp.outgoingCalls(position)
             }
           })()
+          // locations in files the agent's read rules deny are left out
+          const result: unknown[] = []
+          for (const item of raw) {
+            const target = locationFile(item)
+            if (target && !(yield* Tool.readable(ctx, instance.worktree, target, "path"))) continue
+            result.push(item)
+          }
 
           return {
             title,
@@ -111,3 +126,12 @@ export const LspTool = Tool.define(
     }
   }),
 )
+
+/** The file an LSP result points into: Location, LocationLink, SymbolInformation or a call-hierarchy item. */
+function locationFile(item: unknown): string | undefined {
+  if (!item || typeof item !== "object") return undefined
+  const record = item as Record<string, any>
+  const uri = record.uri ?? record.targetUri ?? record.location?.uri ?? record.from?.uri ?? record.to?.uri
+  if (typeof uri !== "string" || !uri.startsWith("file:")) return undefined
+  return fileURLToPath(uri)
+}

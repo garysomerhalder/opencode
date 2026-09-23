@@ -366,6 +366,7 @@ const layer = Layer.effect(
                 ruleset: Permission.effective(taskAgent, session.permission),
               })
               .pipe(Effect.orDie),
+          check: (req) => permission.check({ ...req, ruleset: Permission.effective(taskAgent, session.permission) }),
         })
         .pipe(
           Effect.catchCause((cause) => {
@@ -844,6 +845,7 @@ const layer = Layer.effect(
                     messages: [],
                     metadata: () => Effect.void,
                     ask: () => Effect.void,
+                    check: () => Effect.succeed("allow" as const),
                   })
                   .pipe(Effect.onInterrupt(() => Effect.sync(() => controller.abort())))
               }
