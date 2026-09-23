@@ -1,6 +1,7 @@
 import { $ } from "bun"
 import semver from "semver"
 import path from "path"
+import { isPreviewVersion, previewVersion } from "./version"
 
 const rootPkgPath = path.resolve(import.meta.dir, "../../../package.json")
 const rootPkg = await Bun.file(rootPkgPath).json()
@@ -26,14 +27,17 @@ const env = {
 const CHANNEL = await (async () => {
   if (env.OPENCODE_CHANNEL) return env.OPENCODE_CHANNEL
   if (env.OPENCODE_BUMP) return "latest"
-  if (env.OPENCODE_VERSION && !env.OPENCODE_VERSION.startsWith("0.0.0-")) return "latest"
+  if (env.OPENCODE_VERSION && !isPreviewVersion(env.OPENCODE_VERSION)) return "latest"
   return await $`git branch --show-current`.text().then((x) => x.trim())
 })()
 const IS_PREVIEW = CHANNEL !== "latest"
 
 const VERSION = await (async () => {
   if (env.OPENCODE_VERSION) return env.OPENCODE_VERSION
-  if (IS_PREVIEW) return `0.0.0-${CHANNEL}-${new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "")}`
+  if (IS_PREVIEW) {
+    const base = (await Bun.file(path.resolve(import.meta.dir, "../../opencode/package.json")).json()).version
+    return previewVersion({ base, channel: CHANNEL, now: new Date() })
+  }
   const version = await fetch("https://registry.npmjs.org/opencode-ai/latest")
     .then((res) => {
       if (!res.ok) throw new Error(res.statusText)
