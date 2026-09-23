@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, mock, test } from "bun:test"
 import { ConfigV1 } from "@opencode-ai/core/v1/config/config"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
+import { HarnessNote } from "../../src/session/harness-note"
 import { Database } from "@opencode-ai/core/database/database"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { APICallError } from "ai"
@@ -1824,6 +1825,43 @@ describe("session.compaction.process", () => {
     },
     { git: true },
   )
+
+  itCompaction.instance("a harness note does not count as a turn when the recent tail is kept", () => {
+    const stub = llm()
+    stub.push(reply("summary"))
+
+    return Effect.gen(function* () {
+      const ssn = yield* SessionNs.Service
+      const session = yield* ssn.create({})
+      yield* createUserMessage(session.id, "one")
+      yield* createUserMessage(session.id, "two")
+      const u3 = yield* createUserMessage(session.id, "three")
+      // a reminder the harness injected into turn three (accuracy A), not a turn of its own
+      const note = HarnessNote.build({
+        user: u3 as SessionV1.User,
+        kind: "runaway_guard",
+        text: "<system-reminder>change approach</system-reminder>",
+      })
+      yield* ssn.updateMessage(note.info)
+      yield* ssn.updatePart(note.part)
+      const u4 = yield* createUserMessage(session.id, "four")
+      yield* createCompactionMarker(session.id)
+
+      const msgs = yield* ssn.messages({ sessionID: session.id })
+      yield* SessionCompaction.use.process({
+        parentID: msgs.at(-1)!.info.id,
+        messages: msgs,
+        sessionID: session.id,
+        auto: false,
+      })
+
+      // the two recent turns are three (with its note) and four
+      const ids = MessageV2.filterCompacted(yield* MessageV2.stream(session.id)).map((msg) => msg.info.id)
+      expect(ids).toContain(u3.id)
+      expect(ids).toContain(note.info.id)
+      expect(ids).toContain(u4.id)
+    }).pipe(withCompaction({ llm: stub.llmLayer, config: cfg({ tail_turns: 2, preserve_recent_tokens: 10_000 }) }))
+  })
 
   itCompaction.instance("keeps recent pre-compaction turns across repeated compactions", () => {
     const stub = llm()

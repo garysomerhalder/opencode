@@ -130,6 +130,11 @@ function turns(messages: SessionV1.WithParts[]) {
     const msg = messages[i]
     if (msg.info.role !== "user") continue
     if (msg.parts.some((part) => part.type === "compaction")) continue
+    // A harness note (a reminder, a background-task wake, a compaction
+    // checkpoint) belongs to the turn it was written into; counting it as a
+    // turn would push a real turn out of `tail_turns`. Prune counts turns the
+    // same way.
+    if (HarnessNote.isNote(msg)) continue
     result.push({
       start: i,
       end: messages.length,
