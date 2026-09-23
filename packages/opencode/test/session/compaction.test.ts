@@ -288,8 +288,12 @@ function readCompactionPart(sessionID: SessionID) {
   return SessionNs.use
     .messages({ sessionID })
     .pipe(
+      // the newest compaction part, wherever it sits: a compaction checkpoint note
+      // (accuracy D) now follows the summary, so it is no longer at a fixed offset
       Effect.map((messages) =>
-        messages.at(-2)?.parts.find((item): item is SessionV1.CompactionPart => item.type === "compaction"),
+        messages
+          .findLast((message) => message.parts.some((item) => item.type === "compaction"))
+          ?.parts.find((item): item is SessionV1.CompactionPart => item.type === "compaction"),
       ),
     )
 }
@@ -1343,10 +1347,14 @@ describe("session.compaction.process", () => {
       })
 
       const all = yield* ssn.messages({ sessionID: session.id })
-      const last = all.at(-1)
+      // after the summary only the compaction checkpoint (a harness note) follows: no continue
+      const checkpoint = (msg: SessionV1.WithParts | undefined) =>
+        msg?.parts.length === 1 && msg.parts[0]?.type === "reminder" && msg.parts[0].kind === "checkpoint"
+      const last = all.findLast((msg) => !checkpoint(msg))
 
       expect(result).toBe("continue")
       expect(last?.info.role).toBe("assistant")
+      expect(checkpoint(all.at(-1))).toBe(true)
       expect(
         all.some(
           (msg) =>

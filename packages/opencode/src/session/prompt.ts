@@ -1153,6 +1153,15 @@ const layer = Layer.effect(
 
           if (!lastUser) throw new Error("No user message found in stream. This should never happen.")
 
+          // A compaction checkpoint (accuracy D) is a note for the next request,
+          // not something to answer: after a manual compaction ("compact now")
+          // the summary answers the compaction message, and the loop must stop
+          // there rather than resume the agent on the checkpoint.
+          const answering =
+            MessageV2.latest(
+              msgs.filter((msg) => !(isHarnessNote(msg) && HarnessNote.kind(msg.parts) === "checkpoint")),
+            ).user ?? lastUser
+
           const lastAssistantMsg = msgs.findLast(
             (msg) => msg.info.role === "assistant" && msg.info.id === lastAssistant?.id,
           )
@@ -1168,7 +1177,7 @@ const layer = Layer.effect(
             lastAssistant?.finish &&
             !["tool-calls", "unknown"].includes(lastAssistant.finish) &&
             !hasToolCalls &&
-            lastAssistant.parentID === lastUser.id
+            lastAssistant.parentID === answering.id
           ) {
             const orphan = lastAssistantMsg?.parts.find(
               (part): part is SessionV1.ToolPart => part.type === "tool" && isOrphanedInterruptedTool(part),
