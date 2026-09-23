@@ -26,13 +26,14 @@ import {
   isFirstLaunchOnboardingPending,
   isOldLayoutEligible,
 } from "./onboarding"
+import { getDefaultServerUrl, preferAppEnv, setDefaultServerUrl, spawnLocalServer } from "./server"
 import {
-  getDefaultServerUrl,
-  preferAppEnv,
-  setDefaultServerUrl,
-  spawnLocalServer,
-  type SidecarListener,
-} from "./server"
+  createSidecarSupervisor,
+  type SidecarConnection,
+  type SidecarState,
+  type SidecarSupervisor,
+  type StartedSidecar,
+} from "./sidecar-supervisor"
 import { setupAutoUpdater, showUpdaterDialog } from "./updater"
 import { safeWebContentsURL } from "./window-state"
 import {
@@ -77,7 +78,7 @@ const SIDECAR_VERSION = process.env.OPENCODE_SIDECAR_V2 === "1" ? "v2" : "v1"
 const jsCallStackFeature = "DocumentPolicyIncludeJSCallStacksInCrashReports"
 
 let logger: ReturnType<typeof initLogging>
-let server: SidecarListener | null = null
+let sidecar: SidecarSupervisor | null = null
 let connectionFile: ConnectionFile | null = null
 
 const pendingDeepLinks: string[] = []
@@ -99,11 +100,73 @@ function emitDeepLinks(urls: string[]) {
 }
 
 async function killSidecar() {
-  if (!server) return
-  const current = server
-  server = null
+  if (!sidecar) return
+  const current = sidecar
+  sidecar = null
   connectionFile?.remove("sidecar stopped")
   await current.stop()
+}
+
+/** The supervisor's state without the credentials, for the renderer. */
+function publicState(state: SidecarState) {
+  const { connection: _connection, ...rest } = state
+  return rest
+}
+
+async function freeLoopbackPort() {
+  return new Promise<number>((resolve, reject) => {
+    const socket = createServer()
+    socket.on("error", reject)
+    socket.listen(0, "127.0.0.1", () => {
+      const address = socket.address()
+      if (typeof address !== "object" || !address) {
+        socket.close()
+        reject(new Error("Failed to get port"))
+        return
+      }
+      socket.close(() => resolve(address.port))
+    })
+  })
+}
+
+/**
+ * Starts the sidecar and waits until it answers health checks. A restart reuses
+ * the previous port and password, so the renderer and anything holding
+ * server.json keep working; if that port is taken, it falls back to a new one.
+ */
+async function startLocalSidecar(previous: SidecarConnection | undefined): Promise<StartedSidecar> {
+  const fixed = process.env.OPENCODE_PORT ? Number.parseInt(process.env.OPENCODE_PORT, 10) : Number.NaN
+  const port = previous ? Number(new URL(previous.url).port) : Number.isNaN(fixed) ? await freeLoopbackPort() : fixed
+  const password = previous?.password ?? randomUUID()
+  const attempt = async (port: number) => {
+    const hostname = "127.0.0.1"
+    const url = `http://${hostname}:${port}`
+    let exit!: (code: number) => void
+    const exited = new Promise<number>((resolve) => (exit = resolve))
+    logger.log("spawning sidecar", { url, restart: previous !== undefined })
+    const { listener, health } = await spawnLocalServer(hostname, port, password, {
+      userDataPath: app.getPath("userData"),
+      onStdout: (message) => writeLog("server", "stdout", { message }),
+      onStderr: (message) => writeLog("server", "stderr", { message }, "warn"),
+      onExit: (code) => {
+        writeLog("utility", "sidecar exited", { code }, "warn")
+        exit(code)
+      },
+    })
+    await Promise.race([health.wait, new Promise((resolve) => setTimeout(resolve, 30_000))]).catch((error) =>
+      logger.error("sidecar health check failed", String(error)),
+    )
+    return {
+      connection: { url, username: "opencode", password },
+      exited,
+      stop: () => listener.stop(),
+    } satisfies StartedSidecar
+  }
+  if (!previous) return attempt(port)
+  return attempt(port).catch(async (error) => {
+    logger.warn("sidecar restart on the previous port failed; trying a new port", String(error))
+    return attempt(await freeLoopbackPort())
+  })
 }
 
 // Unpackaged dev on Windows has no installer shortcut, so without this the taskbar and every toast
@@ -372,8 +435,10 @@ const main = Effect.gen(function* () {
       function* () {
         logger.log("awaiting server ready")
         const res = yield* Deferred.await(serverReady)
-        logger.log("server ready", { url: res.url })
-        return res
+        // after a supervised restart on a new port, a reloaded window gets the new one
+        const current = sidecar?.connection() ?? res
+        logger.log("server ready", { url: current.url })
+        return current
       },
       (e) => Effect.runPromise(e),
     ),
@@ -394,6 +459,11 @@ const main = Effect.gen(function* () {
     recordFatalRendererError: (error) => writeLog("renderer", "fatal renderer error", { ...error }, "error"),
     setNativeTranslations: (bundle) => {
       if (setNativeTranslations(bundle)) createMenu(menuDeps)
+    },
+    serverState: () => (sidecar ? publicState(sidecar.state()) : null),
+    restartServer: async () => {
+      if (!sidecar) return
+      await sidecar.restart()
     },
   })
   registerWslIpcHandlers(wslServers)
@@ -433,65 +503,39 @@ const main = Effect.gen(function* () {
       return
     }
 
-    const port = yield* Effect.gen(function* () {
-      const fromEnv = process.env.OPENCODE_PORT
-      if (fromEnv) {
-        const parsed = Number.parseInt(fromEnv, 10)
-        if (!Number.isNaN(parsed)) return parsed
-      }
-
-      const res = yield* Deferred.make<number, unknown>()
-      const socket = createServer()
-      socket.on("error", (e) => Deferred.failSync(res, () => e))
-      socket.listen(0, "127.0.0.1", () => {
-        const address = socket.address()
-        if (typeof address !== "object" || !address) {
-          socket.close()
-          Deferred.failSync(res, () => new Error("Failed to get port"))
-          return
+    // The sidecar is supervised: a crash restarts it with a backoff, and too many
+    // crashes in a short window stop it with a visible "failed" state (#43).
+    let firstUrl: string | undefined
+    sidecar = createSidecarSupervisor({
+      start: startLocalSidecar,
+      onState: (state) => {
+        writeLog(
+          "utility",
+          "sidecar state",
+          { status: state.status, restarts: state.restarts, lastExit: state.lastExit, error: state.error },
+          state.status === "failed" ? "error" : "info",
+        )
+        if (state.status === "running" && state.connection) {
+          // atomic (temp file + rename), with the current port and credentials
+          connectionFile?.write(state.connection)
+          firstUrl ??= state.connection.url
+          // a restart that had to move to a new port: windows reload to reconnect
+          if (state.connection.url !== firstUrl) {
+            firstUrl = state.connection.url
+            for (const win of BrowserWindow.getAllWindows()) win.reload()
+          }
         }
-        const port = address.port
-        socket.close(() => Effect.runSync(Deferred.succeed(res, port)))
-      })
-
-      return yield* Deferred.await(res)
+        if (state.status === "restarting" || state.status === "failed")
+          connectionFile?.remove(`sidecar ${state.status}`)
+        sendToAllWindows("server-state", publicState(state))
+      },
     })
-    const hostname = "127.0.0.1"
-    const url = `http://${hostname}:${port}`
-    const password = randomUUID()
-
-    logger.log("spawning sidecar", { url })
-    const { listener, health } = yield* Effect.promise(() =>
-      spawnLocalServer(hostname, port, password, {
-        userDataPath: app.getPath("userData"),
-        onStdout: (message) => writeLog("server", "stdout", { message }),
-        onStderr: (message) => writeLog("server", "stderr", { message }, "warn"),
-        onExit: (code) => {
-          writeLog("utility", "sidecar exited", { code }, "warn")
-          connectionFile?.remove("sidecar exited")
-        },
-      }),
-    )
-    server = listener
-    connectionFile?.write({ url, username: "opencode", password })
-    yield* Deferred.succeed(serverReady, {
-      url,
-      username: "opencode",
-      password,
-    })
+    const connection = yield* Effect.promise(() => sidecar!.start())
+    yield* Deferred.succeed(serverReady, connection)
 
     if (process.platform === "win32") {
       void wslServers.initialize().catch((error) => logger.error("wsl server initialization failed", error))
     }
-
-    yield* Effect.promise(() => health.wait).pipe(
-      Effect.timeout("30 seconds"),
-      Effect.catch((e) =>
-        Effect.sync(() => {
-          logger.error("sidecar health check failed", e.toString())
-        }),
-      ),
-    )
 
     logger.log("loading task finished")
   }).pipe(forwardInitializationFailure(serverReady), Effect.forkChild)

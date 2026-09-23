@@ -11,6 +11,7 @@
     "./updater": "./src/updater.ts",
     "./wsl/types": "./src/wsl/types.ts",
     "./goal-loop/types": "./src/goal-loop/types.ts",
+    "./server-status/view": "./src/server-status/view.ts",
     "./vite": "./vite.js",
     "./index.css": "./src/index.css"
   },

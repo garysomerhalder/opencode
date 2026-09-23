@@ -1402,6 +1402,10 @@ export const dict = {
   "taskDock.wake.stopped": "stopped, no wake",
   "taskDock.wake.reaped": "no wake",
   "taskDock.action.stop": "Stop this task",
+  "serverStatus.restarting":
+    "The local server stopped unexpectedly (exit {{code}}). Restarting in {{seconds}}s (restart {{attempt}}).",
+  "serverStatus.failed": "The local server stopped and was not restarted (exit {{code}}). {{reason}}",
+  "serverStatus.action.restart": "Restart server",
   "session.question.progress": "{{current}} od {{total}} pitanja",
   "session.header.open.finder": "Finder",
   "session.header.open.fileExplorer": "File Explorer",

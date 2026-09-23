@@ -956,6 +956,10 @@ export const dict: Record<string, string> = {
   "taskDock.wake.stopped": "stopped, no wake",
   "taskDock.wake.reaped": "no wake",
   "taskDock.action.stop": "Stop this task",
+  "serverStatus.restarting":
+    "The local server stopped unexpectedly (exit {{code}}). Restarting in {{seconds}}s (restart {{attempt}}).",
+  "serverStatus.failed": "The local server stopped and was not restarted (exit {{code}}). {{reason}}",
+  "serverStatus.action.restart": "Restart server",
   "session.question.progress": "{{total}} প্রশ্নের {{current}}",
   "session.question.minimize": "প্রশ্ন ছোট করুন",
   "session.question.restore": "প্রশ্ন পুনরুদ্ধার করুন",
