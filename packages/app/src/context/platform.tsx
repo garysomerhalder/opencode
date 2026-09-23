@@ -3,6 +3,7 @@ import type { AsyncStorage, SyncStorage } from "@solid-primitives/storage"
 import type { Accessor } from "solid-js"
 import type { DesktopMenuAction } from "../desktop-menu"
 import type { GoalLoopPlatform } from "../goal-loop/types"
+import type { ServerStatePlatform } from "../server-status/view"
 import type { TicketIssue } from "../goal-loop/ticket"
 import { ServerConnection } from "./server"
 import type { WslServersPlatform } from "../wsl/types"
@@ -126,6 +127,9 @@ type PlatformBase = {
 
   /** Autonomous goal loop driver in the desktop shell (desktop only) */
   goalLoop?: GoalLoopPlatform
+
+  /** The local server the desktop shell supervises: restart state and a manual restart (desktop only) */
+  server?: ServerStatePlatform
 
   /** Linear API key storage and validation in the desktop shell (desktop only) */
   linear?: LinearSettingsPlatform

@@ -142,6 +142,15 @@ const api: ElectronAPI = {
       return () => ipcRenderer.removeListener("goal-loop-event", handler)
     },
   },
+  server: {
+    state: () => ipcRenderer.invoke("server-state"),
+    restart: () => ipcRenderer.invoke("server-restart"),
+    onState: (cb) => {
+      const handler = (_: unknown, state: Parameters<typeof cb>[0]) => cb(state)
+      ipcRenderer.on("server-state", handler)
+      return () => ipcRenderer.removeListener("server-state", handler)
+    },
+  },
   setBackgroundColor: (color: string) => ipcRenderer.invoke("set-background-color", color),
   exportDebugLogs: () => ipcRenderer.invoke("export-debug-logs"),
   setForceFocus: (enabled) => ipcRenderer.invoke("set-force-focus", enabled),

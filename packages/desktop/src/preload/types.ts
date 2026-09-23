@@ -3,6 +3,7 @@ import type { GoalLoopEvent, GoalLoopStartInput, GoalLoopState } from "@opencode
 import type { WslServersPlatform } from "@opencode-ai/app/wsl/types"
 import type { UpdaterState } from "@opencode-ai/app/updater"
 import type { DesktopNativeBundle } from "@opencode-ai/app/i18n/desktop-native"
+import type { ServerState } from "@opencode-ai/app/server-status/view"
 export type { GoalLoopEvent, GoalLoopStartInput, GoalLoopState, GoalTicket } from "@opencode-ai/app/goal-loop/types"
 export type {
   WslDistroProbe,
@@ -193,6 +194,11 @@ export type ElectronAPI = {
     dismiss: (sessionID: string) => Promise<void>
     last: (sessionID?: string) => Promise<GoalLoopStartInput | null>
     onEvent: (cb: (event: GoalLoopEvent) => void) => () => void
+  }
+  server: {
+    state: () => Promise<ServerState | null>
+    restart: () => Promise<void>
+    onState: (cb: (state: ServerState) => void) => () => void
   }
   setBackgroundColor: (color: string) => Promise<void>
   exportDebugLogs: () => Promise<string>

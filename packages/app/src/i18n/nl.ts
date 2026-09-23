@@ -963,6 +963,10 @@ export const dict = {
   "taskDock.wake.stopped": "stopped, no wake",
   "taskDock.wake.reaped": "no wake",
   "taskDock.action.stop": "Stop this task",
+  "serverStatus.restarting":
+    "The local server stopped unexpectedly (exit {{code}}). Restarting in {{seconds}}s (restart {{attempt}}).",
+  "serverStatus.failed": "The local server stopped and was not restarted (exit {{code}}). {{reason}}",
+  "serverStatus.action.restart": "Restart server",
   "session.question.progress": "{{current}} van {{total}} vragen",
   "session.question.minimize": "Minimaliseer de vraag",
   "session.question.restore": "Vraag herstellen",

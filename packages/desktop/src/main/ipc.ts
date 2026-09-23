@@ -9,6 +9,7 @@ import { parseDesktopNativeBundle, type DesktopNativeBundle } from "@opencode-ai
 import type { FatalRendererError, ServerReadyData, TitlebarTheme } from "../preload/types"
 import type { GoalLoopStartInput } from "./goal-loop"
 import type { GoalLoops } from "./goal-loops"
+import type { ServerState } from "@opencode-ai/app/server-status/view"
 import { runDesktopMenuAction } from "./desktop-menu-actions"
 import { setForceFocus } from "./debug"
 import { assertAttachmentBudget, createPickedFileAuthorizations } from "./attachment-picker"
@@ -57,6 +58,9 @@ type Deps = {
   exportDebugLogs: () => Promise<string>
   recordFatalRendererError: (error: FatalRendererError) => Promise<void> | void
   setNativeTranslations: (bundle: DesktopNativeBundle) => void
+  /** The supervised local server: its state, and a manual restart after it gave up. */
+  serverState: () => ServerState | null
+  restartServer: () => Promise<void>
 }
 
 export function registerIpcHandlers(deps: Deps) {
@@ -68,6 +72,8 @@ export function registerIpcHandlers(deps: Deps) {
   app.on("browser-window-created", (_event, win) => win.on("session-end", () => drafts.flush()))
 
   ipcMain.handle("kill-sidecar", () => deps.killSidecar())
+  ipcMain.handle("server-state", () => deps.serverState())
+  ipcMain.handle("server-restart", () => deps.restartServer())
   ipcMain.handle("await-initialization", () => deps.awaitInitialization())
   ipcMain.handle("consume-initial-deep-links", () => deps.consumeInitialDeepLinks())
   ipcMain.handle("get-default-server-url", () => deps.getDefaultServerUrl())

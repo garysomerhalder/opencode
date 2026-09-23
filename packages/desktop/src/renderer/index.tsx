@@ -253,6 +253,12 @@ const createPlatform = (windowState: DesktopWindowState): Platform => {
       last: (sessionID) => window.api.goalLoop.last(sessionID),
     },
 
+    server: {
+      state: () => window.api.server.state(),
+      restart: () => window.api.server.restart(),
+      subscribe: (cb) => window.api.server.onState(cb),
+    },
+
     linear: {
       hasKey: () => window.api.linear.hasKey(),
       setKey: (key) => window.api.linear.setKey(key),
