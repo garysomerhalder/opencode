@@ -1,0 +1,309 @@
+// Token usage analysis for the session database (#47, Muse token efficiency).
+//
+// Pure: plain step records in, numbers out. The CLI (token-report.ts) reads
+// the database and prints; everything that decides a number lives here so it
+// is tested and ports as-is.
+//
+// A "step" is one model request: its step-finish part carries the token counts
+// the provider reported. The prompt of a request is uncached input + cached
+// read + cache write.
+
+import { OutputBudget } from "../src/session/output-budget"
+
+/** Dollars per million tokens. */
+export interface Price {
+  readonly input: number
+  readonly output: number
+  readonly cacheRead: number
+  readonly cacheWrite?: number
+}
+
+export interface ToolOutput {
+  readonly tool: string
+  readonly callID: string
+  /** Bytes of the output the model sees (after the per-call cap). */
+  readonly bytes: number
+  /** Already cut to a file by the per-call cap or the shell. */
+  readonly cut: boolean
+}
+
+export interface Step {
+  readonly session: string
+  readonly message: string
+  readonly agent: string
+  readonly provider: string
+  readonly model: string
+  readonly time: number
+  readonly input: number
+  readonly output: number
+  readonly reasoning: number
+  readonly cacheRead: number
+  readonly cacheWrite: number
+  readonly cost: number
+  /** The request that wrote a compaction summary. */
+  readonly summary: boolean
+  /** Tool outputs produced in this step (they are in the prompt from the next step on). */
+  readonly tools: ReadonlyArray<ToolOutput>
+}
+
+export const promptTokens = (step: Step) => step.input + step.cacheRead + step.cacheWrite
+
+/** Below this a request is too small for a cache miss to matter. */
+const MISS_FLOOR = 20_000
+
+/** Most of a large prompt went uncached: the provider did not reuse its cache for this request. */
+export function fullMiss(step: Step) {
+  const prompt = promptTokens(step)
+  return prompt >= MISS_FLOOR && step.input >= 0.5 * prompt
+}
+
+export function priced(
+  tokens: { input: number; cacheRead: number; cacheWrite?: number; output: number; reasoning?: number },
+  price: Price,
+) {
+  const input = (tokens.input * price.input) / 1e6
+  const cacheRead = (tokens.cacheRead * price.cacheRead) / 1e6
+  const cacheWrite = ((tokens.cacheWrite ?? 0) * (price.cacheWrite ?? price.input)) / 1e6
+  const output = ((tokens.output + (tokens.reasoning ?? 0)) * price.output) / 1e6
+  return { input, cacheRead, cacheWrite, output, total: input + cacheRead + cacheWrite + output }
+}
+
+export function quantile(values: ReadonlyArray<number>, q: number) {
+  if (values.length === 0) return 0
+  const sorted = values.toSorted((a, b) => a - b)
+  return sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(q * sorted.length) - 1))]
+}
+
+export interface Totals {
+  readonly requests: number
+  readonly prompt: number
+  readonly input: number
+  readonly cacheRead: number
+  readonly cacheWrite: number
+  readonly output: number
+  readonly reasoning: number
+  readonly reportedCost: number
+  readonly promptMean: number
+  readonly promptP50: number
+  readonly promptP90: number
+  readonly promptMax: number
+  readonly inputMean: number
+  readonly fullMisses: number
+  readonly fullMissInput: number
+  readonly cost: ReturnType<typeof priced>
+}
+
+export function totals(steps: ReadonlyArray<Step>, price: Price): Totals {
+  const prompts = steps.map(promptTokens)
+  const sum = (pick: (step: Step) => number) => steps.reduce((total, step) => total + pick(step), 0)
+  const misses = steps.filter(fullMiss)
+  const tokens = {
+    input: sum((s) => s.input),
+    cacheRead: sum((s) => s.cacheRead),
+    cacheWrite: sum((s) => s.cacheWrite),
+    output: sum((s) => s.output),
+    reasoning: sum((s) => s.reasoning),
+  }
+  const prompt = prompts.reduce((a, b) => a + b, 0)
+  return {
+    requests: steps.length,
+    prompt,
+    ...tokens,
+    reportedCost: sum((s) => s.cost),
+    promptMean: steps.length ? prompt / steps.length : 0,
+    promptP50: quantile(prompts, 0.5),
+    promptP90: quantile(prompts, 0.9),
+    promptMax: prompts.length ? Math.max(...prompts) : 0,
+    inputMean: steps.length ? tokens.input / steps.length : 0,
+    fullMisses: misses.length,
+    fullMissInput: misses.reduce((total, s) => total + s.input, 0),
+    cost: priced(tokens, price),
+  }
+}
+
+export function group<K>(steps: ReadonlyArray<Step>, key: (step: Step) => K) {
+  const groups = new Map<K, Step[]>()
+  for (const step of steps) {
+    const k = key(step)
+    const list = groups.get(k)
+    if (list) list.push(step)
+    else groups.set(k, [step])
+  }
+  return groups
+}
+
+/** Steps per prompt-size bucket; `edges` are the upper bounds, ascending. */
+export function histogram(steps: ReadonlyArray<Step>, edges: ReadonlyArray<number>) {
+  const counts = edges.map(() => 0)
+  let over = 0
+  for (const step of steps) {
+    const prompt = promptTokens(step)
+    const index = edges.findIndex((edge) => prompt < edge)
+    if (index === -1) over++
+    else counts[index]++
+  }
+  return { edges, counts, over }
+}
+
+/** Steps in time order within each session. */
+export function sessions(steps: ReadonlyArray<Step>) {
+  const bySession = group(steps, (step) => step.session)
+  for (const list of bySession.values()) list.sort((a, b) => a.time - b.time)
+  return bySession
+}
+
+/**
+ * Tokens per byte of tool output, from consecutive steps of one turn: the next
+ * prompt grows by the previous step's output tokens plus its tool outputs.
+ * Only pairs where tool output dominates the growth are used.
+ */
+export function calibrate(steps: ReadonlyArray<Step>) {
+  let tokens = 0
+  let bytes = 0
+  const ratios: number[] = []
+  for (const all of sessions(steps).values()) {
+    const list = all.filter((step) => promptTokens(step) > 0)
+    for (let i = 1; i < list.length; i++) {
+      const previous = list[i - 1]
+      const current = list[i]
+      if (previous.summary || current.summary) continue
+      const added = previous.tools.reduce((total, tool) => total + tool.bytes, 0)
+      if (added < 8_000) continue
+      const growth = promptTokens(current) - promptTokens(previous) - previous.output
+      if (growth <= 0) continue
+      tokens += growth
+      bytes += added
+      ratios.push(growth / added)
+    }
+  }
+  return { tokensPerByte: bytes ? tokens / bytes : 0.25, pairs: ratios.length, median: quantile(ratios, 0.5) }
+}
+
+/** No request is smaller than this: the base system prompt and built-in tools. */
+const MIN_PROMPT = 10_000
+
+export interface Lever {
+  /** Compact when the prompt reaches this many tokens. */
+  readonly compactAt?: number
+  /** The per-step tool-output budget. */
+  readonly budget?: OutputBudget.Settings
+  /** Tokens taken off every request (system prompt, skill list). */
+  readonly perRequestCut?: number
+}
+
+export interface ProjectOptions {
+  readonly tokensPerByte: number
+  /** Prompt size right after a compaction (system prompt + summary + kept tail). */
+  readonly afterCompaction: number
+  /** Output tokens of a summary request. */
+  readonly summaryOutput: number
+}
+
+export interface Projection {
+  readonly requests: number
+  readonly compactions: number
+  readonly prompt: number
+  readonly promptMax: number
+  readonly input: number
+  readonly cacheRead: number
+  readonly output: number
+}
+
+/**
+ * Replays one session's requests with a lever applied.
+ *
+ * The simulated prompt follows the actual prompt's growth from step to step,
+ * minus what the lever removes; where the actual prompt shrank (a compaction
+ * that really happened) the simulated one shrinks to at most the actual size.
+ * Uncached input keeps its actual size for an ordinary step (the new tokens of
+ * that step); for a full cache miss it is the whole simulated prompt, scaled by
+ * the actual miss ratio. A simulated compaction costs one summary request with
+ * its prompt sent uncached (as observed: summary requests read no cache) and
+ * makes the next request a full miss. With no lever it reproduces the actual
+ * numbers exactly.
+ */
+export function project(steps: ReadonlyArray<Step>, lever: Lever, options: ProjectOptions): Projection {
+  const cut = lever.perRequestCut ?? 0
+  let requests = 0
+  let compactions = 0
+  let prompt = 0
+  let promptMax = 0
+  let input = 0
+  let cacheRead = 0
+  let output = 0
+  let simulated = 0
+  let previousActual = 0
+  let carried = 0
+  let missNext = false
+  // the product's guard (overflow.ts overThreshold): after a compaction, the next
+  // one needs half a threshold of growth over the first prompt after it
+  let floor: number | undefined
+  let floorPending = false
+
+  const send = (size: number, uncached: number, out: number) => {
+    requests++
+    prompt += size
+    promptMax = Math.max(promptMax, size)
+    input += uncached
+    cacheRead += size - uncached
+    output += out
+  }
+
+  // A request that failed reports no tokens: it cost nothing and says nothing
+  // about the prompt, so it is not replayed.
+  steps
+    .filter((step) => promptTokens(step) > 0)
+    .forEach((step, index) => {
+      const actual = promptTokens(step)
+      if (index === 0) simulated = actual
+      else {
+        const growth = actual - previousActual
+        simulated = growth >= 0 ? simulated + growth - carried : Math.min(simulated, actual)
+      }
+      carried = 0
+      previousActual = actual
+
+      const limit =
+        lever.compactAt === undefined
+          ? undefined
+          : floor === undefined
+            ? lever.compactAt
+            : Math.max(lever.compactAt, floor + Math.floor(lever.compactAt / 2))
+      if (limit !== undefined && !step.summary && Math.max(MIN_PROMPT, simulated - cut) >= limit) {
+        compactions++
+        const before = Math.max(MIN_PROMPT, simulated - cut)
+        send(before, before, options.summaryOutput)
+        // the observed prompt after a compaction includes whatever the cut removes
+        simulated = Math.min(simulated, options.afterCompaction)
+        missNext = true
+        floorPending = true
+      }
+
+      const size = Math.max(MIN_PROMPT, simulated - cut)
+      if (floorPending) {
+        floor = size
+        floorPending = false
+      }
+      const uncached = missNext
+        ? size
+        : fullMiss(step)
+          ? Math.min(size, Math.round((step.input / actual) * size))
+          : Math.min(size, step.input)
+      missNext = false
+      send(size, uncached, step.output + step.reasoning)
+      if (step.reasoning) output -= step.reasoning
+
+      if (lever.budget) {
+        const decisions = OutputBudget.plan(
+          step.tools.map((tool) => ({ callID: tool.callID, tool: tool.tool, bytes: tool.bytes, archived: tool.cut })),
+          lever.budget,
+        )
+        const removed = decisions.reduce((total, d) => total + d.bytes - d.maxBytes, 0)
+        carried = Math.round(removed * options.tokensPerByte)
+      }
+    })
+
+  return { requests, compactions, prompt, promptMax, input, cacheRead, output }
+}
+
+export * as TokenUsage from "./token-usage"
