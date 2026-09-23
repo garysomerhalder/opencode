@@ -27,6 +27,8 @@ export type GoalLoopServer = {
 export type GoalLoopDeps = {
   getServer: () => Promise<GoalLoopServer>
   fetchImpl?: typeof fetch
+  /** One-line warnings for the log (e.g. when the compaction backstop has to fire). */
+  warn?: (message: string, detail: Record<string, unknown>) => void
   now?: () => number
   randomID?: () => string
   onEvent?: (event: GoalLoopEvent) => void
@@ -489,6 +491,13 @@ export function createGoalLoop(deps: GoalLoopDeps) {
       const context = contextOf(messages)
       if (context && context.tokens > compactAtTokens && context.id !== track.compactedFor) {
         track.compactedFor = context.id
+        // A backstop only: goal-loop turns are autonomous, and the server compacts
+        // those at its own threshold (150K by default) long before this. Reaching
+        // it means that threshold is off or set too high, so say so.
+        deps.warn?.(
+          "goal loop compacted the session itself: the server's compaction threshold did not (is experimental.accuracy.autonomous_compact_at off, or compaction.threshold set above the backstop?)",
+          { sessionID, tokens: context.tokens, backstopAt: compactAtTokens },
+        )
         await compact(messages, `compacted the session at ${context.tokens} tokens`)
         if (!alive()) return
       }

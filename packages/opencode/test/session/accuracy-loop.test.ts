@@ -919,6 +919,41 @@ it.instance(
   60_000,
 )
 
+// The server half of the goal loop's backstop test (goal-loop.test.ts): with no
+// compaction settings at all, an autonomous turn on a 1M-window model compacts at
+// the 150K default, long before the desktop's 600K backstop.
+it.instance(
+  "with no settings, an autonomous turn on a 1M-window model compacts at the 150K default",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useConfig(undefined, {
+        provider: {
+          test: {
+            ...provider.test,
+            models: {
+              "test-model": { ...provider.test.models["test-model"], limit: { context: 1_048_576, output: 131_072 } },
+            },
+            options: { ...provider.test.options, baseURL: (yield* TestLLMServer).url },
+          },
+        },
+      })
+      const prompt = yield* SessionPrompt.Service
+      const chat = yield* session()
+      yield* llm.push(reply().tool("glob", { pattern: "*.none" }).usage({ input: 160_000, output: 10 }))
+      yield* llm.text("summary")
+      yield* llm.text("done")
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        autonomous: true,
+        parts: [{ type: "text", text: "hi" }],
+      })
+      expect(yield* llm.hits).toHaveLength(3)
+      expect(yield* compactions(chat.id)).toHaveLength(1)
+    }),
+  60_000,
+)
+
 // D. compaction checkpoints (#6, docs/accuracy-d.md)
 
 const withTodos = Effect.fn("test.withTodos")(function* (sessionID: string) {
