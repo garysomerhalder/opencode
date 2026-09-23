@@ -19,6 +19,8 @@ import { WebFetchTool } from "./webfetch"
 import { WriteTool } from "./write"
 import { InvalidTool } from "./invalid"
 import { SkillTool } from "./skill"
+import { VerdictTool } from "./verdict"
+import { Snapshot } from "@/snapshot"
 import * as Tool from "./tool"
 import { Config } from "@/config/config"
 import { type ToolContext as PluginToolContext, type ToolDefinition } from "@opencode-ai/plugin"
@@ -66,6 +68,9 @@ export function webSearchEnabled(providerID: ProviderV2.ID, flags = { exa: false
     flags.parallel
   )
 }
+
+/** What the verifier may be offered: Permission.VERIFIER_LOCK allows these and nothing else. */
+const VERIFIER_TOOLS = new Set([ReadTool.id, GlobTool.id, GrepTool.id, LspTool.id, VerdictTool.id])
 
 type TaskDef = Tool.InferDef<typeof TaskTool>
 type ReadDef = Tool.InferDef<typeof ReadTool>
@@ -119,6 +124,7 @@ const layer = Layer.effect(
     const greptool = yield* GrepTool
     const patchtool = yield* ApplyPatchTool
     const skilltool = yield* SkillTool
+    const verdicttool = yield* VerdictTool
     const agent = yield* Agent.Service
     const codeMode = flags.experimentalCodeMode ? yield* Effect.promise(() => import("./code-mode")) : undefined
     const codeModeTool = codeMode ? yield* codeMode.CodeModeTool : undefined
@@ -229,6 +235,7 @@ const layer = Layer.effect(
           shellStop: Tool.init(shellStop),
           lsp: Tool.init(lsptool),
           plan: Tool.init(plan),
+          verdict: Tool.init(verdicttool),
           ...(codeModeTool ? { execute: Tool.init(codeModeTool) } : {}),
         })
 
@@ -253,6 +260,7 @@ const layer = Layer.effect(
             ...(tool.execute ? [tool.execute] : []),
             ...(flags.experimentalLspTool ? [tool.lsp] : []),
             ...(flags.experimentalPlanMode && flags.client === "cli" ? [tool.plan] : []),
+            tool.verdict,
           ],
           task: tool.task,
           read: tool.read,
@@ -295,7 +303,13 @@ const layer = Layer.effect(
     })
 
     const tools: Interface["tools"] = Effect.fn("ToolRegistry.tools")(function* (input) {
-      const filtered = (yield* all()).filter((tool) => {
+      // The verifier (accuracy E) gets the built-in read-only tools and the
+      // verdict tool, never a custom or plugin tool, whatever it is named.
+      // Nobody else gets the verdict tool.
+      const candidates = Permission.isVerifier(input.agent)
+        ? (yield* InstanceState.get(state)).builtin.filter((tool) => VERIFIER_TOOLS.has(tool.id))
+        : (yield* all()).filter((tool) => tool.id !== VerdictTool.id)
+      const filtered = candidates.filter((tool) => {
         if (tool.id === WebSearchTool.id) {
           return webSearchEnabled(input.providerID, { exa: flags.enableExa, parallel: flags.enableParallel })
         }
@@ -462,6 +476,7 @@ export const node = LayerNode.make({
     MCP.node,
     Database.node,
     Ripgrep.node,
+    Snapshot.node,
   ],
 })
 

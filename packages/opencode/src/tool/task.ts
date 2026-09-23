@@ -7,6 +7,7 @@ import { Session } from "@/session/session"
 import { SessionID, MessageID } from "../session/schema"
 import { MessageV2 } from "../session/message-v2"
 import { Agent } from "../agent/agent"
+import { Permission } from "@/permission"
 import { deriveSubagentSessionPermission } from "../agent/subagent-permissions"
 import type { SessionPrompt } from "../session/prompt"
 import { Config } from "@/config/config"
@@ -134,6 +135,12 @@ export const TaskTool = Tool.define(
       const next = yield* agent.get(params.subagent_type)
       if (!next) {
         return yield* Effect.fail(new Error(`Unknown agent type: ${params.subagent_type} is not a valid agent type`))
+      }
+      // The verifier judges a worker's claim (accuracy E); a worker does not get to start it.
+      if (Permission.isVerifier(next)) {
+        return yield* Effect.fail(
+          new Error(`The ${next.name} agent is started by the goal loop, not by the task tool.`),
+        )
       }
 
       const session = params.task_id
