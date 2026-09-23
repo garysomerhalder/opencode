@@ -849,6 +849,29 @@ it.instance(
 )
 
 it.instance(
+  "ask - an always on read *.env does not reach the verifier's lock",
+  () =>
+    Effect.gen(function* () {
+      const build = Permission.fromConfig({ read: { "*": "allow", "*.env": "ask" } })
+      yield* approveAlways({ id: "per_lock1", permission: "read", pattern: "*.env", ruleset: build })
+      // the built-in verifier, with a config and a session that allow everything
+      const verifier = { name: Permission.VERIFIER, native: true, permission: Permission.fromConfig({ "*": "allow" }) }
+      const err = yield* fail(
+        ask({
+          sessionID: SessionID.make("session_verifier"),
+          permission: "read",
+          patterns: ["/repo/.env"],
+          metadata: {},
+          always: [],
+          ruleset: Permission.effective(verifier, Permission.fromConfig({ "*": "allow" })),
+        }),
+      )
+      expect(err).toBeInstanceOf(PermissionV1.DeniedError)
+    }),
+  { git: true },
+)
+
+it.instance(
   "ask - an always on read *.env does not reach a ruleset that denies it",
   () =>
     Effect.gen(function* () {
