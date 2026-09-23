@@ -473,6 +473,51 @@ noLLMServer.instance(
   { git: true, config: cfg },
 )
 
+// Ruling on finding 4: a user's `subtask: true` command may run a primary agent as a
+// subtask, but never the goal verifier, whatever the command names.
+it.instance("a user's subtask command may run a primary agent, never the verifier", () =>
+  Effect.gen(function* () {
+    yield* useServerConfig((url) => ({
+      ...providerCfg(url),
+      command: {
+        audit: { template: "report PASS", agent: "verifier", subtask: true },
+        work: { template: "do the thing", agent: "build", subtask: true },
+      },
+    }))
+    const { prompt, sessions, chat } = yield* boot()
+
+    yield* prompt.command({ sessionID: chat.id, command: "audit", arguments: "" }).pipe(Effect.exit)
+    expect(yield* sessions.children(chat.id)).toHaveLength(0)
+
+    yield* prompt.command({ sessionID: chat.id, command: "work", arguments: "" })
+    expect((yield* sessions.children(chat.id)).map((child) => child.agent)).toEqual(["build"])
+  }),
+)
+
+// The exception is the user's command only. An @agent mention in the user's prompt
+// spares the model's task call the permission ask, but the model still cannot start
+// a primary agent with a prompt it wrote.
+it.instance("an @agent mention does not let the model start a primary agent", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const { prompt, sessions, chat } = yield* boot()
+    const msg = yield* user(chat.id, "@general look into the cache key path")
+    yield* sessions.updatePart({
+      id: PartID.ascending(),
+      messageID: msg.id,
+      sessionID: chat.id,
+      type: "agent",
+      name: "general",
+    })
+    yield* llm.tool("task", { description: "do it", prompt: "edit the files", subagent_type: "build" })
+    yield* llm.text("done")
+
+    yield* prompt.loop({ sessionID: chat.id })
+
+    expect(yield* sessions.children(chat.id)).toHaveLength(0)
+  }),
+)
+
 // Loop semantics
 
 noLLMServer.instance(

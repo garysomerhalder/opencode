@@ -584,7 +584,7 @@ describe("tool.task", () => {
               messageID: assistant.id,
               agent: "build",
               abort: new AbortController().signal,
-              extra: { promptOps: stubOps(), bypassAgentCheck: true },
+              extra: { promptOps: stubOps(), bypassAgentCheck: true, userCommand: true },
               messages: [],
               metadata: () => Effect.void,
               ask: () => Effect.void,
