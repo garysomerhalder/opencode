@@ -2065,6 +2065,7 @@ export type Config = {
     tail_turns?: number
     preserve_recent_tokens?: number
     reserved?: number
+    threshold?: number
   }
   experimental?: {
     disable_paste_summary?: boolean
@@ -2083,6 +2084,7 @@ export type Config = {
       output_receipts?: boolean
       output_budget?: boolean
       output_budget_step_bytes?: number
+      autonomous_compact_at?: number
       output_budget_floor_bytes?: number
     }
     policies?: Array<ConfigV2ExperimentalPolicy>

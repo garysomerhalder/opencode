@@ -52,3 +52,76 @@ const NEAR_OVERFLOW_RATIO = 0.9
 function count(tokens: SessionV1.Assistant["tokens"]) {
   return tokens.total || tokens.input + tokens.output + tokens.cache.read + tokens.cache.write
 }
+
+/**
+ * Autonomous turns compact once the prompt reaches this many tokens (#47).
+ * Every request resends the whole prompt, so a long autonomous turn that only
+ * compacts at a 1M window pays for ~500k tokens a request on average (measured
+ * over the Muses' 7.9k requests); a cache miss resends all of it uncached.
+ * Replaying those requests with compaction at 150k projected about -71% cost
+ * (the lowest of 100k-400k).
+ */
+export const AUTONOMOUS_COMPACT_AT = 150_000
+
+/**
+ * Prompt size at which to compact before the model's limit, or undefined to
+ * compact only at the limit. `compaction.threshold` applies to every turn;
+ * otherwise autonomous turns use `experimental.accuracy.autonomous_compact_at`
+ * (default AUTONOMOUS_COMPACT_AT). 0 turns either off; so does
+ * `compaction.auto: false`. This is separate from `usable()`, which stays the
+ * model's real limit: the near-overflow reading of an opaque 400 and the
+ * preserved-tail budget depend on it.
+ */
+export function compactionThreshold(input: { cfg: ConfigV1.Info; autonomous?: boolean }): number | undefined {
+  if (input.cfg.compaction?.auto === false) return undefined
+  const configured = input.cfg.compaction?.threshold
+  if (configured !== undefined) return configured > 0 ? configured : undefined
+  if (input.autonomous !== true) return undefined
+  const autonomous = input.cfg.experimental?.accuracy?.autonomous_compact_at ?? AUTONOMOUS_COMPACT_AT
+  return autonomous > 0 ? autonomous : undefined
+}
+
+/**
+ * The prompt of the last finished request is at the threshold. After a
+ * compaction, `floor` is the prompt of the first request that followed it (the
+ * system prompt, the summary and the kept tail); the prompt must then also have
+ * grown by half a threshold over it, so a heavy system prompt cannot make every
+ * request compact again.
+ */
+export function overThreshold(input: {
+  tokens: SessionV1.Assistant["tokens"]
+  threshold: number | undefined
+  floor?: number
+}) {
+  if (input.threshold === undefined) return false
+  const limit =
+    input.floor === undefined
+      ? input.threshold
+      : Math.max(input.threshold, input.floor + Math.floor(input.threshold / 2))
+  return count(input.tokens) >= limit
+}
+
+/**
+ * The prompt size of the first finished request after the latest compaction
+ * summary, or undefined when the session has not compacted (or nothing has
+ * finished since). Works on any message order.
+ */
+export function floorAfterCompaction(messages: ReadonlyArray<SessionV1.WithParts>) {
+  const assistants = messages
+    .map((message) => message.info)
+    .filter((info): info is SessionV1.Assistant => info.role === "assistant")
+  const summary = assistants
+    .filter((info) => info.summary === true)
+    .reduce<
+      SessionV1.Assistant | undefined
+    >((latest, info) => (!latest || info.time.created > latest.time.created ? info : latest), undefined)
+  if (!summary) return undefined
+  const first = assistants
+    .filter((info) => info.summary !== true && info.finish && info.time.created > summary.time.created)
+    .filter((info) => count(info.tokens) > 0)
+    .reduce<SessionV1.Assistant | undefined>(
+      (earliest, info) => (!earliest || info.time.created < earliest.time.created ? info : earliest),
+      undefined,
+    )
+  return first ? count(first.tokens) : undefined
+}

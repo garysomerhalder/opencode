@@ -182,7 +182,10 @@ const provider = {
   },
 }
 
-const useConfig = Effect.fn("test.useConfig")(function* (accuracy?: Record<string, unknown>) {
+const useConfig = Effect.fn("test.useConfig")(function* (
+  accuracy?: Record<string, unknown>,
+  extra: Partial<ConfigV1.Info> = {},
+) {
   const { directory } = yield* TestInstance
   const llm = yield* TestLLMServer
   const fs = yield* FSUtil.Service
@@ -192,6 +195,7 @@ const useConfig = Effect.fn("test.useConfig")(function* (accuracy?: Record<strin
       test: { ...provider.test, options: { ...provider.test.options, baseURL: llm.url } },
     },
     ...(accuracy ? ({ experimental: { accuracy } } as Partial<ConfigV1.Info>) : {}),
+    ...extra,
   }
   yield* fs.writeWithDirs(
     path.join(directory, "opencode.json"),
@@ -771,6 +775,101 @@ it.instance(
       expect(next).not.toContain("<tool-output-archived")
       expect(next).toContain("needle 99")
       expect(next).toContain(secret)
+    }),
+  60_000,
+)
+
+// Compaction threshold (#47): long autonomous turns compact well before the model limit
+
+const compactions = Effect.fn("test.compactions")(function* (sessionID: string) {
+  const sessions = yield* Session.Service
+  const msgs = yield* sessions.messages({ sessionID: sessionID as any })
+  return msgs.flatMap((msg) => msg.parts.filter((part) => part.type === "compaction"))
+})
+
+// test-model: context 100_000, output 10_000 -> the model limit is 90_000. A step
+// that reports 45_000 prompt tokens is far from it, but over a 40_000 threshold.
+const bigStep = () => reply().tool("glob", { pattern: "*.none" }).usage({ input: 45_000, output: 10 })
+
+it.instance(
+  "an autonomous turn compacts at the autonomous threshold, before the model limit",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useConfig({ autonomous_compact_at: 40_000 })
+      const prompt = yield* SessionPrompt.Service
+      const chat = yield* session()
+      yield* llm.push(bigStep())
+      yield* llm.text("summary")
+      yield* llm.text("done")
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        autonomous: true,
+        parts: [{ type: "text", text: "hi" }],
+      })
+      expect(yield* llm.hits).toHaveLength(3)
+      const parts = yield* compactions(chat.id)
+      expect(parts).toHaveLength(1)
+      expect((parts[0] as { auto?: boolean }).auto).toBe(true)
+    }),
+  60_000,
+)
+
+it.instance(
+  "an interactive turn with the same prompt does not compact by default",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useConfig({ autonomous_compact_at: 40_000 })
+      const prompt = yield* SessionPrompt.Service
+      const chat = yield* session()
+      yield* llm.push(bigStep())
+      yield* llm.text("done")
+      yield* prompt.prompt({ sessionID: chat.id, agent: "build", parts: [{ type: "text", text: "hi" }] })
+      expect(yield* llm.hits).toHaveLength(2)
+      expect(yield* compactions(chat.id)).toHaveLength(0)
+    }),
+  60_000,
+)
+
+it.instance(
+  "compaction.threshold makes any turn compact at that size",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useConfig(undefined, { compaction: { threshold: 40_000 } })
+      const prompt = yield* SessionPrompt.Service
+      const chat = yield* session()
+      yield* llm.push(bigStep())
+      yield* llm.text("summary")
+      yield* llm.text("done")
+      yield* prompt.prompt({ sessionID: chat.id, agent: "build", parts: [{ type: "text", text: "hi" }] })
+      expect(yield* llm.hits).toHaveLength(3)
+      expect(yield* compactions(chat.id)).toHaveLength(1)
+    }),
+  60_000,
+)
+
+it.instance(
+  "after a compaction, a prompt still over the threshold does not compact again straight away",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useConfig({ autonomous_compact_at: 40_000 })
+      const prompt = yield* SessionPrompt.Service
+      const chat = yield* session()
+      yield* llm.push(bigStep())
+      yield* llm.text("summary")
+      // the first step after compacting is still at 45k (a heavy system prompt),
+      // and so is the next: neither may trigger another compaction
+      yield* llm.push(bigStep())
+      yield* llm.push(bigStep())
+      yield* llm.text("done")
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        autonomous: true,
+        parts: [{ type: "text", text: "hi" }],
+      })
+      expect(yield* llm.hits).toHaveLength(5)
+      expect(yield* compactions(chat.id)).toHaveLength(1)
     }),
   60_000,
 )
