@@ -11,32 +11,32 @@ believes the worker when it says it is done.
 ## 1. What happens today (evidence)
 
 - **Done means "the worker said so".** The loop reads the latest turn's text, and if a line equals
-  the completion marker it finishes as `completed` (`goal-loop.ts:631-634`). `completionReached` is a
-  regex on the worker's own output (`:139-142`). Nothing checks the claim. The first prompt asks the
+  the completion marker it finishes as `completed` (`goal-loop.ts:668-671`). `completionReached` is a
+  regex on the worker's own output (`:153-156`). Nothing checks the claim. The first prompt asks the
   worker to judge itself ("When the goal is fully achieved, reply with GOAL_COMPLETE",
-  `:91-97`). This is the failure the autonomy prompt (accuracy A) can only discourage.
+  `:110-116`). This is the failure the autonomy prompt (accuracy A) can only discourage.
 - **The loop is well built and should be reused.** It already handles a busy session that stops
-  moving (`:531-593`), aborted and failed turns with backoff (`:635-676`), server outages (`:686-704`),
-  context growth with a summarize before continuing (`:456-493`), prompts from other clients into the
-  same session (`:404-410`, `:596-610`), harness notes inside a turn (`:207-232`), and an iteration cap
-  (`:502-515`). Every one of those is needed while a verifier runs too.
-- **There is exactly one loop in the app.** `active` is a single variable (`:301`), and `start` throws
-  "a goal loop is already running" (`:737`). The persisted state is one key
-  (`desktop/src/main/store-keys.ts:6-9`, `main/index.ts:332-352`). The UI note (`accuracy-ui.md` §1)
-  deals with that. This note works with one loop or many.
+  moving (`:560-630`), aborted and failed turns with backoff (`:672-718`), server outages (`:720-742`),
+  context growth with a summarize before continuing (`:505-530`), prompts from other clients into the
+  same session (`:635-645`), harness notes inside a turn (`:222-250`), and an iteration cap
+  (`:540-546`). Every one of those is needed while a verifier runs too.
+- **One loop per session** (since `825bca40b0`). Each `createGoalLoop` still drives one session
+  (`active`, `:317`; `start` throws "a goal loop is already running", `:774`), and
+  `desktop/src/main/goal-loops.ts` keeps one per session, persisted per session
+  (`store-keys.ts:11-12`). This note works with one loop or many.
 - **No read-only agent exists.** `explore` is the closest, and it allows `bash`
   (`opencode/src/agent/agent.ts:196-218`), which can write anything. Worse, every native agent merges
   the user's config **last** (`Permission.merge(defaults, agentRules, user)`, e.g. `agent.ts:185-191`),
   and evaluation takes the **last** matching rule (`permission/index.ts:28-38`). A user config with
   `"edit": "allow"` therefore re-enables edits on any native agent, including one we call read-only.
   The session's own ruleset is merged after that at every call site (`session/tools.ts:87`,
-  `session/llm.ts:149`, `session/llm/request.ts:211`, `tool/registry.ts:293`, `tool/code-mode.ts:209`,
-  `session/system.ts:122`, `session/prompt.ts:365`, `:1353`), and `PATCH /session/:id` can append rules
+  `session/llm.ts:149`, `session/llm/request.ts:211`, `tool/registry.ts:292`, `tool/code-mode.ts:209`,
+  `session/system.ts:122`, `session/prompt.ts:366`, `:1379`), and `PATCH /session/:id` can append rules
   to it (`server/.../handlers/session.ts:197`).
 - **What the server already gives us.** Child sessions (`POST /session` takes `parentID`, `agent` and
   `permission`: `session/session.ts:260-270`). Structured output with a JSON schema, a forced tool call
-  and an error when the model does not comply (`session/prompt.ts:1325-1330`, `:1371-1385`,
-  `:1409-1412`). A per-agent step cap (`agent.ts:54`, `prompt.ts:1255-1256`). A user-run shell command
+  and an error when the model does not comply (`session/prompt.ts:1351-1356`, `:1397-1411`,
+  `:1435-1440`). A per-agent step cap (`agent.ts:54`, `prompt.ts:1280-1281`). A user-run shell command
   recorded in the session (`POST /session/:id/shell`, `groups/session.ts:98`). A workspace snapshot
   with a content hash (`opencode/src/snapshot/index.ts:39`, `track()`).
 
@@ -316,7 +316,7 @@ ships, the default is decided by the eval, not by this note.
 Measurement follows the shared protocol in `accuracy-c.md` §7. One point is specific to this note:
 the FrontierHarness tasks run headless, and the verifier lives in the desktop goal loop. That is not
 a blocker. `createGoalLoop` takes everything it needs by injection (`getServer`, `fetchImpl`, `now`;
-`goal-loop.ts:18-46`), so the Harbor adapter can import it and drive `opencode serve` directly. The eval
+`goal-loop.ts:27-64`), so the Harbor adapter can import it and drive `opencode serve` directly. The eval
 then measures this exact code, not a copy.
 
 Arms: `loop` (goal loop, verification off) and `loop+verifier`. The eval's own grader is the ground
@@ -362,3 +362,85 @@ test runners). It would verify more goals without setup, but a bash allowlist is
 practice: `git diff --output=<file>` writes, and a test runner executes code the worker wrote, which
 can change anything. The snapshot comparison would catch the damage only after it happened. The note
 proposes no shell, with the loud limit that undeclared checks can only be verified by reading.
+
+Ruled 2026-09-21: approved. No shell, host-verified citations, a lock ruleset, and one goal loop per
+session.
+
+## 11. Addendum before implementation (2026-09-23)
+
+A reread of the code on dev `463ae65e1a` found two holes in section 2's lock and some stale
+references.
+
+**Ruled 2026-09-23: approved.**
+- 11.1: the proposal. An explicit deny in an agent's ruleset is final, and approvals only lift
+  `ask`, with a CHANGELOG entry.
+- 11.2: accepted, and the reverse hole is closed too. No other agent may take the name `verifier`,
+  by rename or as a new agent. The lock is keyed on the built-in agent's identity, not on a name a
+  config can reproduce.
+- 11.4: the phases. The addendum merges together with phase 1.
+
+### 11.1 An "always" approval outranks the lock (needs a ruling)
+
+`Permission.ask` evaluates `evaluate(permission, pattern, ruleset, approved)`
+(`permission/index.ts:73`). `approved` holds the "always" replies, and it is **instance-wide**, not
+per session (`State.approved`, `:25`, pushed at `:145-151`). It comes **after** the ruleset, and the
+last matching rule wins. So appending `VERIFIER_LOCK` last in the ruleset is not last: if anyone has
+answered "always" to `edit` or `bash` for a pattern in any session of that directory, the verifier's
+ask for that pattern is allowed.
+
+This is not new with the verifier. Today the same order lets an approval given to `build` beat
+`plan`'s `edit: deny`, because an agent's deny never asks and so was never the one approved.
+
+Denied tools are hidden from the model (`Permission.disabled`), so this is a second-line hole, not a
+first-line one. But `read` is a tool the model does see, and the lock denies some of its patterns:
+`*.env` files, and any path outside the workspace other than the archive (`external_directory`).
+
+- **Proposed:** a deny in the ruleset is final, and approvals only lift `ask`. In `ask`, evaluate the
+  ruleset alone first, and if it denies, deny. Otherwise evaluate with `approved` as today. This fixes
+  `plan` as well. The behavior change: a pattern an agent's ruleset denies can no longer be unlocked
+  by an "always" given elsewhere. An agent whose rule is `ask` is unaffected.
+- **Alternative:** keep `ask` as it is, and give the lock its own slot evaluated after `approved`
+  (a `lock` field on the ask input, set by `Permission.effective`). This is narrower and changes
+  nothing for other agents, but it leaves the `plan` hole open.
+- Red tests either way: a verifier `read` of `.env` stays denied after an "always" approval of
+  `read *.env` in another session, and the same for `plan` with `edit`, if the proposed option is
+  taken.
+
+### 11.2 Config can rename or remove the verifier (needs a ruling)
+
+The config loop in `agent.ts:267-294` applies `agent.<key>` to native agents. For the key `verifier`
+that includes `disable` (deletes it), `name` (the lock is keyed on `agent.name === "verifier"`, so a
+rename drops the lock), `mode`, `hidden`, `prompt` and `permission`. The lock would still beat
+`permission`, but a rename or a disable defeats it outright.
+
+- **Proposed:** for the key `verifier`, config may set only `model`, `variant`, `temperature`,
+  `top_p` and `steps`. `steps` may lower the cap of 40 but never raise it. Every other field is
+  ignored with a logged warning. `disable` is ignored too: the loop's `verify` setting is the way to
+  turn verification off. The lock applies to any agent whose name is `verifier`, so a user agent
+  renamed to `verifier` gets it, which can only restrict.
+- Red tests: `agent.verifier: { name: "x", disable: true, permission: { "*": "allow" } }` still gives
+  a `verifier` agent that denies `edit` and `bash`, and `steps: 500` stays at 40.
+
+### 11.3 Bookkeeping
+
+- **Call sites.** Besides the ones listed in section 1, two read `agent.permission` without the
+  session rules: `session/system.ts:108` (the skill list) and `cli/cmd/debug/agent.handler.ts:89`.
+  Both go through `Permission.effective` too, so the grep test can say "no `agent.permission` read
+  outside the helper". `session.ts:197` merges session rules only (a `PATCH`) and stays.
+- **Line numbers** in section 1 are updated to dev `463ae65e1a`. The per-session loop ruling has
+  been implemented (`825bca40b0`); section 1 now says so.
+- **Accuracy D is merged.** `Checkpoint.build` already takes `goal` and `verified`. `compaction.ts`
+  passes neither yet. Phase 3 below wires them.
+
+### 11.4 Implementation phases (one branch each, red-first, reviewed separately)
+
+1. **Lock.** The `verifier` agent (11.2), `VERIFIER_LOCK`, `Permission.effective` at every call
+   site (11.3), and the ask order from the 11.1 ruling. Server-only. Tests: `permission.test.ts`,
+   `agent.test.ts`, the grep test.
+2. **Verdict.** `session/verdict.ts` (the pure `Verdict.validate`), the `verdict` tool registered
+   for the verifier agent only, with 3 submissions and unsupported PASS → PARTIAL. Tests:
+   `verdict.test.ts`.
+3. **Records.** The snapshot hash endpoint, the `todo_evidence` table, and the session `goal`
+   metadata read by compaction, so the checkpoint shows the goal line and verified marks.
+4. **Loop.** The verify branch in `goal-loop.ts`, the phases, the bounds, the feedback builder, the
+   app types, and the settings. The default stays off until the UI shows verdicts (section 7).
