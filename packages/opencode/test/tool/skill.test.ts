@@ -5,7 +5,7 @@ import { Ripgrep } from "@opencode-ai/core/ripgrep"
 import { Cause, Effect, Exit, Layer } from "effect"
 import { afterEach, describe, expect } from "bun:test"
 import path from "path"
-import type { Permission } from "../../src/permission"
+import { Permission } from "../../src/permission"
 import type { Tool } from "@/tool/tool"
 import { SkillTool } from "../../src/tool/skill"
 import { ToolRegistry } from "@/tool/registry"
@@ -59,7 +59,7 @@ Use this skill.
       )
 
       const registry = yield* ToolRegistry.Service
-      const agent = { name: "build", mode: "primary" as const, permission: [], options: {} }
+      const agent = { name: "build", mode: "primary" as const, permission: Permission.agentRules([]), options: {} }
       const tool = (yield* registry.tools({
         providerID: "opencode" as any,
         modelID: "gpt-5" as any,
@@ -105,7 +105,7 @@ Use this skill.
       )
 
       const registry = yield* ToolRegistry.Service
-      const agent = { name: "build", mode: "primary" as const, permission: [], options: {} }
+      const agent = { name: "build", mode: "primary" as const, permission: Permission.agentRules([]), options: {} }
       const tool = (yield* registry.tools({
         providerID: "opencode" as any,
         modelID: "gpt-5" as any,

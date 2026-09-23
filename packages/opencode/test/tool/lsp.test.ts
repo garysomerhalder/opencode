@@ -98,7 +98,11 @@ const asks = () => {
 }
 
 // The verifier's rules (accuracy E): what lsp shows must follow them like read does.
-const verifierRules = Permission.effective({ name: Permission.VERIFIER, native: true, permission: [] })
+const verifierRules = Permission.effective({
+  name: Permission.VERIFIER,
+  native: true,
+  permission: Permission.agentRules([]),
+})
 const verifierCtx: Tool.Context = {
   ...ctx,
   agent: Permission.VERIFIER,

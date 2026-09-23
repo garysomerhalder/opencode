@@ -4,7 +4,6 @@ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { Effect } from "effect"
 import path from "path"
-import { readdirSync, readFileSync, statSync } from "fs"
 import fs from "fs/promises"
 import { disposeAllInstances } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
@@ -222,7 +221,7 @@ it.instance("the verifier is frozen: no caller can change it for the next one", 
       rules.push({ permission: "*", pattern: "*", action: "allow" })
     }).toThrow()
     expect(() => {
-      rules[0]!.action = "allow"
+      ;(rules[0] as { action: string }).action = "allow"
     }).toThrow()
     const again = (yield* get(Permission.VERIFIER))!
     expect(Permission.isVerifier(again)).toBe(true)
@@ -265,28 +264,24 @@ it.instance(
   },
 )
 
-test("an agent's rules are only read through Permission.effective", () => {
-  // Every evaluation of an agent's rules must go through effective(), or the
-  // verifier's lock can be skipped. These files may read agent.permission:
-  const allowed = new Set([
-    "permission/index.ts", // effective() itself
-    "agent/agent.ts", // where the rules are built
-    "agent/subagent-permissions.ts", // derives a child session's rules; evaluation happens through effective()
-    "cli/cmd/agent.ts", // prints them
-  ])
-  const root = path.join(import.meta.dir, "../../src")
-  const files = (dir: string): string[] =>
-    readdirSync(dir).flatMap((name) => {
-      const full = path.join(dir, name)
-      if (statSync(full).isDirectory()) return files(full)
-      return /\.tsx?$/.test(name) ? [full] : []
-    })
-  const offenders = files(root).flatMap((file) => {
-    const rel = path.relative(root, file).split(path.sep).join("/")
-    if (allowed.has(rel)) return []
-    return readFileSync(file, "utf-8")
-      .split("\n")
-      .flatMap((line, index) => (/[A-Za-z]*[aA]gent\??\.permission\b/.test(line) ? [`${rel}:${index + 1}`] : []))
-  })
-  expect(offenders).toEqual([])
+// Security review, finding 7: every evaluation of an agent's rules must go through
+// effective(), or the verifier's lock can be skipped. A grep missed `ag.permission`,
+// `next.permission` and destructuring, so the compiler enforces it instead:
+// Agent.Info.permission is opaque (Permission.AgentRules). This test is checked by
+// `bun run typecheck`: if the rules became readable again, each @ts-expect-error
+// below would be unused, and the typecheck would fail.
+test("an agent's rules can be read only through Permission.effective", () => {
+  const reads = (agent: Agent.Info, next: Agent.Info) => {
+    // @ts-expect-error the rules are opaque: not a ruleset
+    Permission.evaluate("task", "general", agent.permission)
+    // @ts-expect-error no array methods
+    next.permission.some((rule) => rule.permission === "task")
+    // @ts-expect-error destructured, still opaque
+    const { permission }: { permission: PermissionV1.Ruleset } = agent
+    // @ts-expect-error not a session's ruleset either
+    Permission.merge(agent.permission, permission)
+    // the one way in
+    return Permission.effective(agent, permission)
+  }
+  expect(typeof reads).toBe("function")
 })

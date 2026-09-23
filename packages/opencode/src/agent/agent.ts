@@ -54,7 +54,17 @@ export const Info = Schema.Struct({
   options: Schema.Record(Schema.String, Schema.Unknown),
   steps: Schema.optional(Schema.Finite),
 }).annotate({ identifier: "Agent" })
-export type Info = DeepMutable<Schema.Schema.Type<typeof Info>>
+/**
+ * An agent. Its rules are opaque (Permission.AgentRules): Permission.effective()
+ * is the only way to read them, so no caller can evaluate them without the
+ * session's rules and the verifier's lock. The schema, and so the API, still
+ * carries them as the plain ruleset.
+ */
+export type Info = Omit<DeepMutable<Schema.Schema.Type<typeof Info>>, "permission"> & {
+  permission: Permission.AgentRules
+}
+/** An agent while agent.ts builds it, with its rules still readable. */
+type Draft = Omit<Info, "permission"> & { permission: PermissionV1.Rule[] }
 
 /** The verifier's step cap; config may lower it, never raise it (docs/accuracy-e.md §11.2). */
 export const VERIFIER_STEPS = 40
@@ -151,7 +161,7 @@ const layer = Layer.effect(
 
         const user = Permission.fromConfig(cfg.permission ?? {})
 
-        const agents: Record<string, Info> = {
+        const drafts: Record<string, Draft> = {
           build: {
             name: "build",
             description: "The default agent. Executes tools based on configured permissions.",
@@ -297,7 +307,7 @@ const layer = Layer.effect(
           // The verifier's identity and rules are not configurable
           // (docs/accuracy-e.md §11.2): only how it runs.
           if (key === Permission.VERIFIER) {
-            const item = agents[key]
+            const item = drafts[key]
             const ignored = Object.entries(value)
               .filter(([field, setting]) => !VERIFIER_CONFIGURABLE.has(field) && isSet(setting))
               .map(([field]) => field)
@@ -318,12 +328,12 @@ const layer = Layer.effect(
             yield* Effect.logWarning(`agent.${key}: the name "${Permission.VERIFIER}" is reserved; keeping "${key}"`)
           const name = value.name === Permission.VERIFIER ? undefined : value.name
           if (value.disable) {
-            delete agents[key]
+            delete drafts[key]
             continue
           }
-          let item = agents[key]
+          let item = drafts[key]
           if (!item)
-            item = agents[key] = {
+            item = drafts[key] = {
               name: key,
               mode: "all",
               permission: Permission.merge(defaults, user),
@@ -346,25 +356,33 @@ const layer = Layer.effect(
         }
 
         // Ensure Truncate.GLOB is allowed unless explicitly configured
-        for (const name in agents) {
-          const agent = agents[name]
-          const explicit = agent.permission.some((r) => {
+        for (const name in drafts) {
+          const draft = drafts[name]
+          const explicit = draft.permission.some((r) => {
             if (r.permission !== "external_directory") return false
             if (r.action !== "deny") return false
             return r.pattern === Truncate.GLOB
           })
           if (explicit) continue
 
-          agents[name].permission = Permission.merge(
-            agents[name].permission,
+          draft.permission = Permission.merge(
+            draft.permission,
             Permission.fromConfig({ external_directory: { [Truncate.GLOB]: "allow" } }),
           )
         }
 
+        // From here on an agent's rules are read only through Permission.effective().
+        const agents: Record<string, Info> = Object.fromEntries(
+          Object.entries(drafts).map(([key, draft]) => [
+            key,
+            { ...draft, permission: Permission.agentRules(draft.permission) },
+          ]),
+        )
+
         // get() hands every caller the same object: freeze the verifier, its rules
         // and each rule, so no caller can change it for the next one.
         const verifier = agents[Permission.VERIFIER]
-        verifier.permission.forEach((rule) => Object.freeze(rule))
+        drafts[Permission.VERIFIER].permission.forEach((rule) => Object.freeze(rule))
         Object.freeze(verifier.permission)
         if (verifier.model) Object.freeze(verifier.model)
         Object.freeze(verifier.options)

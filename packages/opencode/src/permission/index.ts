@@ -282,17 +282,34 @@ export function isVerifier(agent: { name: string; native?: boolean }) {
   return agent.native === true && agent.name === VERIFIER
 }
 
+declare const agentRulesBrand: unique symbol
+
+/**
+ * An agent's own rules (Agent.Info.permission), opaque to the compiler: they can
+ * be built with agentRules(), and read only through effective(), which appends
+ * the session's rules and, for the verifier, its lock. At run time the value is
+ * the plain array, so the API and the SDK see the same shape as before.
+ */
+export type AgentRules = { readonly [agentRulesBrand]: "AgentRules" }
+
+/** Wraps rules as an agent's own. agent.ts builds agents with it. */
+export function agentRules(rules: PermissionV1.Ruleset): AgentRules {
+  return rules as unknown as AgentRules
+}
+
 /**
  * The ruleset a request is evaluated against: the agent's rules, then the
- * session's, then, for the verifier, its lock. Every evaluation of an agent's
- * rules goes through here (a test enforces it), so the lock is always last
- * and nothing from config or the session can loosen it.
+ * session's, then, for the verifier, its lock. It is the only way to read an
+ * agent's rules (AgentRules is opaque everywhere else, and the compiler
+ * enforces it), so the lock is always last and nothing from config or the
+ * session can loosen it.
  */
 export function effective(
-  agent: { name: string; native?: boolean; permission: PermissionV1.Ruleset },
+  agent: { name: string; native?: boolean; permission: AgentRules },
   session: PermissionV1.Ruleset = [],
 ): PermissionV1.Rule[] {
-  return merge(agent.permission ?? [], session, isVerifier(agent) ? VERIFIER_LOCK : [])
+  const own = agent.permission as unknown as PermissionV1.Ruleset | undefined
+  return merge(own ?? [], session, isVerifier(agent) ? VERIFIER_LOCK : [])
 }
 
 export function disabled(tools: string[], ruleset: PermissionV1.Ruleset): Set<string> {
