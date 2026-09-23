@@ -67,6 +67,8 @@ it.instance(
       // no secrets, and outside the workspace only the archived tool output
       expect(Permission.evaluate("read", "/repo/.env", ruleset).action).toBe("deny")
       expect(Permission.evaluate("read", "/repo/.env.local", ruleset).action).toBe("deny")
+      // MCP resources are asked as reads of mcp:<server>:<uri>
+      expect(Permission.evaluate("read", "mcp:docs:file:///notes", ruleset).action).toBe("deny")
       expect(Permission.evaluate("external_directory", path.join(Truncate.DIR, "tool_1"), ruleset).action).toBe("allow")
       expect(Permission.evaluate("external_directory", "/etc/*", ruleset).action).toBe("deny")
       // nothing is ask: nobody answers inside a goal loop

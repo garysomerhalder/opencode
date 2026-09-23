@@ -137,7 +137,8 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   const hasMcpResourceServer = Object.values(yield* mcp.clients()).some(
     (client) => !!client.getServerCapabilities()?.resources,
   )
-  if (hasMcpResourceServer) {
+  // the verifier's lock denies every MCP resource read, so it is not offered the tools either
+  if (hasMcpResourceServer && !Permission.isVerifier(input.agent)) {
     tools[MCP_RESOURCE_TOOLS.list] = tool({
       description:
         "Lists resources provided by connected MCP servers. Resources provide context such as files, database schemas, or application-specific information.",

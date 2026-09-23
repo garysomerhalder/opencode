@@ -251,7 +251,8 @@ export const VERIFIER = "verifier"
  */
 export const VERIFIER_LOCK = fromConfig({
   "*": "deny",
-  read: { "*": "allow", "*.env": "deny", "*.env.*": "deny" },
+  // MCP resources are asked as read `mcp:<server>:<uri>`: not files in the workspace
+  read: { "*": "allow", "mcp:*": "deny", "*.env": "deny", "*.env.*": "deny" },
   grep: "allow",
   glob: "allow",
   lsp: "allow",

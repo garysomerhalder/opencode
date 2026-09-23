@@ -189,3 +189,18 @@ describe("finding 1: grep and glob apply the read rules to what they return", ()
     }),
   )
 })
+
+describe("finding 2: MCP resources", () => {
+  it.instance("the verifier cannot read an MCP resource", () =>
+    Effect.gen(function* () {
+      mcpReads.length = 0
+      const result = yield* call(Permission.VERIFIER, "read_mcp_resource", { server: "docs", uri: "file:///notes" })
+      expect(result.output).not.toContain(SECRET)
+      expect(mcpReads).toEqual([])
+      // it is not offered the resource tools at all; build still is
+      const tools = yield* offered(Permission.VERIFIER)
+      expect(Object.keys(tools).filter((name) => name.includes("mcp_resource"))).toEqual([])
+      expect(Object.keys(yield* offered("build"))).toContain("read_mcp_resource")
+    }),
+  )
+})
