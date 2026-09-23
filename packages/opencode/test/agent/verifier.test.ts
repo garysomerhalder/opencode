@@ -1,6 +1,7 @@
 // Accuracy E, phase 1: the verifier's read-only lock (docs/accuracy-e.md §2, §11).
 import { afterEach, expect, test } from "bun:test"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
+import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { Effect } from "effect"
 import path from "path"
 import { readdirSync, readFileSync, statSync } from "fs"
@@ -202,6 +203,32 @@ it.instance(
       },
     },
   },
+)
+
+// Security review, finding 8: every caller of Agent.get gets the same object, so a
+// change one caller makes to the verifier would reach every later caller.
+it.instance("the verifier is frozen: no caller can change it for the next one", () =>
+  Effect.gen(function* () {
+    const first = (yield* get(Permission.VERIFIER))!
+    const rules = first.permission as unknown as PermissionV1.Rule[]
+    const before = JSON.stringify(rules)
+    expect(() => {
+      ;(first as { native?: boolean }).native = false
+    }).toThrow()
+    expect(() => {
+      first.mode = "subagent"
+    }).toThrow()
+    expect(() => {
+      rules.push({ permission: "*", pattern: "*", action: "allow" })
+    }).toThrow()
+    expect(() => {
+      rules[0]!.action = "allow"
+    }).toThrow()
+    const again = (yield* get(Permission.VERIFIER))!
+    expect(Permission.isVerifier(again)).toBe(true)
+    expect(again.mode).toBe("primary")
+    expect(JSON.stringify(again.permission)).toBe(before)
+  }),
 )
 
 // Security review: markdown agents (.opencode/agent/*.md, and modes) are keyed by

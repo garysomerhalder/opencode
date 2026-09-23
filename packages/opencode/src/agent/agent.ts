@@ -361,6 +361,15 @@ const layer = Layer.effect(
           )
         }
 
+        // get() hands every caller the same object: freeze the verifier, its rules
+        // and each rule, so no caller can change it for the next one.
+        const verifier = agents[Permission.VERIFIER]
+        verifier.permission.forEach((rule) => Object.freeze(rule))
+        Object.freeze(verifier.permission)
+        if (verifier.model) Object.freeze(verifier.model)
+        Object.freeze(verifier.options)
+        Object.freeze(verifier)
+
         const get = Effect.fnUntraced(function* (agent: string) {
           return agents[agent]
         })
