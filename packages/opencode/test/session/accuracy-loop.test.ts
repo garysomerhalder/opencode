@@ -873,3 +873,48 @@ it.instance(
     }),
   60_000,
 )
+
+// "Compact now" (POST /session/:id/summarize does exactly this): the summary goes
+// to the model the caller names, and with auto: false the agent does not resume.
+it.instance(
+  "a manual compaction uses the model it is given and does not continue the agent",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useConfig(undefined, {
+        provider: {
+          test: {
+            ...provider.test,
+            models: {
+              ...provider.test.models,
+              "cheap-model": { ...provider.test.models["test-model"], id: "cheap-model", name: "Cheap" },
+            },
+            options: { ...provider.test.options, baseURL: (yield* TestLLMServer).url },
+          },
+        },
+      })
+      const prompt = yield* SessionPrompt.Service
+      const compaction = yield* SessionCompaction.Service
+      const chat = yield* session()
+      yield* llm.push(bigStep())
+      yield* llm.text("worked")
+      yield* prompt.prompt({ sessionID: chat.id, agent: "build", parts: [{ type: "text", text: "hi" }] })
+      expect(yield* llm.hits).toHaveLength(2)
+
+      yield* llm.text("summary")
+      // a reply queued for a resumed agent: it must never be requested
+      yield* llm.text("resumed")
+      yield* compaction.create({
+        sessionID: chat.id,
+        agent: "build",
+        model: { providerID: ProviderV2.ID.make("test"), modelID: ModelV2.ID.make("cheap-model") },
+        auto: false,
+      })
+      yield* prompt.loop({ sessionID: chat.id })
+
+      const hits = yield* llm.hits
+      expect(hits).toHaveLength(3)
+      expect(hits[2]!.body.model).toBe("cheap-model")
+      expect(yield* compactions(chat.id)).toHaveLength(1)
+    }),
+  60_000,
+)
