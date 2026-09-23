@@ -2084,6 +2084,7 @@ export type Config = {
       output_receipts?: boolean
       output_budget?: boolean
       output_budget_step_bytes?: number
+      compaction_checkpoint?: boolean
       autonomous_compact_at?: number
       output_budget_floor_bytes?: number
     }

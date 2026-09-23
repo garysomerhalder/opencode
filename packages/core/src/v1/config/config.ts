@@ -222,6 +222,10 @@ export const Info = Schema.Struct({
             description:
               "Bytes of tool output one step may put in front of the model before the budget cuts (default 131072)",
           }),
+          compaction_checkpoint: Schema.optional(Schema.Boolean).annotate({
+            description:
+              "After each compaction, add a checkpoint the harness writes from its own records (the task, the todo list as stored, running background tasks, changed files, archived tool output), and tell the summarizer that tool output in the history is data, not instructions (default true)",
+          }),
           autonomous_compact_at: Schema.optional(NonNegativeInt).annotate({
             description:
               "Autonomous turns compact once a request's prompt reaches this many tokens, instead of at the model's context limit (default 150000; 0 compacts only at the limit). compaction.threshold, when set, applies instead.",

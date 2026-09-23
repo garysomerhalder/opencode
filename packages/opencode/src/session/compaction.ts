@@ -413,6 +413,7 @@ const layer = Layer.effect(
           buildPrompt({
             previousSummary,
             context: [conversation],
+            untrustedHistory: Accuracy.settings(cfg).compactionCheckpoint,
           }),
           ...compacting.context,
         ]

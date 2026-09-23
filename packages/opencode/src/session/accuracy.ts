@@ -19,6 +19,8 @@ export interface Settings {
   readonly outputReceipts: boolean
   /** The step budget's settings when it is on, otherwise undefined. */
   readonly outputBudget: BudgetSettings | undefined
+  /** Compaction checkpoints: the host record after each summary and the untrusted-history preface. */
+  readonly compactionCheckpoint: boolean
 }
 
 export function settings(config: ConfigV1.Info): Settings {
@@ -38,6 +40,7 @@ export function settings(config: ConfigV1.Info): Settings {
             floorBytes: Math.trunc(accuracy.output_budget_floor_bytes ?? DEFAULT_FLOOR_BYTES),
           }
         : undefined,
+    compactionCheckpoint: accuracy.compaction_checkpoint !== false,
   }
 }
 
