@@ -1300,6 +1300,7 @@ const layer = Layer.effect(
               model,
               contextTokens: lastFinished && lastFinished.summary !== true ? lastFinished.tokens : undefined,
               guard,
+              budget: accuracy.outputBudget,
             })
             .pipe(Effect.onInterrupt(() => finalizeInterruptedAssistant))
 

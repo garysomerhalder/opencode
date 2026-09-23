@@ -36,6 +36,7 @@ import type { SystemError } from "bun"
 import type { Provider } from "@/provider/provider"
 import { Effect, Schema } from "effect"
 import { Receipt } from "@/tool/receipt"
+import { OutputBudget } from "./output-budget"
 
 /** Error shape thrown by Bun's fetch() when gzip/br decompression fails mid-stream */
 interface FetchDecompressionError extends Error {
@@ -307,9 +308,19 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
         if (part.type === "tool") {
           toolNames.add(part.tool)
           if (part.state.status === "completed") {
+            // A stored step budget (accuracy C, part C) cuts only this view of
+            // the output; the stored output stays whole.
             const outputText = part.state.time.compacted
               ? prunedText(part.tool, part.state.metadata)
-              : truncateToolOutput(part.state.output, options?.toolOutputMaxChars)
+              : truncateToolOutput(
+                  OutputBudget.view({
+                    tool: part.tool,
+                    callID: part.callID,
+                    output: part.state.output,
+                    metadata: part.state.metadata,
+                  }) ?? part.state.output,
+                  options?.toolOutputMaxChars,
+                )
             const attachments = part.state.time.compacted || options?.stripMedia ? [] : (part.state.attachments ?? [])
 
             // For providers that don't support media in tool results, extract media files

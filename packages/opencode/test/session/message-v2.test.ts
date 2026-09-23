@@ -819,6 +819,29 @@ describe("session.message-v2.toModelMessage", () => {
       sha256: "0".repeat(64),
     }
 
+    test("a part with a stored budget reaches the model as an envelope with head and tail", async () => {
+      const text = await resultText(toolTurn({ output, metadata: { budget: { maxBytes: 4096 }, archive } }))
+      expect(text.startsWith('<tool-output-archived tool="bash" call="call-1"')).toBe(true)
+      expect(text).toContain("compile 0")
+      expect(text).toContain("error: 1 failed")
+      expect(text).toContain(`Full output: ${archive.path}`)
+      expect(text).toMatch(/shown="lines 1-\d+, \d+-5001"/)
+      expect(Buffer.byteLength(text, "utf-8")).toBeLessThan(4096 + 1024)
+    })
+
+    test("the same budgeted part converts to identical text every time (prompt cache)", async () => {
+      const input = toolTurn({ output, metadata: { budget: { maxBytes: 4096 }, archive } })
+      expect(await resultText(input)).toBe(await resultText(input))
+    })
+
+    test("a part without a budget is unchanged", async () => {
+      expect(await resultText(toolTurn({ output, metadata: { archive } }))).toBe(output)
+    })
+
+    test("a budget without an archive to point at is ignored", async () => {
+      expect(await resultText(toolTurn({ output, metadata: { budget: { maxBytes: 4096 } } }))).toBe(output)
+    })
+
     test("a pruned part with an archive is a one-line receipt", async () => {
       const text = await resultText(toolTurn({ output, metadata: { archive }, compacted: 5 }))
       expect(text).toBe(

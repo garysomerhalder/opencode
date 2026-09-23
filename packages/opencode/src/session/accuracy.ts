@@ -1,10 +1,13 @@
 // Effective settings for the accuracy harness (autonomy prompt, runaway guard,
-// todo completion reminders). Every flag defaults to on; `experimental.accuracy`
-// in the config turns them off or retunes them.
+// todo completion reminders, tool-output receipts and step budget). Every flag
+// defaults to on except the step budget, which removes text the model would
+// otherwise see and has to earn its default in the eval; `experimental.accuracy`
+// in the config turns them on or off or retunes them.
 
 import type { ConfigV1 } from "@opencode-ai/core/v1/config/config"
 import { DEFAULT_THRESHOLD } from "./runaway-guard"
 import { DEFAULT_INTERVAL } from "./todo-reminder"
+import { DEFAULT_FLOOR_BYTES, DEFAULT_STEP_BYTES, type Settings as BudgetSettings } from "./output-budget"
 
 export interface Settings {
   readonly autonomyPrompt: boolean
@@ -14,6 +17,8 @@ export interface Settings {
   readonly todoReminder: boolean
   readonly todoReminderInterval: number
   readonly outputReceipts: boolean
+  /** The step budget's settings when it is on, otherwise undefined. */
+  readonly outputBudget: BudgetSettings | undefined
 }
 
 export function settings(config: ConfigV1.Info): Settings {
@@ -26,6 +31,13 @@ export function settings(config: ConfigV1.Info): Settings {
     todoReminder: accuracy.todo_reminder !== false,
     todoReminderInterval: Math.max(1, Math.trunc(accuracy.todo_reminder_interval ?? DEFAULT_INTERVAL)),
     outputReceipts: accuracy.output_receipts !== false,
+    outputBudget:
+      accuracy.output_budget === true
+        ? {
+            stepBytes: Math.trunc(accuracy.output_budget_step_bytes ?? DEFAULT_STEP_BYTES),
+            floorBytes: Math.trunc(accuracy.output_budget_floor_bytes ?? DEFAULT_FLOOR_BYTES),
+          }
+        : undefined,
   }
 }
 

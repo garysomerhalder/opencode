@@ -27,6 +27,9 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { Database } from "@opencode-ai/core/database/database"
 import { Usage, type LLMEvent } from "@opencode-ai/llm"
 import { RunawayGuard } from "./runaway-guard"
+import { OutputBudget } from "./output-budget"
+import { Receipt } from "@/tool/receipt"
+import { Truncate } from "@/tool/truncate"
 
 const DOOM_LOOP_THRESHOLD = 3
 export type Result = "compact" | "stop" | "continue"
@@ -62,6 +65,9 @@ type Input = {
   // feeds it at step end and stops raising the doom_loop permission ask, which
   // headless runs cannot answer anyway.
   guard?: RunawayGuard.State
+  // The step budget across this step's tool outputs (accuracy C). When present
+  // the budget is on; see OutputBudget.
+  budget?: OutputBudget.Settings
 }
 
 export interface Interface {
@@ -105,6 +111,7 @@ const layer = Layer.effect(
     const image = yield* Image.Service
     const events = yield* EventV2Bridge.Service
     const database = yield* Database.Service
+    const truncate = yield* Truncate.Service
     // Sessions whose encrypted reasoning a provider refused (session id + provider
     // id). Process-local: a restart clears it and the next refusal arms it again.
     const refusedReplays = new Set<string>()
@@ -128,6 +135,51 @@ const layer = Layer.effect(
       }
       let aborted = false
       let reminder: RunawayGuard.Reminder | undefined
+
+      const budgetStep = Effect.fn("SessionProcessor.budgetStep")(function* (settings: OutputBudget.Settings) {
+        const parts = yield* MessageV2.parts(ctx.assistantMessage.id).pipe(
+          Effect.provideService(Database.Service, database),
+        )
+        const tools = parts.filter(
+          (part): part is SessionV1.ToolPart & { state: SessionV1.ToolStateCompleted } =>
+            part.type === "tool" && part.state.status === "completed",
+        )
+        const decisions = OutputBudget.plan(
+          tools.map((part) => ({
+            callID: part.callID,
+            tool: part.tool,
+            bytes: Buffer.byteLength(part.state.output, "utf-8"),
+            // Already cut to a file (a receipt, or the shell tool's spill). Not
+            // `truncated`: tools such as grep set that for "more results exist".
+            archived: part.state.metadata?.archive !== undefined || typeof part.state.metadata?.outputPath === "string",
+          })),
+          settings,
+        )
+        for (const decision of decisions) {
+          const part = tools.find((item) => item.callID === decision.callID)
+          if (!part) continue
+          const text = part.state.output
+          const written = yield* Effect.exit(truncate.write(text))
+          const preview = OutputBudget.preview(text, decision.maxBytes)
+          const shown = Receipt.describeShown(preview.unit, preview.shown)
+          yield* Effect.logInfo(
+            "output budget",
+            OutputBudget.record(decision, { shown, archived: Exit.isSuccess(written) }),
+          )
+          if (!Exit.isSuccess(written)) continue
+          yield* session.updatePart({
+            ...part,
+            state: {
+              ...part.state,
+              metadata: {
+                ...part.state.metadata,
+                archive: Receipt.archive({ path: written.value, text, preview }),
+                budget: { maxBytes: decision.maxBytes },
+              },
+            },
+          })
+        }
+      })
 
       const parse = (e: unknown) =>
         MessageV2.fromError(e, {
@@ -773,6 +825,16 @@ const layer = Layer.effect(
             }).pipe(Effect.ignore)
           }
 
+          // Step end, accuracy C part C: the step budget. The decision is stored
+          // on the part (metadata.budget, with the archive it points at) and
+          // applied only when messages are converted for the model; the stored
+          // output is never rewritten, so the UI and the guard's fingerprints are
+          // unchanged. Fails open: an output whose archive cannot be written is
+          // left whole, and nothing here can take the turn down.
+          if (input.budget && !aborted && !ctx.assistantMessage.error) {
+            yield* budgetStep(input.budget).pipe(Effect.ignore)
+          }
+
           if (ctx.needsCompaction) return "compact"
           if (ctx.blocked || ctx.assistantMessage.error) return "stop"
           return "continue"
@@ -812,6 +874,7 @@ export const node = LayerNode.make({
     Image.node,
     EventV2Bridge.node,
     Database.node,
+    Truncate.node,
   ],
 })
 

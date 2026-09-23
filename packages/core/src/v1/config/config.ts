@@ -210,10 +210,21 @@ export const Info = Schema.Struct({
             description:
               "Cut tool output keeps its head and tail inside a receipt that gives the size, the part shown and the path of the full output; prune leaves a receipt instead of a blank (default true)",
           }),
+          output_budget: Schema.optional(Schema.Boolean).annotate({
+            description:
+              "Budget the tool output of one step: when a step's outputs together exceed output_budget_step_bytes, the largest are archived and the model sees a receipt with their head and tail; the stored output is unchanged (default false)",
+          }),
+          output_budget_step_bytes: Schema.optional(PositiveInt).annotate({
+            description:
+              "Bytes of tool output one step may put in front of the model before the budget cuts (default 131072)",
+          }),
+          output_budget_floor_bytes: Schema.optional(PositiveInt).annotate({
+            description: "The budget never shows a cut output smaller than this (default 4096)",
+          }),
         }),
       ).annotate({
         description:
-          "Agent accuracy harness: autonomy prompt, runaway guard, todo completion reminders and tool-output receipts",
+          "Agent accuracy harness: autonomy prompt, runaway guard, todo completion reminders, tool-output receipts and the step budget",
       }),
       policies: Schema.optional(Schema.mutable(Schema.Array(ConfigExperimental.Policy))).annotate({
         description: "Policy statements applied to supported resources, such as provider access",
