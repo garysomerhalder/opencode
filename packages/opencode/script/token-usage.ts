@@ -227,8 +227,8 @@ export interface Projection {
  * that step); for a full cache miss it is the whole simulated prompt, scaled by
  * the actual miss ratio; cache writes keep their actual size where they fit.
  * Compaction follows the product: before each request, overThreshold (the
- * product's function) looks at the last finished request's prompt plus output,
- * with the re-compaction floor reset by every summary, real or simulated.
+ * product's function) looks at the last finished request's tokens.total (prompt,
+ * output and reasoning), with the re-compaction floor reset by every summary, real or simulated.
  * A simulated compaction costs one summary request with the history sent
  * uncached (as observed: summary requests read no cache; the whole simulated
  * prompt is charged, which overstates it, since observed summaries send about
@@ -253,7 +253,7 @@ export function project(steps: ReadonlyArray<Step>, lever: Lever, options: Proje
   let carried = 0
   let missNext = false
   // What the product looks at before each request: the last finished request's
-  // tokens (prompt + output), and the floor its re-compaction guard uses, the
+  // tokens (prompt + output + reasoning), and the floor its re-compaction guard uses, the
   // first request after the latest summary (real or simulated).
   let last: { tokens: SessionV1.Assistant["tokens"]; summary: boolean } | undefined
   let floor: number | undefined
@@ -276,14 +276,18 @@ export function project(steps: ReadonlyArray<Step>, lever: Lever, options: Proje
     total.cacheWrite += request.write
     total.output += request.output
     total.reasoning += request.reasoning
+    // the product counts tokens.total (the provider's totalTokens: prompt, output
+    // and reasoning), both for the threshold and for the guard's floor
+    const count = request.size + request.output + request.reasoning
     const tokens = {
+      total: count,
       input: request.uncached,
       output: request.output,
       reasoning: request.reasoning,
       cache: { read, write: request.write },
     }
     if (floorPending && !request.summary) {
-      floor = request.size + request.output
+      floor = count
       floorPending = false
     }
     last = { tokens, summary: request.summary }

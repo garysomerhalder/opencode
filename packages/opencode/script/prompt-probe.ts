@@ -18,6 +18,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { parseArgs } from "node:util"
+import { ProcessTree } from "./process-tree"
 
 const { values: args } = parseArgs({
   options: {
@@ -120,6 +121,8 @@ async function capture(dir: string) {
         OPENCODE_DB: ":memory:",
       },
       stdio: ["ignore", "ignore", "pipe"],
+      // the run's MCP servers are its children: stop() reaches them through this
+      ...ProcessTree.spawnOptions(),
     },
   )
   let stderr = ""
@@ -137,13 +140,7 @@ async function capture(dir: string) {
     clearTimeout(timer)
     // The run starts MCP servers as its own children: stop the whole tree, and
     // only while the child still runs, so a reused PID is never targeted.
-    const running = child.exitCode === null && child.signalCode === null
-    if (running && process.platform === "win32" && child.pid)
-      await new Promise((done) =>
-        spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore" }).once("exit", done),
-      )
-    if (running && process.platform !== "win32") child.kill()
-    await Promise.race([exited, new Promise((done) => setTimeout(done, 5000))])
+    await ProcessTree.stop(child)
     server.stop(true)
     try {
       rmSync(temp, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
