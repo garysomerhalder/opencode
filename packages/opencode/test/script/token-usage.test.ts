@@ -150,6 +150,25 @@ describe("TokenUsage.project", () => {
     expect(TokenUsage.project(under, { compactAt: 100_000 }, options).compactions).toBe(0)
   })
 
+  test("reasoning counts toward the threshold, as tokens.total does in the product", () => {
+    clock = 0
+    // 95_000 prompt + 500 output + 4_500 reasoning = 100_000: the product's total reaches the threshold
+    const steps = [step({ prompt: 95_000, reasoning: 4_500 }), step({ prompt: 95_100 })]
+    expect(TokenUsage.project(steps, { compactAt: 100_000 }, options).compactions).toBe(1)
+    clock = 0
+    const under = [step({ prompt: 95_000, reasoning: 4_499 }), step({ prompt: 95_100 })]
+    expect(TokenUsage.project(under, { compactAt: 100_000 }, options).compactions).toBe(0)
+  })
+
+  test("the guard's floor counts reasoning too, as floorAfterCompaction does", () => {
+    clock = 0
+    // every request counts 100_000 + 500 + 50_000 = 150_500. After the first compaction the floor is
+    // that same 150_500, so the next needs 200_500 and never comes; a floor without reasoning
+    // (100_500) would let every later request compact again.
+    const steps = Array.from({ length: 5 }, () => step({ prompt: 100_000, reasoning: 50_000 }))
+    expect(TokenUsage.project(steps, { compactAt: 100_000 }, options).compactions).toBe(1)
+  })
+
   test("the product's guard: after a compaction the next one needs half a threshold over the first request after it", () => {
     clock = 0
     // 40 steps growing 10k each from 100k; the kept prompt (120k) is itself over the threshold
