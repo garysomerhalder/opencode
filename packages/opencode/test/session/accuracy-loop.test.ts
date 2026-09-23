@@ -1079,8 +1079,12 @@ it.instance(
   "a second compaction numbers its checkpoint 2 and keeps the task from the first",
   () =>
     Effect.gen(function* () {
-      const { llm } = yield* useConfig({ autonomous_compact_at: 40_000 })
+      // tail_turns 0: no turn is kept verbatim, so by the second compaction the
+      // original message is gone from the history and only the first
+      // checkpoint's metadata can carry the task forward
+      const { llm } = yield* useConfig({ autonomous_compact_at: 40_000 }, { compaction: { tail_turns: 0 } })
       const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
       const chat = yield* session()
       // 45k, compact, 90k (over 45k floor + 20k), compact again, done
       yield* llm.push(bigStep())
@@ -1094,6 +1098,18 @@ it.instance(
         autonomous: true,
         parts: [{ type: "text", text: "The original task" }],
       })
+      const all = yield* sessions.messages({ sessionID: chat.id })
+      const original = all.find(
+        (msg) => msg.info.role === "user" && msg.parts.some((p) => p.type === "text" && p.text === "The original task"),
+      )
+      expect(original).toBeDefined()
+      // both compactions kept no tail, and the original is outside what the model sees
+      const compactions = all.flatMap((msg) => msg.parts.filter((p) => p.type === "compaction"))
+      expect(compactions).toHaveLength(2)
+      for (const part of compactions) expect(part.type === "compaction" && part.tail_start_id).toBeFalsy()
+      const visible = MessageV2.filterCompacted(yield* MessageV2.stream(chat.id))
+      expect(visible.some((msg) => msg.info.id === original!.info.id)).toBe(false)
+
       const checkpoints = (yield* notes(chat.id)).filter((n) => n.kind === "checkpoint")
       expect(checkpoints).toHaveLength(2)
       expect(checkpoints[1]!.text).toContain('<checkpoint n="2"')
