@@ -121,7 +121,7 @@ function render(
     const task = cut ? clip(input.task, shown.taskBytes) : input.task
     record.push(
       "Task, as the user wrote it (first message of the session, verbatim):",
-      indent(task),
+      indent(escape(task)),
       ...(cut
         ? [
             `  [task statement cut at ${shown.taskBytes >= 1024 ? `${shown.taskBytes / 1024} KB` : `${shown.taskBytes} bytes`}]`,
@@ -277,9 +277,19 @@ export function stepsSince(messages: ReadonlyArray<Message>, since: number | und
   return messages.filter((message) => message.info.role === "assistant" && message.info.time.created > since).length
 }
 
-/** One item of the record, capped. */
+/**
+ * Model-written text (todo content, commands, the task) must not be able to
+ * close the record's frame and borrow its authority: the frame's own tags are
+ * escaped wherever they appear in it.
+ */
+function escape(text: string) {
+  return text.replace(/<(\/?)(host-record|checkpoint)\b/gi, "&lt;$1$2")
+}
+
+/** One line of the record: newlines flattened, frame tags escaped, capped. */
 function line(text: string, bytes = LINE_BYTES) {
-  return Buffer.byteLength(text, "utf-8") > bytes ? `${clip(text, bytes)}…` : text
+  const flat = text.replace(/\s*[\r\n]+\s*/g, " ").trim()
+  return escape(Buffer.byteLength(flat, "utf-8") > bytes ? `${clip(flat, bytes)}…` : flat)
 }
 
 /** The first `bytes` bytes of a string, never splitting a character. */
