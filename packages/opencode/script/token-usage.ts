@@ -8,7 +8,9 @@
 // the provider reported. The prompt of a request is uncached input + cached
 // read + cache write.
 
+import type { SessionV1 } from "@opencode-ai/core/v1/session"
 import { OutputBudget } from "../src/session/output-budget"
+import { overThreshold } from "../src/session/overflow"
 
 /** Dollars per million tokens. */
 export interface Price {
@@ -42,6 +44,8 @@ export interface Step {
   readonly cost: number
   /** The request that wrote a compaction summary. */
   readonly summary: boolean
+  /** The turn was sent with `autonomous: true` (the desktop goal loop). */
+  readonly autonomous: boolean
   /** Tool outputs produced in this step (they are in the prompt from the next step on). */
   readonly tools: ReadonlyArray<ToolOutput>
 }
@@ -183,8 +187,10 @@ export function calibrate(steps: ReadonlyArray<Step>) {
 const MIN_PROMPT = 10_000
 
 export interface Lever {
-  /** Compact when the prompt reaches this many tokens. */
+  /** `compaction.threshold`: every turn compacts once the last request reached this many tokens. */
   readonly compactAt?: number
+  /** `experimental.accuracy.autonomous_compact_at`: the same, for autonomous turns only. */
+  readonly autonomousCompactAt?: number
   /** The per-step tool-output budget. */
   readonly budget?: OutputBudget.Settings
   /** Tokens taken off every request (system prompt, skill list). */
@@ -206,7 +212,9 @@ export interface Projection {
   readonly promptMax: number
   readonly input: number
   readonly cacheRead: number
+  readonly cacheWrite: number
   readonly output: number
+  readonly reasoning: number
 }
 
 /**
@@ -217,37 +225,71 @@ export interface Projection {
  * that really happened) the simulated one shrinks to at most the actual size.
  * Uncached input keeps its actual size for an ordinary step (the new tokens of
  * that step); for a full cache miss it is the whole simulated prompt, scaled by
- * the actual miss ratio. A simulated compaction costs one summary request with
- * its prompt sent uncached (as observed: summary requests read no cache) and
- * makes the next request a full miss. With no lever it reproduces the actual
- * numbers exactly.
+ * the actual miss ratio; cache writes keep their actual size where they fit.
+ * Compaction follows the product: before each request, overThreshold (the
+ * product's function) looks at the last finished request's prompt plus output,
+ * with the re-compaction floor reset by every summary, real or simulated.
+ * A simulated compaction costs one summary request with the history sent
+ * uncached (as observed: summary requests read no cache; the whole simulated
+ * prompt is charged, which overstates it, since observed summaries send about
+ * half) and makes the next request a full miss. With no lever it reproduces the
+ * actual tokens exactly, cache writes and reasoning included.
  */
 export function project(steps: ReadonlyArray<Step>, lever: Lever, options: ProjectOptions): Projection {
   const cut = lever.perRequestCut ?? 0
-  let requests = 0
-  let compactions = 0
-  let prompt = 0
-  let promptMax = 0
-  let input = 0
-  let cacheRead = 0
-  let output = 0
+  const total = {
+    requests: 0,
+    compactions: 0,
+    prompt: 0,
+    promptMax: 0,
+    input: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    output: 0,
+    reasoning: 0,
+  }
   let simulated = 0
   let previousActual = 0
   let carried = 0
   let missNext = false
-  // the product's guard (overflow.ts overThreshold): after a compaction, the next
-  // one needs half a threshold of growth over the first prompt after it
+  // What the product looks at before each request: the last finished request's
+  // tokens (prompt + output), and the floor its re-compaction guard uses, the
+  // first request after the latest summary (real or simulated).
+  let last: { tokens: SessionV1.Assistant["tokens"]; summary: boolean } | undefined
   let floor: number | undefined
   let floorPending = false
 
-  const send = (size: number, uncached: number, out: number) => {
-    requests++
-    prompt += size
-    promptMax = Math.max(promptMax, size)
-    input += uncached
-    cacheRead += size - uncached
-    output += out
+  const send = (request: {
+    size: number
+    uncached: number
+    write: number
+    output: number
+    reasoning: number
+    summary: boolean
+  }) => {
+    const read = request.size - request.uncached - request.write
+    total.requests++
+    total.prompt += request.size
+    total.promptMax = Math.max(total.promptMax, request.size)
+    total.input += request.uncached
+    total.cacheRead += read
+    total.cacheWrite += request.write
+    total.output += request.output
+    total.reasoning += request.reasoning
+    const tokens = {
+      input: request.uncached,
+      output: request.output,
+      reasoning: request.reasoning,
+      cache: { read, write: request.write },
+    }
+    if (floorPending && !request.summary) {
+      floor = request.size + request.output
+      floorPending = false
+    }
+    last = { tokens, summary: request.summary }
   }
+  // compaction.threshold applies to every turn; the autonomous default only to autonomous ones
+  const thresholdFor = (step: Step) => lever.compactAt ?? (step.autonomous ? lever.autonomousCompactAt : undefined)
 
   // A request that failed reports no tokens: it cost nothing and says nothing
   // about the prompt, so it is not replayed.
@@ -263,16 +305,19 @@ export function project(steps: ReadonlyArray<Step>, lever: Lever, options: Proje
       carried = 0
       previousActual = actual
 
-      const limit =
-        lever.compactAt === undefined
-          ? undefined
-          : floor === undefined
-            ? lever.compactAt
-            : Math.max(lever.compactAt, floor + Math.floor(lever.compactAt / 2))
-      if (limit !== undefined && !step.summary && Math.max(MIN_PROMPT, simulated - cut) >= limit) {
-        compactions++
-        const before = Math.max(MIN_PROMPT, simulated - cut)
-        send(before, before, options.summaryOutput)
+      // prompt.ts: before the next request, the last finished one (not a summary)
+      // is checked with overThreshold, the same function the product calls
+      const threshold = thresholdFor(step)
+      if (
+        threshold !== undefined &&
+        !step.summary &&
+        last &&
+        !last.summary &&
+        overThreshold({ tokens: last.tokens, threshold, floor })
+      ) {
+        total.compactions++
+        const history = Math.max(MIN_PROMPT, simulated - cut)
+        send({ size: history, uncached: history, write: 0, output: options.summaryOutput, reasoning: 0, summary: true })
         // the observed prompt after a compaction includes whatever the cut removes
         simulated = Math.min(simulated, options.afterCompaction)
         missNext = true
@@ -280,30 +325,134 @@ export function project(steps: ReadonlyArray<Step>, lever: Lever, options: Proje
       }
 
       const size = Math.max(MIN_PROMPT, simulated - cut)
-      if (floorPending) {
-        floor = size
-        floorPending = false
-      }
       const uncached = missNext
         ? size
         : fullMiss(step)
           ? Math.min(size, Math.round((step.input / actual) * size))
           : Math.min(size, step.input)
+      const write = missNext ? 0 : Math.min(step.cacheWrite, size - uncached)
       missNext = false
-      send(size, uncached, step.output + step.reasoning)
-      if (step.reasoning) output -= step.reasoning
+      send({ size, uncached, write, output: step.output, reasoning: step.reasoning, summary: step.summary })
+      // a summary that really happened resets the guard's floor, as in the product
+      if (step.summary) floorPending = true
 
       if (lever.budget) {
         const decisions = OutputBudget.plan(
           step.tools.map((tool) => ({ callID: tool.callID, tool: tool.tool, bytes: tool.bytes, archived: tool.cut })),
           lever.budget,
         )
-        const removed = decisions.reduce((total, d) => total + d.bytes - d.maxBytes, 0)
+        const removed = decisions.reduce((sum, d) => sum + d.bytes - d.maxBytes, 0)
         carried = Math.round(removed * options.tokensPerByte)
       }
     })
 
-  return { requests, compactions, prompt, promptMax, input, cacheRead, output }
+  return total
+}
+
+/**
+ * Reads every request (step-finish part) of a session database, with the tool
+ * outputs produced in that step and the flags of its message and turn. Read-only:
+ * SELECTs only. Parts are taken in id order within a message; a step's tools are
+ * the tool parts since the previous step-finish of the same message.
+ */
+export function readSteps(db: { query: (sql: string) => { all: () => unknown[] } }): Step[] {
+  const users = new Map(
+    (
+      db
+        .query(
+          `select id, json_extract(data,'$.autonomous') autonomous from message where json_extract(data,'$.role') = 'user'`,
+        )
+        .all() as { id: string; autonomous: unknown }[]
+    ).map((row) => [row.id, row.autonomous === 1 || row.autonomous === true]),
+  )
+  const messages = new Map(
+    (
+      db
+        .query(
+          `select id, time_created t, json_extract(data,'$.agent') agent, json_extract(data,'$.providerID') provider,
+             json_extract(data,'$.modelID') model, json_extract(data,'$.summary') summary,
+             json_extract(data,'$.parentID') parent
+           from message where json_extract(data,'$.role') = 'assistant'`,
+        )
+        .all() as {
+        id: string
+        t: number
+        agent: string | null
+        provider: string | null
+        model: string | null
+        summary: unknown
+        parent: string | null
+      }[]
+    ).map((row) => [row.id, row]),
+  )
+  const rows = db
+    .query(
+      `select id, message_id, session_id, json_extract(data,'$.type') type,
+         case when json_extract(data,'$.type') = 'step-finish' then data end data,
+         case when json_extract(data,'$.type') = 'tool'
+           then length(cast(coalesce(json_extract(data,'$.state.output'),'') as blob)) end bytes,
+         case when json_extract(data,'$.type') = 'tool' then json_extract(data,'$.tool') end tool,
+         case when json_extract(data,'$.type') = 'tool' then json_extract(data,'$.callID') end call,
+         case when json_extract(data,'$.type') = 'tool' then
+           (json_extract(data,'$.state.metadata.outputPath') is not null
+            or json_extract(data,'$.state.metadata.archive') is not null) end cut
+       from part
+       where json_extract(data,'$.type') in ('step-finish','tool')
+       order by message_id, id`,
+    )
+    .all() as {
+    id: string
+    message_id: string
+    session_id: string
+    type: string
+    data: string | null
+    bytes: number | null
+    tool: string | null
+    call: string | null
+    cut: number | null
+  }[]
+
+  const steps: Step[] = []
+  let pending: ToolOutput[] = []
+  let current = ""
+  let index = 0
+  for (const row of rows) {
+    if (row.message_id !== current) {
+      current = row.message_id
+      pending = []
+      index = 0
+    }
+    if (row.type === "tool") {
+      pending.push({ tool: row.tool ?? "?", callID: row.call ?? row.id, bytes: row.bytes ?? 0, cut: row.cut === 1 })
+      continue
+    }
+    const message = messages.get(row.message_id)
+    if (!message) continue
+    const data = JSON.parse(row.data ?? "{}") as {
+      tokens?: { input?: number; output?: number; reasoning?: number; cache?: { read?: number; write?: number } }
+      cost?: number
+    }
+    steps.push({
+      session: row.session_id,
+      message: row.message_id,
+      agent: message.agent ?? "?",
+      provider: message.provider ?? "?",
+      model: message.model ?? "?",
+      // steps of one message share its time; their order within it is kept
+      time: message.t + index++ / 1000,
+      input: data.tokens?.input ?? 0,
+      output: data.tokens?.output ?? 0,
+      reasoning: data.tokens?.reasoning ?? 0,
+      cacheRead: data.tokens?.cache?.read ?? 0,
+      cacheWrite: data.tokens?.cache?.write ?? 0,
+      cost: data.cost ?? 0,
+      summary: message.summary === 1 || message.summary === true,
+      autonomous: users.get(message.parent ?? "") ?? false,
+      tools: pending,
+    })
+    pending = []
+  }
+  return steps
 }
 
 export * as TokenUsage from "./token-usage"

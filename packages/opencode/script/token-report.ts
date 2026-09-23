@@ -7,7 +7,9 @@
 //     [--after-compaction 75000] [--json]
 //
 // Levers are projected one at a time, then combined ("all of the above" takes
-// the first value of each). --cut is a fixed number of tokens taken off every
+// the first value of each). --compact-at models compaction.threshold (every
+// turn); --autonomous-compact-at models experimental.accuracy.autonomous_compact_at
+// (turns sent with autonomous: true only). --cut is a fixed number of tokens taken off every
 // request, e.g. the tool schemas or instructions a config change removes
 // (measure those with script/prompt-probe.ts).
 //
@@ -30,6 +32,7 @@ const { values: args } = parseArgs({
     provider: { type: "string" },
     model: { type: "string" },
     "compact-at": { type: "string" },
+    "autonomous-compact-at": { type: "string" },
     budget: { type: "string" },
     cut: { type: "string" },
     "after-compaction": { type: "string" },
@@ -44,87 +47,7 @@ const until = args.until ? new Date(`${args.until}T00:00:00`).getTime() : Number
 
 // --- read ---------------------------------------------------------------
 
-type Row = {
-  id: string
-  message_id: string
-  session_id: string
-  type: string
-  data: string | null
-  bytes: number | null
-  tool: string | null
-  call: string | null
-  cut: number | null
-}
-const messages = new Map<string, { time: number; agent: string; provider: string; model: string; summary: boolean }>()
-for (const row of db
-  .query(
-    `select id, time_created t, json_extract(data,'$.agent') agent, json_extract(data,'$.providerID') provider,
-       json_extract(data,'$.modelID') model, json_extract(data,'$.summary') summary
-     from message where json_extract(data,'$.role') = 'assistant'`,
-  )
-  .all() as any[])
-  messages.set(row.id, {
-    time: row.t,
-    agent: row.agent ?? "?",
-    provider: row.provider ?? "?",
-    model: row.model ?? "?",
-    summary: row.summary === 1 || row.summary === true || row.summary === "true",
-  })
-
-const rows = db
-  .query(
-    `select id, message_id, session_id, json_extract(data,'$.type') type,
-       case when json_extract(data,'$.type') = 'step-finish' then data end data,
-       case when json_extract(data,'$.type') = 'tool'
-         then length(cast(coalesce(json_extract(data,'$.state.output'),'') as blob)) end bytes,
-       case when json_extract(data,'$.type') = 'tool' then json_extract(data,'$.tool') end tool,
-       case when json_extract(data,'$.type') = 'tool' then json_extract(data,'$.callID') end call,
-       case when json_extract(data,'$.type') = 'tool' then
-         (json_extract(data,'$.state.metadata.outputPath') is not null
-          or json_extract(data,'$.state.metadata.archive') is not null) end cut
-     from part
-     where json_extract(data,'$.type') in ('step-finish','tool')
-     order by message_id, id`,
-  )
-  .all() as Row[]
-
-const steps: TokenUsage.Step[] = []
-let pending: TokenUsage.ToolOutput[] = []
-let current = ""
-for (const row of rows) {
-  if (row.message_id !== current) {
-    current = row.message_id
-    pending = []
-  }
-  if (row.type === "tool") {
-    pending.push({ tool: row.tool ?? "?", callID: row.call ?? row.id, bytes: row.bytes ?? 0, cut: row.cut === 1 })
-    continue
-  }
-  const message = messages.get(row.message_id)
-  if (!message) continue
-  const data = JSON.parse(row.data!) as {
-    tokens?: { input?: number; output?: number; reasoning?: number; cache?: { read?: number; write?: number } }
-    cost?: number
-  }
-  steps.push({
-    session: row.session_id,
-    message: row.message_id,
-    agent: message.agent,
-    provider: message.provider,
-    model: message.model,
-    // steps of one message share its time; the part id keeps their order
-    time: message.time + steps.length * 1e-6,
-    input: data.tokens?.input ?? 0,
-    output: data.tokens?.output ?? 0,
-    reasoning: data.tokens?.reasoning ?? 0,
-    cacheRead: data.tokens?.cache?.read ?? 0,
-    cacheWrite: data.tokens?.cache?.write ?? 0,
-    cost: data.cost ?? 0,
-    summary: message.summary,
-    tools: pending,
-  })
-  pending = []
-}
+const steps = TokenUsage.readSteps(db)
 
 const selected = steps.filter(
   (step) =>
@@ -316,15 +239,15 @@ table(
   [
     [
       "first request of a session",
-      k(Math.min(...firsts)),
-      k(TokenUsage.quantile(firsts, 0.5)),
-      k(Math.max(...firsts)),
+      firsts.length ? k(Math.min(...firsts)) : "-",
+      firsts.length ? k(TokenUsage.quantile(firsts, 0.5)) : "-",
+      firsts.length ? k(Math.max(...firsts)) : "-",
       firsts.length,
     ],
     [
       "first request after a compaction",
       afterCompaction.length ? k(Math.min(...afterCompaction)) : "-",
-      k(TokenUsage.quantile(afterCompaction, 0.5)),
+      afterCompaction.length ? k(TokenUsage.quantile(afterCompaction, 0.5)) : "-",
       afterCompaction.length ? k(Math.max(...afterCompaction)) : "-",
       afterCompaction.length,
     ],
@@ -359,18 +282,15 @@ out.push(
     `${Math.round((100 * toolBytes * calibration.tokensPerByte) / Math.max(1, growth))}% of all prompt growth (${k(growth)} tokens).`,
   "",
 )
-const byTool = [
-  ...TokenUsage.group(
-    allTools.map((t) => ({ ...t, session: "", time: 0 }) as any),
-    (t: any) => t.tool as string,
-  ).entries(),
-]
+const toolGroups = new Map<string, TokenUsage.ToolOutput[]>()
+for (const output of allTools) toolGroups.set(output.tool, [...(toolGroups.get(output.tool) ?? []), output])
+const byTool = [...toolGroups.entries()]
   .map(([tool, list]) => ({
     tool,
     count: list.length,
-    bytes: (list as any[]).reduce((total, t) => total + t.bytes, 0),
-    max: Math.max(...(list as any[]).map((t) => t.bytes)),
-    cut: (list as any[]).filter((t) => t.cut).length,
+    bytes: list.reduce((total, t) => total + t.bytes, 0),
+    max: Math.max(...list.map((t) => t.bytes)),
+    cut: list.filter((t) => t.cut).length,
   }))
   .sort((a, b) => b.bytes - a.bytes)
 table(
@@ -419,7 +339,12 @@ out.push(
 )
 const levers: { name: string; lever: TokenUsage.Lever }[] = [{ name: "actual (no lever)", lever: {} }]
 for (const value of (args["compact-at"] ?? "").split(",").filter(Boolean))
-  levers.push({ name: `compact at ${k(Number(value))}`, lever: { compactAt: Number(value) } })
+  levers.push({ name: `compaction.threshold ${k(Number(value))} (all turns)`, lever: { compactAt: Number(value) } })
+for (const value of (args["autonomous-compact-at"] ?? "").split(",").filter(Boolean))
+  levers.push({
+    name: `autonomous_compact_at ${k(Number(value))} (autonomous turns only)`,
+    lever: { autonomousCompactAt: Number(value) },
+  })
 for (const value of (args.budget ?? "").split(",").filter(Boolean)) {
   const [stepBytes, floorBytes] = value.split(":").map(Number)
   levers.push({
@@ -442,10 +367,22 @@ if (levers.length > 2)
   })
 
 const projections = levers.map(({ name, lever }) => {
-  let total = { requests: 0, compactions: 0, prompt: 0, promptMax: 0, input: 0, cacheRead: 0, output: 0, cost: 0 }
+  let total = {
+    requests: 0,
+    compactions: 0,
+    prompt: 0,
+    promptMax: 0,
+    input: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    output: 0,
+    reasoning: 0,
+    cost: 0,
+  }
   for (const list of ordered.values()) {
     const p = TokenUsage.project(list, lever, options)
-    const cost = TokenUsage.priced({ input: p.input, cacheRead: p.cacheRead, output: p.output }, dominant(list)).total
+    // priced exactly as totals() prices the actual requests: writes at their price, reasoning as output
+    const cost = TokenUsage.priced(p, dominant(list)).total
     total = {
       requests: total.requests + p.requests,
       compactions: total.compactions + p.compactions,
@@ -453,7 +390,9 @@ const projections = levers.map(({ name, lever }) => {
       promptMax: Math.max(total.promptMax, p.promptMax),
       input: total.input + p.input,
       cacheRead: total.cacheRead + p.cacheRead,
+      cacheWrite: total.cacheWrite + p.cacheWrite,
       output: total.output + p.output,
+      reasoning: total.reasoning + p.reasoning,
       cost: total.cost + cost,
     }
   }

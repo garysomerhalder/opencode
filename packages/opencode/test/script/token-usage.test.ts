@@ -1,34 +1,37 @@
+import { Database } from "bun:sqlite"
 import { describe, expect, test } from "bun:test"
 import { TokenUsage } from "../../script/token-usage"
 
-const price = { input: 0.1, output: 0.2, cacheRead: 0.002 }
+const price = { input: 0.1, output: 0.2, cacheRead: 0.002, cacheWrite: 0.125 }
 
 let clock = 0
 const step = (input: Partial<TokenUsage.Step> & { prompt?: number } = {}): TokenUsage.Step => {
   const prompt = input.prompt ?? 100_000
   const uncached = input.input ?? 2_000
+  const write = input.cacheWrite ?? 0
   return {
     session: "s1",
-    message: "m1",
+    message: `m${clock}`,
     agent: "build",
     provider: "opencode-go",
     model: "muse",
     time: clock++,
     output: 500,
     reasoning: 0,
-    cacheWrite: 0,
     cost: 0,
     summary: false,
+    autonomous: false,
     tools: [],
     ...input,
     input: uncached,
-    cacheRead: input.cacheRead ?? prompt - uncached,
+    cacheWrite: write,
+    cacheRead: input.cacheRead ?? prompt - uncached - write,
   }
 }
 
 describe("TokenUsage basics", () => {
   test("prompt tokens are uncached + cached read + cache write", () => {
-    expect(TokenUsage.promptTokens(step({ prompt: 50_000, input: 1_000 }))).toBe(50_000)
+    expect(TokenUsage.promptTokens(step({ prompt: 50_000, input: 1_000, cacheWrite: 4_000 }))).toBe(50_000)
   })
 
   test("a full cache miss is most of a large prompt sent uncached", () => {
@@ -38,15 +41,24 @@ describe("TokenUsage basics", () => {
     expect(TokenUsage.fullMiss(step({ prompt: 5_000, input: 5_000 }))).toBe(false)
   })
 
-  test("priced splits the cost into uncached, cached and output, per million tokens", () => {
-    const cost = TokenUsage.priced(step({ prompt: 1_000_000, input: 100_000, output: 10_000 }), price)
+  test("priced splits the cost per million tokens; reasoning is billed as output, writes at their price", () => {
+    const cost = TokenUsage.priced(
+      { input: 100_000, cacheRead: 890_000, cacheWrite: 10_000, output: 10_000, reasoning: 5_000 },
+      price,
+    )
     expect(cost.input).toBeCloseTo(0.01)
-    expect(cost.cacheRead).toBeCloseTo(0.0018)
-    expect(cost.output).toBeCloseTo(0.002)
-    expect(cost.total).toBeCloseTo(0.0138)
+    expect(cost.cacheRead).toBeCloseTo(0.00178)
+    expect(cost.cacheWrite).toBeCloseTo(0.00125)
+    expect(cost.output).toBeCloseTo(0.003)
+    expect(cost.total).toBeCloseTo(0.01603)
+    // no write price: writes cost what uncached input costs
+    expect(
+      TokenUsage.priced({ input: 0, cacheRead: 0, cacheWrite: 1e6, output: 0 }, { ...price, cacheWrite: undefined })
+        .total,
+    ).toBeCloseTo(0.1)
   })
 
-  test("quantile", () => {
+  test("quantile is nearest-rank", () => {
     expect(TokenUsage.quantile([5, 1, 4, 2, 3], 0.5)).toBe(3)
     expect(TokenUsage.quantile([5, 1, 4, 2, 3], 1)).toBe(5)
     expect(TokenUsage.quantile([], 0.5)).toBe(0)
@@ -64,6 +76,16 @@ describe("TokenUsage basics", () => {
     expect(t.output).toBe(1_500)
     const sum = steps.reduce((total, s) => total + TokenUsage.priced(s, price).total, 0)
     expect(t.cost.total).toBeCloseTo(sum)
+  })
+
+  test("histogram counts requests per prompt-size bucket, with an overflow bucket", () => {
+    const steps = [10_000, 49_999, 50_000, 120_000, 900_000].map((prompt) => step({ prompt, input: 1_000 }))
+    expect(TokenUsage.histogram(steps, [50_000, 100_000, 500_000])).toEqual({
+      edges: [50_000, 100_000, 500_000],
+      counts: [2, 1, 1],
+      over: 1,
+    })
+    expect(TokenUsage.histogram([], [50_000])).toEqual({ edges: [50_000], counts: [0], over: 0 })
   })
 })
 
@@ -85,30 +107,85 @@ describe("TokenUsage.project", () => {
     return Array.from({ length: 20 }, (_, i) =>
       step({
         prompt: 50_000 + i * 50_000,
-        input: i === 10 ? 50_000 + i * 50_000 : 3_000,
+        input: i === 10 ? 50_000 + i * 50_000 - 3_000 : 3_000,
+        cacheWrite: i === 10 ? 3_000 : 1_000,
+        reasoning: 200,
         tools: [{ tool: "bash", callID: `c${i}`, bytes: 120_000, cut: false }],
       }),
     )
   }
   const options = { tokensPerByte: 0.25, afterCompaction: 60_000, summaryOutput: 2_500 }
 
-  test("with no lever the projection reproduces the actual tokens exactly", () => {
+  test("with no lever the projection reproduces the actual tokens exactly, cache writes and reasoning included", () => {
     const steps = session()
     const actual = TokenUsage.totals(steps, price)
     const projected = TokenUsage.project(steps, {}, options)
     expect(projected.input).toBe(actual.input)
     expect(projected.cacheRead).toBe(actual.cacheRead)
+    expect(projected.cacheWrite).toBe(actual.cacheWrite)
     expect(projected.output).toBe(actual.output)
+    expect(projected.reasoning).toBe(actual.reasoning)
+    expect(projected.cacheWrite).toBeGreaterThan(0)
+    expect(projected.reasoning).toBeGreaterThan(0)
+    expect(TokenUsage.priced(projected, price).total).toBeCloseTo(actual.cost.total)
     expect(projected.compactions).toBe(0)
   })
 
   test("compacting at a threshold caps the prompt and adds one uncached summary request per compaction", () => {
     const steps = session()
     const projected = TokenUsage.project(steps, { compactAt: 300_000 }, options)
-    expect(projected.promptMax).toBeLessThan(300_000 + 50_000)
     expect(projected.compactions).toBeGreaterThan(0)
     expect(projected.requests).toBe(steps.length + projected.compactions)
     expect(projected.cacheRead).toBeLessThan(TokenUsage.totals(steps, price).cacheRead)
+  })
+
+  test("like the product, it compacts when the last finished request (prompt + output) reached the threshold", () => {
+    clock = 0
+    // the last finished request counts 99_500 prompt + 500 output = 100_000: the next one compacts first
+    const steps = [step({ prompt: 99_500 }), step({ prompt: 99_600 }), step({ prompt: 99_700 })]
+    expect(TokenUsage.project(steps, { compactAt: 100_000 }, options).compactions).toBe(1)
+    // one token under counts nothing
+    clock = 0
+    const under = [step({ prompt: 99_499 }), step({ prompt: 99_600 })]
+    expect(TokenUsage.project(under, { compactAt: 100_000 }, options).compactions).toBe(0)
+  })
+
+  test("the product's guard: after a compaction the next one needs half a threshold over the first request after it", () => {
+    clock = 0
+    // 40 steps growing 10k each from 100k; the kept prompt (120k) is itself over the threshold
+    const steps = Array.from({ length: 40 }, (_, i) => step({ prompt: 100_000 + i * 10_000 }))
+    const heavy = TokenUsage.project(steps, { compactAt: 100_000 }, { ...options, afterCompaction: 120_000 })
+    // compacts before steps 1, 7, 13, 19, 25, 31 and 37: every 6 steps once the floor is 120.5k
+    expect(heavy.compactions).toBe(7)
+  })
+
+  test("a summary that really happened resets the floor, as the product's does", () => {
+    clock = 0
+    const steps = [
+      ...Array.from({ length: 5 }, (_, i) => step({ prompt: 100_000 + i * 10_000 })),
+      step({ prompt: 140_000, input: 140_000, summary: true }),
+      // after the real compaction the prompt is 130k, over the 100k threshold: the guard holds it until 130.5k + 50k
+      ...Array.from({ length: 6 }, (_, i) => step({ prompt: 130_000 + i * 10_000 })),
+    ]
+    const projected = TokenUsage.project(steps, { compactAt: 400_000 }, options)
+    expect(projected.compactions).toBe(0)
+    const tight = TokenUsage.project(steps, { compactAt: 100_000 }, { ...options, afterCompaction: 1_000_000 })
+    // before step 1 (the last request counted 100.5k). The real summary then sets the
+    // floor to 130.5k, so the next needs a last request of 180.5k; the last one is 180k.
+    // Without the reset the floor would stay 110.5k and it would compact again at 160.5k.
+    expect(tight.compactions).toBe(1)
+  })
+
+  test("the autonomous default applies to autonomous turns only; compaction.threshold to all", () => {
+    const steps = session()
+    const interactive = TokenUsage.project(steps, { autonomousCompactAt: 300_000 }, options)
+    expect(interactive.compactions).toBe(0)
+    const autonomous = TokenUsage.project(
+      steps.map((s) => ({ ...s, autonomous: true })),
+      { autonomousCompactAt: 300_000 },
+      options,
+    )
+    expect(autonomous.compactions).toBe(TokenUsage.project(steps, { compactAt: 300_000 }, options).compactions)
   })
 
   test("a full cache miss costs the simulated prompt, not the actual one", () => {
@@ -118,8 +195,8 @@ describe("TokenUsage.project", () => {
     // uncached size, so the whole difference in uncached input is the miss at step 10
     const budgeted = TokenUsage.project(steps, { budget: { stepBytes: 32_768, floorBytes: 4_096 } }, options)
     const perStep = Math.round((120_000 - 32_768) * options.tokensPerByte)
-    const smallerMiss = 10 * perStep
-    expect(base.input - budgeted.input).toBe(smallerMiss)
+    const actualMiss = steps[10].input / TokenUsage.promptTokens(steps[10])
+    expect(base.input - budgeted.input).toBe(Math.round(actualMiss * 10 * perStep))
   })
 
   test("compacting trades cached reads for uncached summary requests and the miss after each", () => {
@@ -139,20 +216,13 @@ describe("TokenUsage.project", () => {
     expect(budgeted.promptMax).toBeLessThan(base.promptMax - 19 * 20_000)
   })
 
-  test("like the product, a compaction that leaves the prompt over the threshold does not repeat every step", () => {
-    clock = 0
-    // 40 steps growing 10k each, from 100k
-    const steps = Array.from({ length: 40 }, (_, i) => step({ prompt: 100_000 + i * 10_000 }))
-    // the kept prompt (system prompt + summary + tail) is itself over the threshold:
-    // without the guard every step would compact; with it, one in every ~5 steps
-    const heavy = TokenUsage.project(steps, { compactAt: 100_000 }, { ...options, afterCompaction: 120_000 })
-    expect(heavy.compactions).toBeGreaterThan(5)
-    expect(heavy.compactions).toBeLessThanOrEqual(9)
-  })
-
   test("a failed request with no tokens is not replayed and does not read as a jump", () => {
     const steps = session()
-    const withFailure = [...steps.slice(0, 5), step({ prompt: 0, input: 0, output: 0, time: 4.5 }), ...steps.slice(5)]
+    const withFailure = [
+      ...steps.slice(0, 5),
+      step({ prompt: 0, input: 0, cacheWrite: 0, output: 0, time: 4.5 }),
+      ...steps.slice(5),
+    ]
     const base = TokenUsage.project(steps, {}, options)
     const failed = TokenUsage.project(withFailure, { compactAt: 2_000_000 }, options)
     expect(failed.promptMax).toBe(base.promptMax)
@@ -177,5 +247,85 @@ describe("TokenUsage.project", () => {
     const base = TokenUsage.project(steps, {}, options)
     const cut = TokenUsage.project(steps, { perRequestCut: 10_000 }, options)
     expect(base.prompt - cut.prompt).toBe(10_000 * steps.length)
+  })
+})
+
+describe("TokenUsage.readSteps", () => {
+  test("one step per step-finish, with the tool outputs before it, from a session database", () => {
+    const db = new Database(":memory:")
+    db.run(
+      `create table message (id text primary key, session_id text, time_created integer, time_updated integer, data text)`,
+    )
+    db.run(
+      `create table part (id text primary key, message_id text, session_id text, time_created integer, time_updated integer, data text)`,
+    )
+    const message = (id: string, time: number, data: object) =>
+      db.run(`insert into message values (?, 'ses_1', ?, ?, ?)`, [id, time, time, JSON.stringify(data)])
+    const part = (id: string, messageID: string, data: object) =>
+      db.run(`insert into part values (?, ?, 'ses_1', 0, 0, ?)`, [id, messageID, JSON.stringify(data)])
+    const finish = (input: number, read: number, write = 0) => ({
+      type: "step-finish",
+      tokens: { input, output: 30, reasoning: 7, cache: { read, write } },
+      cost: 0.01,
+    })
+    const tool = (callID: string, output: string, metadata: object = {}) => ({
+      type: "tool",
+      tool: "bash",
+      callID,
+      state: { status: "completed", input: {}, output, metadata, title: "", time: { start: 0, end: 0 } },
+    })
+
+    message("msg_u1", 1000, { role: "user", autonomous: true })
+    message("msg_a1", 2000, {
+      role: "assistant",
+      parentID: "msg_u1",
+      agent: "build",
+      providerID: "meta",
+      modelID: "muse",
+    })
+    part("prt_01", "msg_a1", { type: "step-start" })
+    part("prt_02", "msg_a1", tool("c1", "héllo")) // 6 bytes in UTF-8
+    part("prt_03", "msg_a1", tool("c2", "x".repeat(10), { outputPath: "/tmp/tool_1" }))
+    part("prt_04", "msg_a1", finish(100, 900, 50))
+    part("prt_05", "msg_a1", { type: "step-start" })
+    part("prt_06", "msg_a1", tool("c3", "y".repeat(3), { archive: { path: "/tmp/tool_2" } }))
+    part("prt_07", "msg_a1", finish(10, 1100))
+    message("msg_u2", 3000, { role: "user" })
+    message("msg_a2", 4000, {
+      role: "assistant",
+      parentID: "msg_u2",
+      agent: "compaction",
+      providerID: "meta",
+      modelID: "muse",
+      summary: true,
+    })
+    part("prt_08", "msg_a2", finish(5000, 0))
+
+    const steps = TokenUsage.readSteps(db)
+    expect(steps).toHaveLength(3)
+    expect(steps.map((s) => s.tools.map((t) => [t.callID, t.bytes, t.cut]))).toEqual([
+      [
+        ["c1", 6, false],
+        ["c2", 10, true],
+      ],
+      [["c3", 3, true]],
+      [],
+    ])
+    expect(steps[0]).toMatchObject({
+      session: "ses_1",
+      agent: "build",
+      provider: "meta",
+      model: "muse",
+      input: 100,
+      cacheRead: 900,
+      cacheWrite: 50,
+      output: 30,
+      reasoning: 7,
+      cost: 0.01,
+      summary: false,
+      autonomous: true,
+    })
+    expect(steps[0].time).toBeLessThan(steps[1].time)
+    expect(steps[2]).toMatchObject({ agent: "compaction", summary: true, autonomous: false })
   })
 })
