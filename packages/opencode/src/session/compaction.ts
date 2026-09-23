@@ -318,12 +318,15 @@ const layer = Layer.effect(
       if (pruned > PRUNE_MINIMUM) {
         // With receipts on, a pruned output keeps a way back: an archive the
         // model's one-line receipt points at (accuracy C, part D). An output the
-        // per-call cap already archived keeps that archive. A failed write fails
-        // open: the part is pruned as before, without a receipt.
+        // per-call cap already archived keeps that archive; one cut to a file
+        // some other way (outputPath only) is left as before. `truncated` alone
+        // is not a cut: grep and glob set it for "more results exist". A failed
+        // write fails open: the part is pruned as before, without a receipt.
         const receipts = Accuracy.settings(cfg).outputReceipts
         for (const part of toPrune) {
           if (part.state.status === "completed") {
-            if (receipts && !part.state.metadata?.archive && !part.state.metadata?.truncated) {
+            const metadata = part.state.metadata
+            if (receipts && !metadata?.archive && typeof metadata?.outputPath !== "string") {
               const text = part.state.output
               const written = yield* Effect.exit(truncate.write(text))
               if (Exit.isSuccess(written))

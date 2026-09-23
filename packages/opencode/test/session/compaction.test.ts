@@ -950,6 +950,27 @@ describe("session.compaction.prune", () => {
   )
 
   it.live(
+    "prune archives a tool's own 'more results' output: truncated without a file is not a receipt",
+    provideTmpdirInstance(
+      (dir) =>
+        Effect.gen(function* () {
+          // grep and glob set truncated: true when there are more matches than they list;
+          // their output was never cut to a file.
+          const output = "Found 100 matches (more matches available)\n" + "match\n".repeat(40_000)
+          const info = yield* seedPrunable(dir, { output, metadata: { truncated: true, matches: 100 } })
+          yield* (yield* SessionCompaction.Service).prune({ sessionID: info.id })
+
+          const part = yield* prunedTool(info.id)
+          expect(part.state.time.compacted).toBeNumber()
+          const archive = part.state.metadata.archive as { path: string } | undefined
+          expect(archive?.path).toBeString()
+          expect(yield* Effect.promise(() => Bun.file(archive!.path).text())).toBe(output)
+        }),
+      { config: { compaction: { prune: true } } },
+    ),
+  )
+
+  it.live(
     "with output receipts off, prune writes no archive",
     provideTmpdirInstance(
       (dir) =>
