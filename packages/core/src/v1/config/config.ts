@@ -164,6 +164,10 @@ export const Info = Schema.Struct({
       reserved: Schema.optional(NonNegativeInt).annotate({
         description: "Token buffer for compaction. Leaves enough window to avoid overflow during compaction.",
       }),
+      threshold: Schema.optional(NonNegativeInt).annotate({
+        description:
+          "Compact once a request's prompt reaches this many tokens, before the model's context limit, on every turn. Each request resends the whole prompt, so this bounds the cost of long sessions. Unset: interactive turns compact at the model limit and autonomous turns at experimental.accuracy.autonomous_compact_at. 0 turns it off.",
+      }),
     }),
   ),
   experimental: Schema.optional(
@@ -217,6 +221,10 @@ export const Info = Schema.Struct({
           output_budget_step_bytes: Schema.optional(PositiveInt).annotate({
             description:
               "Bytes of tool output one step may put in front of the model before the budget cuts (default 131072)",
+          }),
+          autonomous_compact_at: Schema.optional(NonNegativeInt).annotate({
+            description:
+              "Autonomous turns compact once a request's prompt reaches this many tokens, instead of at the model's context limit (default 150000; 0 compacts only at the limit). compaction.threshold, when set, applies instead.",
           }),
           output_budget_floor_bytes: Schema.optional(PositiveInt).annotate({
             description: "The budget never shows a cut output smaller than this (default 4096)",

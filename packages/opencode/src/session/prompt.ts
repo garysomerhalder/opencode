@@ -63,6 +63,7 @@ import { SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
 import { LLMEvent } from "@opencode-ai/llm"
+import { compactionThreshold, floorAfterCompaction, overThreshold } from "./overflow"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -1235,10 +1236,19 @@ const layer = Layer.effect(
             continue
           }
 
+          // Compact at the model's limit, or earlier at the configured threshold
+          // (autonomous turns default to one): every request resends the whole
+          // prompt, so a long turn that waits for the limit pays for it on each
+          // step (#47).
           if (
             lastFinished &&
             lastFinished.summary !== true &&
-            (yield* compaction.isOverflow({ tokens: lastFinished.tokens, model }))
+            ((yield* compaction.isOverflow({ tokens: lastFinished.tokens, model })) ||
+              overThreshold({
+                tokens: lastFinished.tokens,
+                threshold: compactionThreshold({ cfg: yield* config.get(), autonomous: lastUser.autonomous }),
+                floor: floorAfterCompaction(msgs),
+              }))
           ) {
             yield* compaction.create({
               sessionID,
