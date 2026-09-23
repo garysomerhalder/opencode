@@ -59,6 +59,12 @@ export interface Input {
   readonly now: number
   /** The first message the user sent in the session, verbatim. */
   readonly task?: string
+  /**
+   * Where `task` comes from: the session's first message, or, for a session
+   * that compacted before checkpoints existed, the first message since that
+   * compaction (the session's own first message was compacted away).
+   */
+  readonly taskSince?: "session" | "compaction"
   /** The todo table's rows, in position order. */
   readonly todos: ReadonlyArray<Todo>
   /** When the list was last written (every row is rewritten on each write). */
@@ -119,8 +125,12 @@ function render(
   if (input.task !== undefined && input.task.trim() !== "") {
     const cut = Buffer.byteLength(input.task, "utf-8") > shown.taskBytes
     const task = cut ? clip(input.task, shown.taskBytes) : input.task
+    const source =
+      input.taskSince === "compaction"
+        ? "first message since the last compaction, verbatim; the session's own first message was compacted away"
+        : "first message of the session, verbatim"
     record.push(
-      "Task, as the user wrote it (first message of the session, verbatim):",
+      `Task, as the user wrote it (${source}):`,
       indent(escape(task)),
       ...(cut
         ? [

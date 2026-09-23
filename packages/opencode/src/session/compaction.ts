@@ -124,6 +124,7 @@ function completedCompactions(messages: SessionV1.WithParts[]) {
 type CheckpointMetadata = {
   n?: number
   task?: string
+  taskSince?: "session" | "compaction"
   files?: Checkpoint.ChangedFile[]
 }
 
@@ -264,10 +265,17 @@ const layer = Layer.effect(
       const written = yield* todos.written(input.sessionID)
       const n = (previous?.metadata.n ?? 0) + 1
       const task = previous?.metadata.task ?? Checkpoint.task(input.messages)
+      // A session that compacted before checkpoints existed has no carried
+      // task: its own first message is gone, and the one found is only the
+      // first since that compaction.
+      const taskSince =
+        previous?.metadata.taskSince ??
+        (previous === undefined && completedCompactions(input.messages).length > 0 ? "compaction" : "session")
       const text = Checkpoint.build({
         n,
         now: Date.now(),
         task,
+        taskSince,
         todos: yield* todos.get(input.sessionID),
         todosWrittenAt: written,
         stepsSince: Checkpoint.stepsSince(input.messages, written),
@@ -284,7 +292,7 @@ const layer = Layer.effect(
         kind: "checkpoint",
         label: "Checkpoint",
         text,
-        metadata: { n, ...(task === undefined ? {} : { task }), files } satisfies CheckpointMetadata,
+        metadata: { n, ...(task === undefined ? {} : { task }), taskSince, files } satisfies CheckpointMetadata,
       })
       yield* session.updateMessage(note.info)
       yield* session.updatePart(note.part)

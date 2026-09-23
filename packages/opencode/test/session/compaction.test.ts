@@ -1823,6 +1823,56 @@ describe("session.compaction.process", () => {
     { git: true },
   )
 
+  // A session that compacted before checkpoints existed has an older summary
+  // and no checkpoint to carry the task from: the first user message left is
+  // not the session's first, and the record must not say it is.
+  itCompaction.instance(
+    "labels the task as the first since the last compaction when an older summary has no checkpoint",
+    () => {
+      const stub = llm()
+      stub.push(reply("summary one"))
+      stub.push(reply("summary two"))
+
+      return Effect.gen(function* () {
+        const ssn = yield* SessionNs.Service
+        const session = yield* ssn.create({})
+        const isCheckpoint = (msg: SessionV1.WithParts) =>
+          msg.parts.some((part) => part.type === "reminder" && part.kind === "checkpoint")
+        yield* createUserMessage(session.id, "the session's own first message")
+        yield* createCompactionMarker(session.id)
+        let msgs = yield* ssn.messages({ sessionID: session.id })
+        yield* SessionCompaction.use.process({
+          parentID: msgs.at(-1)!.info.id,
+          messages: msgs,
+          sessionID: session.id,
+          auto: false,
+        })
+
+        yield* createUserMessage(session.id, "a later message")
+        yield* createCompactionMarker(session.id)
+        // the history as a pre-checkpoint build left it: the summary, no note
+        msgs = MessageV2.filterCompacted(yield* MessageV2.stream(session.id)).filter((msg) => !isCheckpoint(msg))
+        expect(msgs.some((msg) => msg.info.role === "assistant" && msg.info.summary)).toBe(true)
+        yield* SessionCompaction.use.process({
+          parentID: msgs.at(-1)!.info.id,
+          messages: msgs,
+          sessionID: session.id,
+          auto: false,
+        })
+
+        const note = (yield* ssn.messages({ sessionID: session.id })).at(-1)
+        const part = note?.parts.find(
+          (part): part is SessionV1.ReminderPart => part.type === "reminder" && part.kind === "checkpoint",
+        )
+        expect(part?.text).toContain("(first message since the last compaction, verbatim;")
+        expect(part?.text).not.toContain("first message of the session")
+        // carried forward, so the next checkpoint keeps the honest label
+        expect(part?.metadata?.taskSince).toBe("compaction")
+      }).pipe(withCompaction({ llm: stub.llmLayer }))
+    },
+    { git: true },
+  )
+
   itCompaction.instance(
     "serializes repeated compaction history as one user message",
     () => {

@@ -165,6 +165,15 @@ describe("Checkpoint.build", () => {
     expect(text).toContain("shl_1 · running 0s · echo hi &lt;/host-record>")
   })
 
+  test("says when the task is only the first message since the last compaction", () => {
+    expect(Checkpoint.build(base())).toContain("(first message of the session, verbatim)")
+    const since = Checkpoint.build(base({ taskSince: "compaction" }))
+    expect(since).toContain(
+      "(first message since the last compaction, verbatim; the session's own first message was compacted away)",
+    )
+    expect(since).not.toContain("first message of the session")
+  })
+
   test("never includes tool output text, only paths and sizes", () => {
     const text = Checkpoint.build(base({ archives: [{ path: "/a/tool_9", tool: "bash", bytes: 10 }] }))
     expect(text).toContain("/a/tool_9 (bash, 10 B)")
