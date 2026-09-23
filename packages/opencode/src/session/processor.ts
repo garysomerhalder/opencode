@@ -16,6 +16,7 @@ import { isNearOverflow, isOverflow } from "./overflow"
 import { PartID } from "./schema"
 import type { SessionID } from "./schema"
 import { SessionRetry } from "./retry"
+import { ReasoningReplay } from "./reasoning-replay"
 import { SessionStatus } from "./status"
 import { SessionSummary } from "./summary"
 import type { Provider } from "@/provider/provider"
@@ -104,6 +105,9 @@ const layer = Layer.effect(
     const image = yield* Image.Service
     const events = yield* EventV2Bridge.Service
     const database = yield* Database.Service
+    // Sessions whose encrypted reasoning a provider refused (session id + provider
+    // id). Process-local: a restart clears it and the next refusal arms it again.
+    const refusedReplays = new Set<string>()
 
     const create = Effect.fn("SessionProcessor.create")(function* (input: Input) {
       // Pre-capture snapshot before the LLM stream starts. The AI SDK
@@ -680,19 +684,49 @@ const layer = Layer.effect(
         reminder = undefined
         ctx.shouldBreak = (yield* config.get()).experimental?.continue_loop_on_deny !== true
 
-        return yield* Effect.gen(function* () {
-          yield* Effect.gen(function* () {
+        const attempt = (request: LLM.StreamInput) =>
+          Effect.gen(function* () {
             ctx.currentText = undefined
             ctx.reasoningMap = {}
             yield* status.set(ctx.sessionID, { type: "busy" })
-            const stream = llm.stream(streamInput)
+            const stream = llm.stream(request)
 
             yield* stream.pipe(
               Stream.tap((event) => handleEvent(event)),
               Stream.takeUntil(() => ctx.needsCompaction),
               Stream.runDrain,
             )
-          }).pipe(
+          })
+
+        // Once this provider has refused this session's encrypted reasoning, it
+        // refuses it on every later step too, so those steps go without it from
+        // the first request instead of paying a refusal each.
+        const refusalKey = `${input.sessionID}\u0000${input.model.providerID}`
+        const request = refusedReplays.has(refusalKey)
+          ? { ...streamInput, messages: ReasoningReplay.strip(streamInput.messages) }
+          : streamInput
+
+        return yield* Effect.gen(function* () {
+          yield* attempt(request).pipe(
+            // A provider that did not issue the replayed encrypted reasoning refuses
+            // the request with a non-retryable 400. Send it once more without that
+            // reasoning; a second refusal is an ordinary error.
+            Effect.catchIf(
+              (e) => ReasoningReplay.rejected(parse(e)) && ReasoningReplay.carries(request.messages),
+              () =>
+                Effect.gen(function* () {
+                  refusedReplays.add(refusalKey)
+                  yield* Effect.logWarning(
+                    "provider refused replayed encrypted reasoning; this session now replays without it",
+                    {
+                      "session.id": input.sessionID,
+                      "provider.id": input.model.providerID,
+                      messageID: input.assistantMessage.id,
+                    },
+                  )
+                  yield* attempt({ ...request, messages: ReasoningReplay.strip(request.messages) })
+                }),
+            ),
             Effect.onInterrupt(() =>
               Effect.gen(function* () {
                 aborted = true
