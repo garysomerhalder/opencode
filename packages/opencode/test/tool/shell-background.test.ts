@@ -467,3 +467,42 @@ it.instance(
   { config: { experimental: { background_shell: false } } },
   90_000,
 )
+
+it.instance(
+  "the result of a finished command includes the end of its output, even when it exits right after printing",
+  () =>
+    Effect.gen(function* () {
+      const tool = yield* shell()
+      // ~150 KB in one write, then exit: seen live, the exit arrived when the
+      // reader had taken only the first 74 KB off the pipe, and the result's
+      // tail stopped there.
+      const code = "process.stdout.write(String.fromCharCode(97).repeat(Number(Bun.argv[1])) + Bun.argv[2])"
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const result = yield* tool.execute(
+          { command: run(code, [String(Truncate.MAX_BYTES * 3), "END-OF-OUTPUT"]) },
+          context(),
+        )
+        expect(result.output).toContain("END-OF-OUTPUT")
+      }
+    }),
+  settle({ yield_after_ms: 60_000 }),
+  120_000,
+)
+
+it.instance(
+  "with background tasks disabled, the result also includes the end of the output",
+  () =>
+    Effect.gen(function* () {
+      const tool = yield* shell()
+      const code = "process.stdout.write(String.fromCharCode(97).repeat(Number(Bun.argv[1])) + Bun.argv[2])"
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const result = yield* tool.execute(
+          { command: run(code, [String(Truncate.MAX_BYTES * 3), "END-OF-OUTPUT"]) },
+          context(),
+        )
+        expect(result.output).toContain("END-OF-OUTPUT")
+      }
+    }),
+  { config: { experimental: { background_shell: false } } },
+  120_000,
+)
