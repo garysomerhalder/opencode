@@ -66,6 +66,7 @@ async function capture(dir: string) {
     },
   })
   const temp = mkdtempSync(path.join(tmpdir(), "prompt-probe-"))
+  const extraConfig: Record<string, unknown> = args.config ? JSON.parse(args.config) : {}
   const config = {
     provider: {
       capture: {
@@ -79,7 +80,21 @@ async function capture(dir: string) {
     small_model: "capture/probe",
     // --config: extra opencode.json content to measure a change, e.g.
     // '{"permission":{"linear_*":"deny"}}' or a skill allowlist
-    ...(args.config ? JSON.parse(args.config) : {}),
+    ...extraConfig,
+    // A user's agent.<name>.model would otherwise send the request to a real
+    // provider with the inherited keys: pin every agent this run can use.
+    agent: {
+      ...((extraConfig.agent as Record<string, object> | undefined) ?? {}),
+      ...Object.fromEntries(
+        [args.agent!, "title", "summary", "compaction"].map((name) => [
+          name,
+          {
+            ...((extraConfig.agent as Record<string, object> | undefined)?.[name] ?? {}),
+            model: "capture/probe",
+          },
+        ]),
+      ),
+    },
   }
   const child = spawn(
     process.execPath,
@@ -98,6 +113,8 @@ async function capture(dir: string) {
         OPENCODE_DISABLE_AUTOUPDATE: "true",
         OPENCODE_CONFIG_CONTENT: JSON.stringify(config),
         ...extraEnv,
+        // an inherited absolute OPENCODE_DB would be written to (database.ts path())
+        OPENCODE_DB: ":memory:",
       },
       stdio: ["ignore", "ignore", "pipe"],
     },
