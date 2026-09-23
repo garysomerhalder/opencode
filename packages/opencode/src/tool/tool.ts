@@ -3,6 +3,7 @@ import { Effect, Schema } from "effect"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import type { JSONSchema7 } from "@ai-sdk/provider"
 import path from "path"
+import { realpathSync } from "fs"
 import type { MessageV2 } from "../session/message-v2"
 import type { Permission } from "../permission"
 import type { SessionID, MessageID } from "../session/schema"
@@ -67,9 +68,35 @@ export function readable(ctx: Context, worktree: string, file: string, need: "pa
     .pipe(Effect.map((action) => (need === "path" ? action !== "deny" : action === "allow")))
 }
 
-/** The patterns the read rules are matched against for a file, as the read tool asks them. */
+/**
+ * The patterns the read rules are matched against for a file, as the read tool
+ * asks them: the path as named, and the file the system actually opens (links
+ * resolved, an NTFS stream suffix removed). A deny on either is a deny.
+ */
 export function readPatterns(worktree: string, file: string) {
-  return [path.relative(worktree, file)]
+  const named = path.relative(worktree, path.resolve(file))
+  const opened = path.relative(canonicalPath(worktree), canonicalPath(file))
+  return named === opened ? [named] : [named, opened]
+}
+
+/**
+ * The file the system opens for a path, on every platform: symbolic links and
+ * junctions resolved (for a path that does not exist yet, its nearest existing
+ * parent), and on Windows a `name:stream` suffix removed, since
+ * `.env::$DATA` opens `.env`.
+ */
+export function canonicalPath(file: string): string {
+  const target = path.resolve(file)
+  const base = path.basename(target)
+  const colon = process.platform === "win32" ? base.indexOf(":") : -1
+  const plain = colon > 0 ? path.join(path.dirname(target), base.slice(0, colon)) : target
+  try {
+    return realpathSync.native(plain)
+  } catch {
+    const parent = path.dirname(plain)
+    if (parent === plain) return plain
+    return path.join(canonicalPath(parent), path.basename(plain))
+  }
 }
 
 export interface ExecuteResult<M extends Metadata = Metadata> {

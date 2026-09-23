@@ -248,3 +248,43 @@ describe("finding 3: a custom or plugin tool cannot replace a built-in one", () 
     }),
   )
 })
+
+describe("finding 6: paths are matched as the file system resolves them", () => {
+  it.instance("a symlink in the workspace does not lead the verifier to .env", () =>
+    Effect.gen(function* () {
+      const directory = yield* workspace()
+      yield* Effect.promise(() => fs.symlink(path.join(directory, ".env"), path.join(directory, "notes.txt"), "file"))
+      const result = yield* call(Permission.VERIFIER, "read", { filePath: path.join(directory, "notes.txt") })
+      expect(result.output + result.error).not.toContain(SECRET)
+    }),
+  )
+
+  it.instance("a directory link in the workspace does not lead the verifier outside it", () =>
+    Effect.gen(function* () {
+      const directory = yield* workspace()
+      const outside = yield* Effect.promise(() => fs.mkdtemp(path.join(path.dirname(directory), "outside-")))
+      yield* Effect.promise(() => fs.writeFile(path.join(outside, "id_rsa"), `KEY ${SECRET}\n`))
+      yield* Effect.promise(() => fs.symlink(outside, path.join(directory, "vendor"), "junction"))
+      const result = yield* call(Permission.VERIFIER, "read", { filePath: path.join(directory, "vendor", "id_rsa") })
+      yield* Effect.promise(() => fs.rm(outside, { recursive: true, force: true }))
+      expect(result.output + result.error).not.toContain(SECRET)
+    }),
+  )
+
+  it.instance("the .env deny ignores case", () =>
+    Effect.gen(function* () {
+      const directory = yield* workspace()
+      yield* Effect.promise(() => fs.writeFile(path.join(directory, "prod.ENV"), `API_KEY=${SECRET}\n`))
+      const result = yield* call(Permission.VERIFIER, "read", { filePath: path.join(directory, "prod.ENV") })
+      expect(result.output + result.error).not.toContain(SECRET)
+    }),
+  )
+
+  windows("an NTFS stream name does not get past the .env deny", () =>
+    Effect.gen(function* () {
+      const directory = yield* workspace()
+      const result = yield* call(Permission.VERIFIER, "read", { filePath: path.join(directory, ".env::$DATA") })
+      expect(result.output + result.error).not.toContain(SECRET)
+    }),
+  )
+})

@@ -37,11 +37,22 @@ interface State {
   approved: PermissionV1.Rule[]
 }
 
+/**
+ * The last rule matching the request. A deny matches its pattern ignoring
+ * case on every platform: file systems that ignore case (APFS, NTFS) open
+ * `prod.ENV` for `*.env`, and a deny should never be narrower than the file
+ * system. Allow and ask keep the platform's matching.
+ */
 export function evaluate(permission: string, pattern: string, ...rulesets: PermissionV1.Ruleset[]): PermissionV1.Rule {
   return (
     rulesets
       .flat()
-      .findLast((rule) => Wildcard.match(permission, rule.permission) && Wildcard.match(pattern, rule.pattern)) ?? {
+      .findLast(
+        (rule) =>
+          Wildcard.match(permission, rule.permission) &&
+          (Wildcard.match(pattern, rule.pattern) ||
+            (rule.action === "deny" && Wildcard.match(pattern.toLowerCase(), rule.pattern.toLowerCase()))),
+      ) ?? {
       action: "ask",
       permission,
       pattern: "*",
