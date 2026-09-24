@@ -44,15 +44,28 @@ interface State {
  * system. Allow and ask keep the platform's matching.
  */
 export function evaluate(permission: string, pattern: string, ...rulesets: PermissionV1.Ruleset[]): PermissionV1.Rule {
+  const rules = rulesets.flat()
+  const mark = rules.findIndex(isLockMark)
+  if (mark === -1) return last(permission, pattern, rules)
+  // A locked ruleset (effective() for the verifier): the lock only takes away.
+  // The stricter of the rules before it and the lock decides, and an ask is a
+  // deny, since nobody answers inside a goal loop.
+  const before = last(permission, pattern, rules.slice(0, mark))
+  const lock = last(permission, pattern, rules.slice(mark + 1))
+  if (before.action === "deny") return before
+  if (lock.action !== "allow") return { ...lock, action: "deny" }
+  if (before.action === "ask") return { ...before, action: "deny" }
+  return lock
+}
+
+function last(permission: string, pattern: string, rules: PermissionV1.Ruleset): PermissionV1.Rule {
   return (
-    rulesets
-      .flat()
-      .findLast(
-        (rule) =>
-          Wildcard.match(permission, rule.permission) &&
-          (Wildcard.match(pattern, rule.pattern) ||
-            (rule.action === "deny" && Wildcard.match(pattern.toLowerCase(), rule.pattern.toLowerCase()))),
-      ) ?? {
+    rules.findLast(
+      (rule) =>
+        Wildcard.match(permission, rule.permission) &&
+        (Wildcard.match(pattern, rule.pattern) ||
+          (rule.action === "deny" && Wildcard.match(pattern.toLowerCase(), rule.pattern.toLowerCase()))),
+    ) ?? {
       action: "ask",
       permission,
       pattern: "*",
@@ -73,7 +86,7 @@ function decide(
   approved: PermissionV1.Ruleset,
 ): PermissionV1.Rule {
   const own = evaluate(permission, pattern, ruleset)
-  return own.action === "deny" ? own : evaluate(permission, pattern, ruleset, approved)
+  return own.action === "ask" ? evaluate(permission, pattern, ruleset, approved) : own
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Permission") {}
@@ -258,7 +271,8 @@ export const VERIFIER = "verifier"
 /**
  * The verifier's fixed ruleset: reads and lookups, the verdict tool, archived
  * tool output, nothing else. Nothing is `ask`, since nobody answers inside a
- * goal loop. effective() appends it after every other rule.
+ * goal loop. effective() appends it after every other rule, behind a mark, and
+ * the stricter of it and those rules decides: it takes away, never gives.
  */
 export const VERIFIER_LOCK = fromConfig({
   "*": "deny",
@@ -298,28 +312,46 @@ export function agentRules(rules: PermissionV1.Ruleset): AgentRules {
 }
 
 /**
+ * Separates the rules before the verifier's lock from the lock in an effective
+ * ruleset. evaluate() and disabled() see it and take the stricter of the two
+ * sides, so the lock only ever takes away: its allows (read, grep, ...) cannot
+ * lift a deny or an ask from the user's config or the session. No tool or
+ * request has this permission name.
+ */
+const LOCK_MARK: PermissionV1.Rule = { permission: "<verifier-lock>", pattern: "*", action: "deny" }
+
+function isLockMark(rule: PermissionV1.Rule) {
+  return rule.permission === LOCK_MARK.permission
+}
+
+/**
  * The ruleset a request is evaluated against: the agent's rules, then the
  * session's, then, for the verifier, its lock. It is the only way to read an
  * agent's rules (AgentRules is opaque everywhere else, and the compiler
- * enforces it), so the lock is always last and nothing from config or the
- * session can loosen it.
+ * enforces it). The lock comes after a mark, so it is always applied and
+ * nothing from config or the session can loosen it, and it cannot loosen them.
  */
 export function effective(
   agent: { name: string; native?: boolean; permission: AgentRules },
   session: PermissionV1.Ruleset = [],
 ): PermissionV1.Rule[] {
   const own = agent.permission as unknown as PermissionV1.Ruleset | undefined
-  return merge(own ?? [], session, isVerifier(agent) ? VERIFIER_LOCK : [])
+  return merge(own ?? [], session, isVerifier(agent) ? [LOCK_MARK, ...VERIFIER_LOCK] : [])
 }
 
 export function disabled(tools: string[], ruleset: PermissionV1.Ruleset): Set<string> {
   const edits = ["edit", "write", "apply_patch"]
   const reads = ["list_mcp_resources", "list_mcp_resource_templates", "read_mcp_resource"]
+  const mark = ruleset.findIndex(isLockMark)
+  const sides = mark === -1 ? [ruleset] : [ruleset.slice(0, mark), ruleset.slice(mark + 1)]
   return new Set(
     tools.filter((tool) => {
       const permission = edits.includes(tool) ? "edit" : reads.includes(tool) ? "read" : tool
-      const rule = ruleset.findLast((rule) => Wildcard.match(permission, rule.permission))
-      return rule?.pattern === "*" && rule.action === "deny"
+      // hidden when either side's last rule for the tool denies all of it
+      return sides.some((side) => {
+        const rule = side.findLast((rule) => Wildcard.match(permission, rule.permission))
+        return rule?.pattern === "*" && rule.action === "deny"
+      })
     }),
   )
 }
