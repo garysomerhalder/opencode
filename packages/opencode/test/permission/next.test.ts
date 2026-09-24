@@ -855,7 +855,11 @@ it.instance(
       const build = Permission.fromConfig({ read: { "*": "allow", "*.env": "ask" } })
       yield* approveAlways({ id: "per_lock1", permission: "read", pattern: "*.env", ruleset: build })
       // the built-in verifier, with a config and a session that allow everything
-      const verifier = { name: Permission.VERIFIER, native: true, permission: Permission.fromConfig({ "*": "allow" }) }
+      const verifier = {
+        name: Permission.VERIFIER,
+        native: true,
+        permission: Permission.agentRules(Permission.fromConfig({ "*": "allow" })),
+      }
       const err = yield* fail(
         ask({
           sessionID: SessionID.make("session_verifier"),

@@ -4,6 +4,7 @@ import * as InstanceState from "@/effect/instance-state"
 import { Format } from "@/format"
 import { Global } from "@opencode-ai/core/global"
 import { LSP } from "@/lsp/lsp"
+import { Permission } from "@/permission"
 import { Vcs } from "@/project/vcs"
 import { Skill } from "@/skill"
 import { Effect } from "effect"
@@ -77,8 +78,10 @@ export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance"
       return yield* command.list()
     })
 
+    // An agent's rules are read through effective(): clients see the rules it runs
+    // under, the verifier's lock included.
     const getAgent = Effect.fn("InstanceHttpApi.agent")(function* () {
-      return yield* agent.list()
+      return (yield* agent.list()).map((info) => ({ ...info, permission: Permission.effective(info) }))
     })
 
     const getSkill = Effect.fn("InstanceHttpApi.skill")(function* () {

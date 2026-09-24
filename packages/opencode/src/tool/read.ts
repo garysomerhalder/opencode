@@ -248,6 +248,11 @@ export const ReadTool = Tool.define<
       if (process.platform === "win32") {
         filepath = FSUtil.normalizePath(filepath)
       }
+      // The rules are matched against the path as named and the file the system
+      // opens; the workspace check and the read use the opened file, so a link in
+      // the workspace does not lead outside it or to a file the rules deny.
+      const named = filepath
+      filepath = Tool.canonicalPath(filepath)
       const title = path.relative(instance.worktree, filepath)
 
       const stat = yield* fs.stat(filepath).pipe(
@@ -264,7 +269,7 @@ export const ReadTool = Tool.define<
 
       yield* ctx.ask({
         permission: "read",
-        patterns: [path.relative(instance.worktree, filepath)],
+        patterns: Tool.readPatterns(instance.worktree, named),
         always: ["*"],
         metadata: {},
       })

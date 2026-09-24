@@ -11,6 +11,31 @@ import { testEffect } from "./lib/effect"
 const it = testEffect(LayerNode.compile(Ripgrep.node))
 
 describe("Ripgrep", () => {
+  it.live("grep never searches an excluded path, whatever include says, and only that path", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) =>
+        Effect.gen(function* () {
+          const write = (file: string) =>
+            Effect.promise(async () => {
+              await fs.mkdir(path.dirname(path.join(tmp.path, file)), { recursive: true })
+              await fs.writeFile(path.join(tmp.path, file), "needle\n")
+            })
+          for (const file of [".env", "sub/.env", "we[i]rd/x{y}.env", "we[i]rd/a.env", "app.ts"]) yield* write(file)
+
+          const matches = yield* (yield* Ripgrep.Service).grep({
+            cwd: tmp.path,
+            pattern: "needle",
+            include: "*.env*",
+            exclude: [".env", "we[i]rd/x{y}.env"],
+            limit: 10,
+          })
+          expect(matches.map((item) => String(item.entry.path)).toSorted()).toEqual(["sub/.env", "we[i]rd/a.env"])
+        }),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
   it.live("keeps ignored files out of catch-all find results", () =>
     Effect.acquireUseRelease(
       Effect.promise(() => tmpdir()),

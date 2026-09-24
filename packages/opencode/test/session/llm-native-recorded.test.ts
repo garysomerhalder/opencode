@@ -9,6 +9,7 @@ import { Effect, Layer, Option, Schema, Stream } from "effect"
 import path from "node:path"
 import z from "zod"
 import { Auth } from "@/auth"
+import { Permission } from "@/permission"
 import { Provider } from "@/provider/provider"
 
 import { Filesystem } from "@/util/filesystem"
@@ -354,7 +355,7 @@ const driveToolLoop = (scenario: RecordedScenario) =>
       mode: "primary",
       prompt: "Answer using tools when appropriate.",
       options: {},
-      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      permission: Permission.agentRules([{ permission: "*", pattern: "*", action: "allow" }]),
       temperature: 0,
     } satisfies Agent.Info
     const provider = yield* Provider.Service

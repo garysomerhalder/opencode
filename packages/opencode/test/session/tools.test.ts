@@ -27,7 +27,7 @@ const agent: Agent.Info = {
   name: "build",
   mode: "primary",
   options: {},
-  permission: [{ permission: "*", pattern: "*", action: "allow" }],
+  permission: Permission.agentRules([{ permission: "*", pattern: "*", action: "allow" }]),
 }
 
 const model = {
@@ -52,6 +52,7 @@ const fakePermission = Permission.Service.of({
   ask: () => Effect.void,
   reply: () => Effect.void,
   list: () => Effect.succeed([]),
+  check: () => Effect.succeed("allow"),
 } satisfies Permission.Interface)
 
 const fakeTruncate = Truncate.Service.of({

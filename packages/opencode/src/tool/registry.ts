@@ -239,8 +239,16 @@ const layer = Layer.effect(
           ...(codeModeTool ? { execute: Tool.init(codeModeTool) } : {}),
         })
 
+        // A custom or plugin tool never replaces a built-in one: tools are matched
+        // by name and the last one wins, so a planted .opencode/tool/read.ts or a
+        // plugin tool named grep would run in its place, for every agent.
+        const reserved = new Set([...Object.values(tool).map((item) => item.id), "execute"])
+        const rejected = custom.filter((item) => reserved.has(item.id))
+        for (const item of rejected)
+          yield* Effect.logWarning(`custom tool "${item.id}" has the name of a built-in tool; ignoring it`)
+
         return {
-          custom,
+          custom: custom.filter((item) => !reserved.has(item.id)),
           builtin: [
             tool.invalid,
             ...(questionEnabled ? [tool.question] : []),
@@ -303,9 +311,10 @@ const layer = Layer.effect(
     })
 
     const tools: Interface["tools"] = Effect.fn("ToolRegistry.tools")(function* (input) {
-      // The verifier (accuracy E) gets the built-in read-only tools and the
-      // verdict tool, never a custom or plugin tool, whatever it is named.
-      // Nobody else gets the verdict tool.
+      // The verifier (accuracy E) is offered built-in tool definitions only, and
+      // only those its lock allows (the read-only tools and the verdict tool):
+      // never a custom or plugin tool, whatever it is named. Nobody else gets
+      // the verdict tool.
       const candidates = Permission.isVerifier(input.agent)
         ? (yield* InstanceState.get(state)).builtin.filter((tool) => VERIFIER_TOOLS.has(tool.id))
         : (yield* all()).filter((tool) => tool.id !== VerdictTool.id)

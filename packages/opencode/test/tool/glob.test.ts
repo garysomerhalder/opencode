@@ -37,6 +37,7 @@ const ctx = {
   messages: [],
   metadata: () => Effect.void,
   ask: () => Effect.void,
+  check: () => Effect.succeed("allow" as const),
 }
 
 const asks = () => {
