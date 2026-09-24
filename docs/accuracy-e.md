@@ -462,28 +462,38 @@ type VerifierSessionMetadata = {
      *  written (case and spacing aside), or a PASS is stored as PARTIAL. Absent or []: the
      *  verifier derives its own criteria, as section 2 describes. Non-string entries are ignored. */
     criteria?: string[]
+    /** The part ids of the checks the loop ran in this session (the tool parts that
+     *  POST /session/:child/shell created). Only these are citable. Absent or []: no check
+     *  can be cited. Any other user-run shell part in the session is never evidence, but
+     *  one that failed, or did not finish, still blocks a PASS (ruled 2026-09-24). */
+    checks?: string[]
   }
 }
 ```
 
-Example, as the loop sends it after creating the child session (`PATCH /session/:child`; the
-`metadata` field replaces the whole object, so send the complete `verify` object in one request,
-before the checks and the verifier's prompt):
+Example, as the loop sends it after creating the child session and running the checks
+(`PATCH /session/:child`; the `metadata` field replaces the whole object, so send the complete
+`verify` object in one request, after the checks and before the verifier's prompt):
 
 ```json
 {
   "metadata": {
     "verify": {
       "base": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
-      "criteria": ["the output is capped at the budget", "the README documents `--budget`"]
+      "criteria": ["the output is capped at the budget", "the README documents `--budget`"],
+      "checks": ["prt_01J8Z3Q4R5S6T7U8V9W0X1Y2Z3", "prt_01J8Z3Q4R5S6T7U8V9W0X1Y2Z4"]
     }
   }
 }
 ```
 
-The tool reads nothing else from the session. The checks are the shell parts the host ran in that
-session (`POST /session/:child/shell`, recorded with `metadata.ranBy = "user"` and `metadata.exit`);
-a model's own shell call is never one.
+The tool reads nothing else from the session's metadata. It reads the session's whole history
+from storage, not the model's (possibly compacted) context, so a compaction cannot hide a failed
+check or an earlier submission. User-run shell parts (`POST /session/:child/shell`) carry
+`metadata.ranBy = "user"` from their start and `metadata.exit` once finished; a model's own shell
+call is never one. Why the binding: anything that can call the session API (another agent's
+plugin, a client) could run a passing command in the verifier's session; only the loop knows
+which runs it made.
 
 **Checks must succeed with exit 0 (ruled 2026-09-23).** A PASS cannot stand while any check run for
 the verification failed or was aborted, cited or not. A negative check is written so that success
