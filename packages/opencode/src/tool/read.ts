@@ -272,12 +272,7 @@ export const ReadTool = Tool.define<
         kind: stat?.type === "Directory" ? "directory" : "file",
       })
 
-      yield* ctx.ask({
-        permission: "read",
-        patterns: Tool.readPatterns(instance.worktree, named),
-        always: ["*"],
-        metadata: {},
-      })
+      yield* Tool.askRead(ctx, instance.worktree, named)
 
       if (!stat) return yield* miss(filepath, ctx, instance.worktree)
 

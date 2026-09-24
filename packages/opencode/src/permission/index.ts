@@ -7,6 +7,7 @@ import os from "os"
 import path from "path"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { TRUNCATION_DIR } from "@/tool/truncation-dir"
+import { CanonicalPath } from "@/util/canonical-path"
 import { EventV2Bridge } from "@/event-v2-bridge"
 
 export const Event = PermissionV1.Event
@@ -227,11 +228,32 @@ const layer = Layer.effect(
 )
 
 function expand(pattern: string): string {
+  return resolvePrefix(home(pattern))
+}
+
+function home(pattern: string): string {
   if (pattern.startsWith("~/")) return os.homedir() + pattern.slice(1)
   if (pattern === "~") return os.homedir()
   if (pattern.startsWith("$HOME/")) return os.homedir() + pattern.slice(5)
   if (pattern.startsWith("$HOME")) return os.homedir() + pattern.slice(5)
   return pattern
+}
+
+/**
+ * An absolute pattern's fixed directory prefix (up to the first wildcard) as the
+ * system resolves it, so a rule written through a link (a symlinked or
+ * junctioned home) matches the files it names, which the tools check by their
+ * resolved absolute paths too. Relative patterns, and prefixes that do not
+ * exist, are left as they are.
+ */
+function resolvePrefix(pattern: string): string {
+  if (!path.isAbsolute(pattern)) return pattern
+  const wild = pattern.search(/[*?]/)
+  const fixed = wild === -1 ? pattern : pattern.slice(0, wild)
+  const dir = /[\\/]$/.test(fixed) || wild === -1 ? fixed : path.dirname(fixed)
+  const resolved = CanonicalPath.resolve(dir)
+  if (resolved === path.resolve(dir)) return pattern
+  return path.join(resolved, path.relative(dir, pattern))
 }
 
 export function fromConfig(permission: ConfigPermissionV1.Info) {

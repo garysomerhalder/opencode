@@ -444,3 +444,12 @@ rename drops the lock), `mode`, `hidden`, `prompt` and `permission`. The lock wo
    metadata read by compaction, so the checkpoint shows the goal line and verified marks.
 4. **Loop.** The verify branch in `goal-loop.ts`, the phases, the bounds, the feedback builder, the
    app types, and the settings. The default stays off until the UI shows verdicts (section 7).
+
+### 11.7 Security notes: accepted risks
+
+- **lsp hover for agents other than the verifier (accepted 2026-09-24).** A hover is shown only
+  when the agent may read every file the symbol is defined in. Type information can still flow in
+  from elsewhere: an alias or an inferred literal type in a readable file can carry a value defined
+  in a denied one. That is accepted for agents a person supervises. The verifier, which nobody
+  supervises, is refused hover by its lock (`VERIFIER_LOCK` lsp `hover: "deny"`); it has
+  goToDefinition and read, which are filtered by the read rules.

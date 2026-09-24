@@ -2,6 +2,7 @@ import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { afterEach, describe, expect } from "bun:test"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { Cause, Effect, Exit, Layer, Stream } from "effect"
+import fs from "fs/promises"
 import os from "os"
 import path from "path"
 import { Agent } from "../../src/agent/agent"
@@ -202,8 +203,7 @@ describe("tool.read external_directory permission", () => {
         yield* exec(dir, { filePath: alt }, next)
         const read = items.find((item) => item.permission === "read")
         expect(read).toBeDefined()
-        // relative to the worktree, and the absolute path of the file opened
-        expect(read!.patterns).toEqual([path.relative(dir, full(target)), full(target)])
+        expect(read!.patterns).toEqual([path.relative(dir, full(target))])
       }),
     )
   }
@@ -217,7 +217,7 @@ describe("tool.read external_directory permission", () => {
       yield* exec(dir, { filePath: path.join(dir, "src", "secret.ts") }, next)
       const read = items.find((item) => item.permission === "read")
       expect(read).toBeDefined()
-      expect(read!.patterns).toEqual([path.join("src", "secret.ts"), full(path.join(dir, "src", "secret.ts"))])
+      expect(read!.patterns).toEqual([path.join("src", "secret.ts")])
     }),
   )
 
@@ -666,11 +666,46 @@ describe("tool.read: rules that name an absolute path", () => {
     Effect.sync(() => {
       const file = path.join(os.homedir(), ".opencode-read-rule-test", "id_rsa")
       const rules = Permission.fromConfig({ read: { "*": "allow", "~/.opencode-read-rule-test/*": "deny" } })
-      // a worktree on the same drive as the home directory, so the relative path is relative
-      const actions = Tool.readPatterns(path.join(os.homedir(), "project"), file).map(
-        (pattern) => Permission.evaluate("read", pattern, rules).action,
-      )
+      const actions = Tool.absolutePaths(file).map((pattern) => Permission.evaluate("read", pattern, rules).action)
       expect(actions).toContain("deny")
+    }),
+  )
+
+  // re-review 1: the absolute path only finds a deny; the relative paths decide the
+  // rest, so an existing "*": ask with a relative allow still allows
+  it.live("an absolute path does not make an allowed file ask", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped({ git: true })
+      yield* put(path.join(dir, "src", "x.ts"), "export const x = 1")
+      const rules = Permission.fromConfig({ "*": "allow", read: { "*": "ask", "src/*": "allow" } })
+      const asked: string[] = []
+      const tracked: Tool.Context = {
+        ...ruled(rules),
+        ask: (req) => Effect.sync(() => void asked.push(...req.patterns)),
+      }
+      yield* exec(dir, { filePath: path.join(dir, "src", "x.ts") }, tracked)
+      const actions = asked.map((pattern) => Permission.evaluate("read", pattern, rules).action)
+      expect(actions).not.toContain("ask")
+    }),
+  )
+
+  // re-review 2: a rule that names a linked path (a symlinked or junctioned home)
+  // still matches the file reached by its real path, and the other way round
+  it.live("an absolute deny through a linked directory holds", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped({ git: true })
+      const real = path.join(dir, "real")
+      const link = path.join(dir, "link")
+      yield* put(path.join(real, "secret", "key.txt"), "KEY sk-live-4f9a2c")
+      yield* Effect.promise(() => fs.symlink(real, link, "junction"))
+      for (const [rule, file] of [
+        [path.join(link, "secret", "*"), path.join(real, "secret", "key.txt")],
+        [path.join(real, "secret", "*"), path.join(link, "secret", "key.txt")],
+      ]) {
+        const rules = Permission.fromConfig({ "*": "allow", read: { "*": "allow", [rule]: "deny" } })
+        const err = yield* fail(dir, { filePath: file }, ruled(rules))
+        expect([rule, err.message]).toEqual([rule, expect.stringContaining("denied: read")])
+      }
     }),
   )
 })

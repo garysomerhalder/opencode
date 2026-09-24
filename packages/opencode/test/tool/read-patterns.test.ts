@@ -30,8 +30,9 @@ afterAll(() => {
 
 describe("Tool.readPatterns and Tool.canonicalPath", () => {
   test("a file link is matched as the file it opens, and as named", () => {
-    expect(Tool.readPatterns(workspace, path.join(workspace, "notes.txt")).toSorted()).toEqual(
-      [".env", "notes.txt", path.join(workspace, ".env")].toSorted(),
+    expect(Tool.readPatterns(workspace, path.join(workspace, "notes.txt")).toSorted()).toEqual([".env", "notes.txt"])
+    expect(Tool.absolutePaths(path.join(workspace, "notes.txt")).toSorted()).toEqual(
+      [path.join(workspace, ".env"), path.join(workspace, "notes.txt")].toSorted(),
     )
     expect(Tool.canonicalPath(path.join(workspace, "notes.txt"))).toBe(path.join(workspace, ".env"))
   })

@@ -62,13 +62,7 @@ export const LspTool = Tool.define(
             metadata: meta,
           })
           // hover and symbols carry the file's content: the read rules apply to it
-          if (args.operation !== "workspaceSymbol")
-            yield* ctx.ask({
-              permission: "read",
-              patterns: Tool.readPatterns(instance.worktree, file),
-              always: ["*"],
-              metadata: {},
-            })
+          if (args.operation !== "workspaceSymbol") yield* Tool.askRead(ctx, instance.worktree, file)
 
           const uri = pathToFileURL(file).href
           const position = { file, line: args.line - 1, character: args.character - 1 }
