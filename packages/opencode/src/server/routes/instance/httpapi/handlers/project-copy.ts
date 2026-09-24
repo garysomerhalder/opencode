@@ -1,4 +1,5 @@
 import { Agent } from "@/agent/agent"
+import { Permission } from "@/permission"
 import { Provider } from "@/provider/provider"
 import { LLM } from "@/session/llm"
 import { MessageID, SessionID } from "@/session/schema"
@@ -11,7 +12,7 @@ import { InstanceHttpApi } from "../api"
 const COPY_NAME_AGENT: Agent.Info = {
   name: "project-copy-name",
   mode: "primary",
-  permission: [],
+  permission: Permission.agentRules([]),
   options: {},
   native: true,
   prompt: "",

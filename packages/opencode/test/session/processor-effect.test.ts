@@ -8,6 +8,7 @@ import { Cause, Effect, Exit, Fiber, Layer, Stream } from "effect"
 import path from "path"
 import z from "zod"
 import type { Agent } from "../../src/agent/agent"
+import { Permission } from "@/permission"
 import { Provider } from "@/provider/provider"
 
 import { Session } from "@/session/session"
@@ -91,7 +92,7 @@ function agent(): Agent.Info {
     name: "build",
     mode: "primary",
     options: {},
-    permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    permission: Permission.agentRules([{ permission: "*", pattern: "*", action: "allow" }]),
   }
 }
 

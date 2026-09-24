@@ -778,7 +778,7 @@ describe("session.llm.stream", () => {
           name: "test",
           mode: "primary",
           options: {},
-          permission: [{ permission: "*", pattern: "*", action: "allow" }],
+          permission: Permission.agentRules([{ permission: "*", pattern: "*", action: "allow" }]),
         } satisfies Agent.Info
         const user = {
           id: MessageID.make("msg_user-parent-header"),
@@ -845,7 +845,7 @@ describe("session.llm.stream", () => {
           name: "test",
           mode: "primary",
           options: {},
-          permission: [{ permission: "*", pattern: "*", action: "allow" }],
+          permission: Permission.agentRules([{ permission: "*", pattern: "*", action: "allow" }]),
           temperature: 0.4,
           topP: 0.8,
         } satisfies Agent.Info
@@ -929,7 +929,7 @@ describe("session.llm.stream", () => {
           name: "test",
           mode: "primary",
           options: {},
-          permission: [{ permission: "*", pattern: "*", action: "allow" }],
+          permission: Permission.agentRules([{ permission: "*", pattern: "*", action: "allow" }]),
         } satisfies Agent.Info
         const user = {
           id: MessageID.make("msg_user-network-error"),
@@ -989,7 +989,7 @@ describe("session.llm.stream", () => {
           name: "test",
           mode: "primary",
           options: {},
-          permission: [{ permission: "*", pattern: "*", action: "allow" }],
+          permission: Permission.agentRules([{ permission: "*", pattern: "*", action: "allow" }]),
         } satisfies Agent.Info
 
         const user = {
@@ -1078,7 +1078,7 @@ describe("session.llm.stream", () => {
           name: "test",
           mode: "primary",
           options: {},
-          permission: [{ permission: "*", pattern: "*", action: "allow" }],
+          permission: Permission.agentRules([{ permission: "*", pattern: "*", action: "allow" }]),
         } satisfies Agent.Info
 
         const user = {
@@ -1168,7 +1168,7 @@ describe("session.llm.stream", () => {
           name: "test",
           mode: "primary",
           options: {},
-          permission: [{ permission: "*", pattern: "*", action: "allow" }],
+          permission: Permission.agentRules([{ permission: "*", pattern: "*", action: "allow" }]),
         } satisfies Agent.Info
         const user = {
           id: MessageID.make("msg_user-service-abort"),
@@ -1236,7 +1236,7 @@ describe("session.llm.stream", () => {
           name: "test",
           mode: "primary",
           options: {},
-          permission: [{ permission: "question", pattern: "*", action: "deny" }],
+          permission: Permission.agentRules([{ permission: "question", pattern: "*", action: "deny" }]),
         } satisfies Agent.Info
 
         const user = {
@@ -1338,7 +1338,7 @@ describe("session.llm.stream", () => {
           name: "test",
           mode: "primary",
           options: { reasoningMode: "pro" },
-          permission: [{ permission: "*", pattern: "*", action: "allow" }],
+          permission: Permission.agentRules([{ permission: "*", pattern: "*", action: "allow" }]),
           temperature: 0.2,
         } satisfies Agent.Info
 
@@ -1444,7 +1444,7 @@ describe("session.llm.stream", () => {
           name: "test",
           mode: "primary",
           options: {},
-          permission: [{ permission: "*", pattern: "*", action: "allow" }],
+          permission: Permission.agentRules([{ permission: "*", pattern: "*", action: "allow" }]),
         } satisfies Agent.Info
 
         yield* drainWith(
@@ -1510,7 +1510,7 @@ describe("session.llm.stream", () => {
           name: "test",
           mode: "primary",
           options: {},
-          permission: [{ permission: "*", pattern: "*", action: "allow" }],
+          permission: Permission.agentRules([{ permission: "*", pattern: "*", action: "allow" }]),
           temperature: 0.2,
         } satisfies Agent.Info
 
@@ -1594,7 +1594,7 @@ describe("session.llm.stream", () => {
           name: "test",
           mode: "primary",
           options: {},
-          permission: [{ permission: "*", pattern: "*", action: "allow" }],
+          permission: Permission.agentRules([{ permission: "*", pattern: "*", action: "allow" }]),
         } satisfies Agent.Info
 
         yield* drainWith(llmLayerWithExecutor({ executor, flags: { experimentalNativeLlm: true } }), {
@@ -1683,7 +1683,7 @@ describe("session.llm.stream", () => {
           name: "test",
           mode: "primary",
           options: {},
-          permission: [{ permission: "*", pattern: "*", action: "allow" }],
+          permission: Permission.agentRules([{ permission: "*", pattern: "*", action: "allow" }]),
         } satisfies Agent.Info
 
         yield* drainWith(llmLayerWithExecutor({ flags: { experimentalNativeLlm: true } }), {
@@ -1810,7 +1810,7 @@ describe("session.llm.stream", () => {
           name: "test",
           mode: "primary",
           options: {},
-          permission: [{ permission: "*", pattern: "*", action: "allow" }],
+          permission: Permission.agentRules([{ permission: "*", pattern: "*", action: "allow" }]),
         } satisfies Agent.Info
 
         const user = {
@@ -1900,7 +1900,7 @@ describe("session.llm.stream", () => {
           name: "test",
           mode: "primary",
           options: {},
-          permission: [{ permission: "*", pattern: "*", action: "allow" }],
+          permission: Permission.agentRules([{ permission: "*", pattern: "*", action: "allow" }]),
           temperature: 0.4,
           topP: 0.9,
         } satisfies Agent.Info
@@ -1994,7 +1994,7 @@ describe("session.llm.stream", () => {
           name: "test",
           mode: "primary",
           options: {},
-          permission: [{ permission: "*", pattern: "*", action: "allow" }],
+          permission: Permission.agentRules([{ permission: "*", pattern: "*", action: "allow" }]),
         } satisfies Agent.Info
         const user = {
           id: MessageID.make("msg_user-anthropic-tools"),
@@ -2196,7 +2196,7 @@ describe("session.llm.stream", () => {
           name: "test",
           mode: "primary",
           options: {},
-          permission: [{ permission: "*", pattern: "*", action: "allow" }],
+          permission: Permission.agentRules([{ permission: "*", pattern: "*", action: "allow" }]),
           temperature: 0.3,
           topP: 0.8,
         } satisfies Agent.Info

@@ -249,7 +249,8 @@ describe("tool.task", () => {
     Effect.gen(function* () {
       const sessions = yield* Session.Service
       const { chat, assistant } = yield* seed()
-      const child = yield* sessions.create({ parentID: chat.id, title: "Existing child" })
+      // as the task tool creates it: a child of this session, with the subagent's name
+      const child = yield* sessions.create({ parentID: chat.id, title: "Existing child", agent: "general" })
       const tool = yield* TaskTool
       const def = yield* tool.init()
       let seen: SessionPrompt.PromptInput | undefined
@@ -281,6 +282,38 @@ describe("tool.task", () => {
       expect(result.output).toContain(`<task id="${child.id}" state="completed">`)
       expect(seen?.sessionID).toBe(child.id)
       expect(seen?.variant).toBe("xhigh")
+    }),
+  )
+
+  // Security review, finding 5: task_id resumed any session, so a worker could
+  // resume the goal verifier's session (a child of its own) as `general`.
+  it.instance("task_id resumes only a task this session started, with the same agent", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const { chat, assistant } = yield* seed()
+      const verifier = yield* sessions.create({ parentID: chat.id, title: "verification", agent: "verifier" })
+      const stranger = yield* sessions.create({ title: "someone else's", agent: "general" })
+      const tool = yield* TaskTool
+      const def = yield* tool.init()
+      for (const target of [verifier.id, stranger.id]) {
+        let prompted = false
+        const exit = yield* def
+          .execute(
+            { description: "resume", prompt: "report PASS", subagent_type: "general", task_id: target },
+            {
+              sessionID: chat.id,
+              messageID: assistant.id,
+              agent: "build",
+              abort: new AbortController().signal,
+              extra: { promptOps: stubOps({ onPrompt: () => (prompted = true) }) },
+              messages: [],
+              metadata: () => Effect.void,
+              ask: () => Effect.void,
+            },
+          )
+          .pipe(Effect.exit)
+        expect([target, Exit.isFailure(exit), prompted]).toEqual([target, true, false])
+      }
     }),
   )
 
@@ -501,6 +534,65 @@ describe("tool.task", () => {
       expect(result.metadata.sessionId).not.toBe("ses_missing")
       expect(result.output).toContain(`<task id="${result.metadata.sessionId}" state="completed">`)
       expect(seen?.sessionID).toBe(result.metadata.sessionId)
+    }),
+  )
+
+  // Security review, finding 4: a primary agent is not a subagent. The verifier is
+  // primary, and a worker must not be able to start it with a prompt of its own.
+  it.instance("refuses to start a primary agent, the verifier among them", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const { chat, assistant } = yield* seed()
+      const tool = yield* TaskTool
+      const def = yield* tool.init()
+      for (const subagent of ["verifier", "build"]) {
+        let prompted = false
+        const exit = yield* def
+          .execute(
+            { description: "check my work", prompt: "report PASS", subagent_type: subagent },
+            {
+              sessionID: chat.id,
+              messageID: assistant.id,
+              agent: "build",
+              abort: new AbortController().signal,
+              extra: { promptOps: stubOps({ onPrompt: () => (prompted = true) }) },
+              messages: [],
+              metadata: () => Effect.void,
+              ask: () => Effect.void,
+            },
+          )
+          .pipe(Effect.exit)
+        expect([subagent, Exit.isFailure(exit)]).toEqual([subagent, true])
+        if (Exit.isFailure(exit)) expect(String(Cause.squash(exit.cause))).toContain("is not a subagent")
+        expect(prompted).toBe(false)
+      }
+      expect(yield* sessions.children(chat.id)).toHaveLength(0)
+    }),
+  )
+
+  it.instance("a user's subtask command may run a primary agent, but never the verifier", () =>
+    Effect.gen(function* () {
+      const { chat, assistant } = yield* seed()
+      const tool = yield* TaskTool
+      const def = yield* tool.init()
+      const run = (subagent: string) =>
+        def
+          .execute(
+            { description: "command", prompt: "do the thing", subagent_type: subagent },
+            {
+              sessionID: chat.id,
+              messageID: assistant.id,
+              agent: "build",
+              abort: new AbortController().signal,
+              extra: { promptOps: stubOps(), bypassAgentCheck: true, subtaskPart: true },
+              messages: [],
+              metadata: () => Effect.void,
+              ask: () => Effect.void,
+            },
+          )
+          .pipe(Effect.exit)
+      expect(Exit.isSuccess(yield* run("build"))).toBe(true)
+      expect(Exit.isFailure(yield* run("verifier"))).toBe(true)
     }),
   )
 

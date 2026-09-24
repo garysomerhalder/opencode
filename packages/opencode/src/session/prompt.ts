@@ -39,6 +39,7 @@ import { TodoReminder } from "./todo-reminder"
 import PROMPT_AUTONOMY from "./prompt/autonomy.txt"
 import PROMPT_AUTONOMY_HEADLESS from "./prompt/autonomy-headless.txt"
 import { Tool } from "@/tool/tool"
+import { assertExternalDirectoryEffect } from "@/tool/external-directory"
 import { Permission } from "@/permission"
 import { SessionStatus } from "./status"
 import { LLM } from "./llm"
@@ -348,7 +349,10 @@ const layer = Layer.effect(
           sessionID,
           abort: taskAbort.signal,
           callID: part.callID,
-          extra: { bypassAgentCheck: true, promptOps },
+          // A subtask part is not the model's own task call (it comes from a
+          // `subtask: true` command or a client that sent the part): subtaskPart
+          // lets it run a primary agent, never the goal verifier.
+          extra: { bypassAgentCheck: true, subtaskPart: true, promptOps },
           messages: msgs,
           metadata: (val: { title?: string; metadata?: Record<string, any> }) =>
             Effect.gen(function* () {
@@ -363,9 +367,10 @@ const layer = Layer.effect(
               .ask({
                 ...req,
                 sessionID,
-                ruleset: Permission.merge(taskAgent.permission, session.permission ?? []),
+                ruleset: Permission.effective(taskAgent, session.permission),
               })
               .pipe(Effect.orDie),
+          check: (req) => permission.check({ ...req, ruleset: Permission.effective(taskAgent, session.permission) }),
         })
         .pipe(
           Effect.catchCause((cause) => {
@@ -832,19 +837,25 @@ const layer = Layer.effect(
               const mime = (yield* fsys.isDir(filepath)) ? "application/x-directory" : part.mime
 
               const { read } = yield* registry.named()
+              // A file named in a prompt is read under the prompting agent's rules,
+              // as its own read tool would read it: a task prompt is model-written,
+              // so a mention must not reach what the agent's read rules deny.
+              const ruleset = Permission.effective(ag, current.permission)
+              const readCtx = (abort: AbortSignal, extra?: Tool.Context["extra"]): Tool.Context => ({
+                sessionID: input.sessionID,
+                abort,
+                agent: ag.name,
+                messageID: info.id,
+                extra,
+                messages: [],
+                metadata: () => Effect.void,
+                ask: (req) => permission.ask({ ...req, sessionID: input.sessionID, ruleset }).pipe(Effect.orDie),
+                check: (req) => permission.check({ ...req, ruleset }),
+              })
               const execRead = (args: Parameters<typeof read.execute>[0], extra?: Tool.Context["extra"]) => {
                 const controller = new AbortController()
                 return read
-                  .execute(args, {
-                    sessionID: input.sessionID,
-                    abort: controller.signal,
-                    agent: input.agent!,
-                    messageID: info.id,
-                    extra: { bypassCwdCheck: true, ...extra },
-                    messages: [],
-                    metadata: () => Effect.void,
-                    ask: () => Effect.void,
-                  })
+                  .execute(args, readCtx(controller.signal, extra))
                   .pipe(Effect.onInterrupt(() => Effect.sync(() => controller.abort())))
               }
 
@@ -967,6 +978,31 @@ const layer = Layer.effect(
                 ]
               }
 
+              // other files are attached as they are: the same checks the read tool makes
+              const guard = readCtx(new AbortController().signal)
+              const worktree = (yield* InstanceState.context).worktree
+              const guarded = yield* Effect.gen(function* () {
+                yield* assertExternalDirectoryEffect(guard, filepath)
+                yield* guard.ask({
+                  permission: "read",
+                  patterns: Tool.readPatterns(worktree, filepath),
+                  always: ["*"],
+                  metadata: {},
+                })
+              }).pipe(Effect.exit)
+              if (Exit.isFailure(guarded)) {
+                const error = Cause.squash(guarded.cause)
+                const message = error instanceof Error ? error.message : String(error)
+                return [
+                  {
+                    messageID: info.id,
+                    sessionID: input.sessionID,
+                    type: "text",
+                    synthetic: true,
+                    text: `Read tool failed to read ${filepath} with the following error: ${message}`,
+                  },
+                ]
+              }
               return [
                 {
                   messageID: info.id,
@@ -993,7 +1029,7 @@ const layer = Layer.effect(
         }
 
         if (part.type === "agent") {
-          const perm = Permission.evaluate("task", part.name, ag.permission)
+          const perm = Permission.evaluate("task", part.name, Permission.effective(ag, current.permission))
           const hint = perm.action === "deny" ? " . Invoked by user; guaranteed to exist." : ""
           return [
             { ...part, messageID: info.id, sessionID: input.sessionID },
@@ -1376,9 +1412,7 @@ const layer = Layer.effect(
             const questionAvailable =
               tools["question"] !== undefined &&
               lastUser.tools?.["question"] !== false &&
-              !Permission.disabled(["question"], Permission.merge(agent.permission, session.permission ?? [])).has(
-                "question",
-              )
+              !Permission.disabled(["question"], Permission.effective(agent, session.permission)).has("question")
             const autonomous = Accuracy.autonomous({
               autonomous: lastUser.autonomous,
               questionAvailable,

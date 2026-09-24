@@ -10,6 +10,7 @@ import { EOL } from "os"
 import type { Argv } from "yargs"
 import { Effect } from "effect"
 import { effectCmd } from "../effect-cmd"
+import { Permission } from "@/permission"
 
 type AgentMode = "all" | "primary" | "subagent"
 
@@ -246,7 +247,7 @@ const AgentListCommand = effectCmd({
 
     for (const agent of sortedAgents) {
       process.stdout.write(`${agent.name} (${agent.mode})` + EOL)
-      process.stdout.write(`  ${JSON.stringify(agent.permission, null, 2)}` + EOL)
+      process.stdout.write(`  ${JSON.stringify(Permission.effective(agent), null, 2)}` + EOL)
     }
   }),
 })

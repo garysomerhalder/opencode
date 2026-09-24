@@ -67,6 +67,9 @@ export function webSearchEnabled(providerID: ProviderV2.ID, flags = { exa: false
   )
 }
 
+/** What the verifier may be offered: Permission.VERIFIER_LOCK allows these and nothing else. */
+const VERIFIER_TOOLS = new Set([ReadTool.id, GlobTool.id, GrepTool.id, LspTool.id])
+
 type TaskDef = Tool.InferDef<typeof TaskTool>
 type ReadDef = Tool.InferDef<typeof ReadTool>
 
@@ -232,8 +235,16 @@ const layer = Layer.effect(
           ...(codeModeTool ? { execute: Tool.init(codeModeTool) } : {}),
         })
 
+        // A custom or plugin tool never replaces a built-in one: tools are matched
+        // by name and the last one wins, so a planted .opencode/tool/read.ts or a
+        // plugin tool named grep would run in its place, for every agent.
+        const reserved = new Set([...Object.values(tool).map((item) => item.id), "execute"])
+        const rejected = custom.filter((item) => reserved.has(item.id))
+        for (const item of rejected)
+          yield* Effect.logWarning(`custom tool "${item.id}" has the name of a built-in tool; ignoring it`)
+
         return {
-          custom,
+          custom: custom.filter((item) => !reserved.has(item.id)),
           builtin: [
             tool.invalid,
             ...(questionEnabled ? [tool.question] : []),
@@ -271,9 +282,8 @@ const layer = Layer.effect(
 
     const describeTask = Effect.fn("ToolRegistry.describeTask")(function* (agent: Agent.Info) {
       const items = (yield* agents.list()).filter((item) => item.mode !== "primary")
-      const filtered = items.filter(
-        (item) => Permission.evaluate("task", item.name, agent.permission).action !== "deny",
-      )
+      const ruleset = Permission.effective(agent)
+      const filtered = items.filter((item) => Permission.evaluate("task", item.name, ruleset).action !== "deny")
       const list = filtered.toSorted((a, b) => a.name.localeCompare(b.name))
       const description = list
         .map(
@@ -289,14 +299,19 @@ const layer = Layer.effect(
       permission?: PermissionV1.Ruleset
     }) {
       if (!codeMode) return
-      const ruleset = Permission.merge(input.agent.permission, input.permission ?? [])
+      const ruleset = Permission.effective(input.agent, input.permission)
       const tools = Permission.visibleTools(yield* mcp.tools(), ruleset)
       if (Object.keys(tools).length === 0) return
       return codeMode.describeCatalog(tools, Object.keys(yield* mcp.clients()).map(McpCatalog.sanitize))
     })
 
     const tools: Interface["tools"] = Effect.fn("ToolRegistry.tools")(function* (input) {
-      const filtered = (yield* all()).filter((tool) => {
+      // The verifier (accuracy E) is offered built-in tool definitions only, and
+      // only those its lock allows: never a custom or plugin tool.
+      const candidates = Permission.isVerifier(input.agent)
+        ? (yield* InstanceState.get(state)).builtin.filter((tool) => VERIFIER_TOOLS.has(tool.id))
+        : yield* all()
+      const filtered = candidates.filter((tool) => {
         if (tool.id === WebSearchTool.id) {
           return webSearchEnabled(input.providerID, { exa: flags.enableExa, parallel: flags.enableParallel })
         }
@@ -304,7 +319,7 @@ const layer = Layer.effect(
         // Reading or stopping a background shell task is meaningless for an
         // agent that cannot run shell commands in the first place.
         if (tool.id === ShellOutputTool.id || tool.id === ShellStopTool.id) {
-          return Permission.evaluate(ShellID.ToolID, "*", input.agent.permission).action !== "deny"
+          return Permission.evaluate(ShellID.ToolID, "*", Permission.effective(input.agent)).action !== "deny"
         }
 
         const usePatch =

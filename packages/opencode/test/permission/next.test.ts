@@ -804,6 +804,151 @@ it.instance(
   { git: true },
 )
 
+// An "always" approval only lifts an `ask`. A pattern an agent's ruleset denies is
+// never asked about under that agent, so an approval that reaches a deny was
+// given under a different agent (approvals are shared by every session of the
+// directory), and it must not unlock it.
+const approveAlways = (input: { id: string; permission: string; pattern: string; ruleset: PermissionV1.Ruleset }) =>
+  Effect.gen(function* () {
+    const fiber = yield* ask({
+      id: PermissionV1.ID.make(input.id),
+      sessionID: SessionID.make("session_build"),
+      permission: input.permission,
+      patterns: [input.pattern],
+      metadata: {},
+      always: [input.pattern],
+      ruleset: input.ruleset,
+    }).pipe(Effect.forkScoped)
+    yield* waitForPending(1)
+    yield* reply({ requestID: PermissionV1.ID.make(input.id), reply: "always" })
+    yield* Fiber.join(fiber)
+  })
+
+it.instance(
+  "ask - an always given under build does not unlock plan's edit deny",
+  () =>
+    Effect.gen(function* () {
+      // build asks about edits (a user config with edit: ask), and the user answers always
+      const build = Permission.fromConfig({ "*": "allow", edit: "ask" })
+      yield* approveAlways({ id: "per_deny1", permission: "edit", pattern: "*", ruleset: build })
+      // plan denies edits outright
+      const plan = Permission.fromConfig({ "*": "allow", edit: { "*": "deny" } })
+      const err = yield* fail(
+        ask({
+          sessionID: SessionID.make("session_plan"),
+          permission: "edit",
+          patterns: ["src/index.ts"],
+          metadata: {},
+          always: [],
+          ruleset: plan,
+        }),
+      )
+      expect(err).toBeInstanceOf(PermissionV1.DeniedError)
+    }),
+  { git: true },
+)
+
+it.instance(
+  "ask - an always on read *.env does not reach the verifier's lock",
+  () =>
+    Effect.gen(function* () {
+      const build = Permission.fromConfig({ read: { "*": "allow", "*.env": "ask" } })
+      yield* approveAlways({ id: "per_lock1", permission: "read", pattern: "*.env", ruleset: build })
+      // the built-in verifier, with a config and a session that allow everything
+      const verifier = {
+        name: Permission.VERIFIER,
+        native: true,
+        permission: Permission.agentRules(Permission.fromConfig({ "*": "allow" })),
+      }
+      const err = yield* fail(
+        ask({
+          sessionID: SessionID.make("session_verifier"),
+          permission: "read",
+          patterns: ["/repo/.env"],
+          metadata: {},
+          always: [],
+          ruleset: Permission.effective(verifier, Permission.fromConfig({ "*": "allow" })),
+        }),
+      )
+      expect(err).toBeInstanceOf(PermissionV1.DeniedError)
+    }),
+  { git: true },
+)
+
+it.instance(
+  "ask - an always on read *.env does not reach a ruleset that denies it",
+  () =>
+    Effect.gen(function* () {
+      // the default rules ask before reading .env files
+      const build = Permission.fromConfig({ read: { "*": "allow", "*.env": "ask" } })
+      yield* approveAlways({ id: "per_deny2", permission: "read", pattern: "*.env", ruleset: build })
+      // a locked agent (the verifier) denies them
+      const locked = Permission.fromConfig({ "*": "deny", read: { "*": "allow", "*.env": "deny" } })
+      const err = yield* fail(
+        ask({
+          sessionID: SessionID.make("session_verifier"),
+          permission: "read",
+          patterns: ["/repo/.env"],
+          metadata: {},
+          always: [],
+          ruleset: locked,
+        }),
+      )
+      expect(err).toBeInstanceOf(PermissionV1.DeniedError)
+    }),
+  { git: true },
+)
+
+it.instance(
+  "ask - an always still lifts a plain ask",
+  () =>
+    Effect.gen(function* () {
+      const asking = Permission.fromConfig({ "*": "allow", bash: "ask" })
+      yield* approveAlways({ id: "per_deny3", permission: "bash", pattern: "ls", ruleset: asking })
+      const result = yield* ask({
+        sessionID: SessionID.make("session_other"),
+        permission: "bash",
+        patterns: ["ls"],
+        metadata: {},
+        always: [],
+        ruleset: asking,
+      })
+      expect(result).toBeUndefined()
+    }),
+  { git: true },
+)
+
+it.instance(
+  "ask - an approval under the same agent for a pattern it asks about still works",
+  () =>
+    Effect.gen(function* () {
+      // allows reads, asks about .env, denies secrets/: only the asked pattern can be approved
+      const agent = Permission.fromConfig({ read: { "*": "allow", "*.env": "ask", "secrets/*": "deny" } })
+      yield* approveAlways({ id: "per_deny4", permission: "read", pattern: "*.env", ruleset: agent })
+      const result = yield* ask({
+        sessionID: SessionID.make("session_build"),
+        permission: "read",
+        patterns: ["app.env"],
+        metadata: {},
+        always: [],
+        ruleset: agent,
+      })
+      expect(result).toBeUndefined()
+      const err = yield* fail(
+        ask({
+          sessionID: SessionID.make("session_build"),
+          permission: "read",
+          patterns: ["secrets/key.pem"],
+          metadata: {},
+          always: [],
+          ruleset: agent,
+        }),
+      )
+      expect(err).toBeInstanceOf(PermissionV1.DeniedError)
+    }),
+  { git: true },
+)
+
 it.instance(
   "reply - reject cancels all pending for same session",
   () =>

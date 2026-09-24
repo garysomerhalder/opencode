@@ -39,7 +39,11 @@ const ctx = {
   messages: [],
   metadata: () => Effect.void,
   ask: () => Effect.void,
+  check: () => Effect.succeed("allow" as const),
 }
+
+// grep prints file content, so it fails closed: a context that cannot check the read rules shows nothing
+const unchecked: Tool.Context = { ...ctx, check: undefined }
 
 const root = path.join(__dirname, "../..")
 const full = (p: string) => (process.platform === "win32" ? Filesystem.normalizePath(p) : p)
@@ -93,6 +97,19 @@ describe("tool.grep", () => {
       )
       expect(result.metadata.matches).toBeGreaterThan(0)
       expect(result.output).toContain("Found")
+    }),
+  )
+
+  it.instance("a context that cannot check the read rules gets no content", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* Effect.promise(() => Bun.write(path.join(test.directory, "test.txt"), "needle"))
+      const info = yield* GrepTool
+      const grep = yield* info.init()
+      const result = yield* grep.execute({ pattern: "needle", path: test.directory }, unchecked)
+      expect(result.output).not.toContain("needle")
+      // nothing it could not read is counted or mentioned
+      expect(result.output).toBe("No files found")
     }),
   )
 

@@ -4,7 +4,9 @@ import { InstanceState } from "@/effect/instance-state"
 import { Wildcard } from "@opencode-ai/core/util/wildcard"
 import { Deferred, Effect, Layer, Context } from "effect"
 import os from "os"
+import path from "path"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
+import { TRUNCATION_DIR } from "@/tool/truncation-dir"
 import { EventV2Bridge } from "@/event-v2-bridge"
 
 export const Event = PermissionV1.Event
@@ -13,6 +15,16 @@ export interface Interface {
   readonly ask: (input: PermissionV1.AskInput) => Effect.Effect<void, PermissionV1.Error>
   readonly reply: (input: PermissionV1.ReplyInput) => Effect.Effect<void, PermissionV1.NotFoundError>
   readonly list: () => Effect.Effect<ReadonlyArray<PermissionV1.Request>>
+  /**
+   * What ask() would do, without asking: "deny" when any pattern is denied,
+   * "ask" when any would need an answer, else "allow". For tools that return
+   * many paths or file contents and must leave out what the agent may not read.
+   */
+  readonly check: (input: {
+    permission: string
+    patterns: ReadonlyArray<string>
+    ruleset: PermissionV1.Ruleset
+  }) => Effect.Effect<PermissionV1.Action>
 }
 
 interface PendingEntry {
@@ -25,16 +37,43 @@ interface State {
   approved: PermissionV1.Rule[]
 }
 
+/**
+ * The last rule matching the request. A deny matches its pattern ignoring
+ * case on every platform: file systems that ignore case (APFS, NTFS) open
+ * `prod.ENV` for `*.env`, and a deny should never be narrower than the file
+ * system. Allow and ask keep the platform's matching.
+ */
 export function evaluate(permission: string, pattern: string, ...rulesets: PermissionV1.Ruleset[]): PermissionV1.Rule {
   return (
     rulesets
       .flat()
-      .findLast((rule) => Wildcard.match(permission, rule.permission) && Wildcard.match(pattern, rule.pattern)) ?? {
+      .findLast(
+        (rule) =>
+          Wildcard.match(permission, rule.permission) &&
+          (Wildcard.match(pattern, rule.pattern) ||
+            (rule.action === "deny" && Wildcard.match(pattern.toLowerCase(), rule.pattern.toLowerCase()))),
+      ) ?? {
       action: "ask",
       permission,
       pattern: "*",
     }
   )
+}
+
+/**
+ * The rule that decides a request. An explicit deny in the ruleset is final;
+ * "always" approvals only lift an ask. Approvals are shared by every session
+ * of the directory, and a denied pattern is never asked about, so an approval
+ * that reaches a deny was given under another agent.
+ */
+function decide(
+  permission: string,
+  pattern: string,
+  ruleset: PermissionV1.Ruleset,
+  approved: PermissionV1.Ruleset,
+): PermissionV1.Rule {
+  const own = evaluate(permission, pattern, ruleset)
+  return own.action === "deny" ? own : evaluate(permission, pattern, ruleset, approved)
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Permission") {}
@@ -64,13 +103,25 @@ const layer = Layer.effect(
       }),
     )
 
+    const check = Effect.fn("Permission.check")(function* (input: {
+      permission: string
+      patterns: ReadonlyArray<string>
+      ruleset: PermissionV1.Ruleset
+    }) {
+      const { approved } = yield* InstanceState.get(state)
+      const actions = input.patterns.map((pattern) => decide(input.permission, pattern, input.ruleset, approved).action)
+      if (actions.includes("deny")) return "deny" as const
+      if (actions.includes("ask")) return "ask" as const
+      return "allow" as const
+    })
+
     const ask = Effect.fn("Permission.ask")(function* (input: PermissionV1.AskInput) {
       const { approved, pending } = yield* InstanceState.get(state)
       const { ruleset, ...request } = input
       let needsAsk = false
 
       for (const pattern of request.patterns) {
-        const rule = evaluate(request.permission, pattern, ruleset, approved)
+        const rule = decide(request.permission, pattern, ruleset, approved)
         yield* Effect.logInfo("evaluated", { permission: request.permission, pattern, action: rule })
         if (rule.action === "deny") {
           return yield* new PermissionV1.DeniedError({
@@ -171,7 +222,7 @@ const layer = Layer.effect(
       return Array.from(pending.values(), (item) => item.info)
     })
 
-    return Service.of({ ask, reply, list })
+    return Service.of({ ask, reply, list, check })
   }),
 )
 
@@ -199,6 +250,66 @@ export function fromConfig(permission: ConfigPermissionV1.Info) {
 
 export function merge(...rulesets: PermissionV1.Ruleset[]): PermissionV1.Rule[] {
   return rulesets.flat()
+}
+
+/** The built-in read-only verifier (accuracy E, docs/accuracy-e.md). */
+export const VERIFIER = "verifier"
+
+/**
+ * The verifier's fixed ruleset: reads and lookups, the verdict tool, archived
+ * tool output, nothing else. Nothing is `ask`, since nobody answers inside a
+ * goal loop. effective() appends it after every other rule.
+ */
+export const VERIFIER_LOCK = fromConfig({
+  "*": "deny",
+  // MCP resources are asked as read `mcp:<server>:<uri>`: not files in the workspace.
+  // .env.example holds no secrets and is allowed, as in the default rules; the read
+  // rules also match the file opened, so a name ending in it cannot open .env.
+  read: { "*": "allow", "mcp:*": "deny", "*.env": "deny", "*.env.*": "deny", "*.env.example": "allow" },
+  grep: "allow",
+  glob: "allow",
+  lsp: "allow",
+  verdict: "allow",
+  external_directory: { "*": "deny", [path.join(TRUNCATION_DIR, "*")]: "allow" },
+})
+
+/**
+ * The built-in verifier, by identity: a native agent (config cannot make one)
+ * under the name the agent service reserves for it. agent.ts keeps config from
+ * renaming it or giving another agent its name.
+ */
+export function isVerifier(agent: { name: string; native?: boolean }) {
+  return agent.native === true && agent.name === VERIFIER
+}
+
+declare const agentRulesBrand: unique symbol
+
+/**
+ * An agent's own rules (Agent.Info.permission), opaque to the compiler: they can
+ * be built with agentRules(), and read only through effective(), which appends
+ * the session's rules and, for the verifier, its lock. At run time the value is
+ * the plain array, so the API and the SDK see the same shape as before.
+ */
+export type AgentRules = { readonly [agentRulesBrand]: "AgentRules" }
+
+/** Wraps rules as an agent's own. agent.ts builds agents with it. */
+export function agentRules(rules: PermissionV1.Ruleset): AgentRules {
+  return rules as unknown as AgentRules
+}
+
+/**
+ * The ruleset a request is evaluated against: the agent's rules, then the
+ * session's, then, for the verifier, its lock. It is the only way to read an
+ * agent's rules (AgentRules is opaque everywhere else, and the compiler
+ * enforces it), so the lock is always last and nothing from config or the
+ * session can loosen it.
+ */
+export function effective(
+  agent: { name: string; native?: boolean; permission: AgentRules },
+  session: PermissionV1.Ruleset = [],
+): PermissionV1.Rule[] {
+  const own = agent.permission as unknown as PermissionV1.Ruleset | undefined
+  return merge(own ?? [], session, isVerifier(agent) ? VERIFIER_LOCK : [])
 }
 
 export function disabled(tools: string[], ruleset: PermissionV1.Ruleset): Set<string> {

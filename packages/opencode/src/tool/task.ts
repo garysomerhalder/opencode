@@ -8,6 +8,7 @@ import { SessionID, MessageID } from "../session/schema"
 import { MessageV2 } from "../session/message-v2"
 import { Agent } from "../agent/agent"
 import { deriveSubagentSessionPermission } from "../agent/subagent-permissions"
+import { Permission } from "@/permission"
 import type { SessionPrompt } from "../session/prompt"
 import { Config } from "@/config/config"
 import { Effect, Exit, Schema, Scope } from "effect"
@@ -135,19 +136,40 @@ export const TaskTool = Tool.define(
       if (!next) {
         return yield* Effect.fail(new Error(`Unknown agent type: ${params.subagent_type} is not a valid agent type`))
       }
+      // A primary agent is not a subagent: a model must not start one with a prompt
+      // it wrote. A subtask part (subtaskPart) may still run a primary agent, but
+      // never the goal verifier. Subtask parts come from a `subtask: true` command
+      // and from any client that can send message parts (HTTP, SDK, ACP, plugins),
+      // so this is not proof a person asked; the verifier is refused regardless.
+      // bypassAgentCheck alone is not enough: an @agent mention sets it for the
+      // model's own calls.
+      if (next.mode === "primary" && (ctx.extra?.subtaskPart !== true || Permission.isVerifier(next))) {
+        return yield* Effect.fail(new Error(`${next.name} is not a subagent; the task tool starts subagents only`))
+      }
 
       const session = params.task_id
         ? yield* sessions.get(SessionID.make(params.task_id)).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
         : undefined
+      // Resuming continues a task this session started, with the same agent. Any
+      // other session (the goal verifier's, another task's, the user's) is not a
+      // task of this one, and a task is not resumed under another agent's rules.
+      if (session && (session.parentID !== ctx.sessionID || session.agent !== next.name)) {
+        return yield* Effect.fail(
+          new Error(
+            `task_id ${params.task_id} is not a ${next.name} task started by this session; leave task_id out to start a new one`,
+          ),
+        )
+      }
       const childPermission = deriveSubagentSessionPermission({
         parentSessionPermission: parent.permission ?? [],
         subagent: next,
       })
+      const nextRules = Permission.effective(next)
       const childToolDenies = [
-        ...(next.permission.some((rule) => rule.permission === "todowrite")
+        ...(nextRules.some((rule) => rule.permission === "todowrite")
           ? []
           : [{ permission: "todowrite" as const, pattern: "*" as const, action: "deny" as const }]),
-        ...(next.permission.some((rule) => rule.permission === id)
+        ...(nextRules.some((rule) => rule.permission === id)
           ? []
           : [{ permission: id, pattern: "*" as const, action: "deny" as const }]),
         ...(cfg.experimental?.primary_tools?.map((permission) => ({

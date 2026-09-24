@@ -47,13 +47,17 @@ export const GlobTool = Tool.define(
           })
 
           const limit = 100
-          const files = yield* ripgrep.glob({ cwd: search, pattern: params.pattern, limit })
-          const truncated = files.length === limit
+          const listed = yield* ripgrep.glob({ cwd: search, pattern: params.pattern, limit })
+          const truncated = listed.length === limit
+          // a path the agent's read rules deny is not listed
+          const files: string[] = []
+          for (const file of listed.map((item) => path.resolve(search, item.path)))
+            if (yield* Tool.readable(ctx, ins.worktree, file, "path")) files.push(file)
 
           const output = []
           if (files.length === 0) output.push("No files found")
           if (files.length > 0) {
-            output.push(...files.map((file) => path.resolve(search, file.path)))
+            output.push(...files)
             if (truncated) {
               output.push("")
               output.push(
