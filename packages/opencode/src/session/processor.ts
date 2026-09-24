@@ -159,7 +159,7 @@ const layer = Layer.effect(
           const part = tools.find((item) => item.callID === decision.callID)
           if (!part) continue
           const text = part.state.output
-          const written = yield* Effect.exit(truncate.write(text))
+          const written = yield* Effect.exit(truncate.write(text, part.sessionID))
           const preview = OutputBudget.preview(text, decision.maxBytes)
           const shown = Receipt.describeShown(preview.unit, preview.shown)
           yield* Effect.logInfo(

@@ -45,17 +45,37 @@ interface State {
  */
 export function evaluate(permission: string, pattern: string, ...rulesets: PermissionV1.Ruleset[]): PermissionV1.Rule {
   const rules = rulesets.flat()
-  const mark = rules.findIndex(isLockMark)
-  if (mark === -1) return last(permission, pattern, rules)
+  const locked = split(rules)
+  if (!locked) return last(permission, pattern, rules)
   // A locked ruleset (effective() for the verifier): the lock only takes away.
-  // The stricter of the rules before it and the lock decides, and an ask is a
-  // deny, since nobody answers inside a goal loop.
-  const before = last(permission, pattern, rules.slice(0, mark))
-  const lock = last(permission, pattern, rules.slice(mark + 1))
-  if (before.action === "deny") return before
+  // The stricter of the other rules and the lock decides. Nobody answers inside
+  // a goal loop, so an ask among the other rules is a deny, and is matched as
+  // one (ignoring case), before any matching: an ask that would miss `SECRETS/`
+  // on a case-sensitive match must not become an allow.
+  const other = last(permission, pattern, locked.other)
+  const lock = last(permission, pattern, VERIFIER_LOCK)
+  if (other.action !== "allow") return { ...other, action: "deny" }
   if (lock.action !== "allow") return { ...lock, action: "deny" }
-  if (before.action === "ask") return { ...before, action: "deny" }
   return lock
+}
+
+/**
+ * For a ruleset from effective() for the verifier: the rules other than the lock,
+ * with every ask as a deny. The divider is found by identity (the frozen
+ * LOCK_MARK, the last one), so a rule that only carries its name, from config or
+ * a session, is an ordinary rule. The lock is always VERIFIER_LOCK itself; rules
+ * after its slice (approvals, a caller's extra ruleset) count as other rules.
+ * Undefined for any other ruleset.
+ */
+function split(rules: PermissionV1.Ruleset) {
+  const mark = rules.findLastIndex((rule) => rule === LOCK_MARK)
+  if (mark === -1) return undefined
+  const after = rules.slice(mark + 1 + VERIFIER_LOCK.length)
+  return {
+    other: [...rules.slice(0, mark), ...after].map((rule): PermissionV1.Rule =>
+      rule.action === "ask" ? { ...rule, action: "deny" } : rule,
+    ),
+  }
 }
 
 function last(permission: string, pattern: string, rules: PermissionV1.Ruleset): PermissionV1.Rule {
@@ -247,9 +267,24 @@ function expand(pattern: string): string {
   return pattern
 }
 
+/**
+ * The divider's permission name (see LOCK_MARK). No tool or request uses it, and
+ * config and session rules may not: fromConfig() throws, and the session API
+ * refuses a ruleset that names it (reserved()).
+ */
+export const LOCK_NAME = "<verifier-lock>"
+
+/** Why a ruleset from outside (config, a client) may not be used, or undefined. */
+export function reserved(ruleset: PermissionV1.Ruleset) {
+  return ruleset.some((rule) => rule.permission === LOCK_NAME)
+    ? `the permission name "${LOCK_NAME}" is reserved`
+    : undefined
+}
+
 export function fromConfig(permission: ConfigPermissionV1.Info) {
   const ruleset: PermissionV1.Rule[] = []
   for (const [key, value] of Object.entries(permission)) {
+    if (key === LOCK_NAME) throw new Error(`permission: the key "${LOCK_NAME}" is reserved`)
     if (typeof value === "string") {
       ruleset.push({ permission: key, action: value, pattern: "*" })
       continue
@@ -312,17 +347,13 @@ export function agentRules(rules: PermissionV1.Ruleset): AgentRules {
 }
 
 /**
- * Separates the rules before the verifier's lock from the lock in an effective
- * ruleset. evaluate() and disabled() see it and take the stricter of the two
- * sides, so the lock only ever takes away: its allows (read, grep, ...) cannot
- * lift a deny or an ask from the user's config or the session. No tool or
- * request has this permission name.
+ * Separates the other rules from the verifier's lock in an effective ruleset.
+ * evaluate() and disabled() find it by identity (this frozen object), never by
+ * name, and take the stricter of the two sides, so the lock only ever takes
+ * away: its allows (read, grep, ...) cannot lift a deny or an ask from the
+ * user's config or the session.
  */
-const LOCK_MARK: PermissionV1.Rule = { permission: "<verifier-lock>", pattern: "*", action: "deny" }
-
-function isLockMark(rule: PermissionV1.Rule) {
-  return rule.permission === LOCK_MARK.permission
-}
+const LOCK_MARK: PermissionV1.Rule = Object.freeze({ permission: LOCK_NAME, pattern: "*", action: "deny" })
 
 /**
  * The ruleset a request is evaluated against: the agent's rules, then the
@@ -334,16 +365,34 @@ function isLockMark(rule: PermissionV1.Rule) {
 export function effective(
   agent: { name: string; native?: boolean; permission: AgentRules },
   session: PermissionV1.Ruleset = [],
+  sessionID?: string,
 ): PermissionV1.Rule[] {
   const own = agent.permission as unknown as PermissionV1.Ruleset | undefined
-  return merge(own ?? [], session, isVerifier(agent) ? [LOCK_MARK, ...VERIFIER_LOCK] : [])
+  if (!isVerifier(agent)) return merge(own ?? [], session)
+  return merge(own ?? [], session, archiveScope(sessionID), [LOCK_MARK, ...VERIFIER_LOCK])
+}
+
+/**
+ * The archive of cut tool output is shared by every session and project for 7
+ * days. The verifier reaches only its own session's directory in it (see
+ * Truncate.sessionDir), and none of it when the caller does not say which
+ * session it runs in.
+ */
+function archiveScope(sessionID: string | undefined): PermissionV1.Rule[] {
+  return [
+    { permission: "external_directory", pattern: path.join(TRUNCATION_DIR, "*"), action: "deny" },
+    ...(sessionID
+      ? [{ permission: "external_directory", pattern: path.join(TRUNCATION_DIR, sessionID, "*"), action: "allow" as const }]
+      : []),
+  ]
 }
 
 export function disabled(tools: string[], ruleset: PermissionV1.Ruleset): Set<string> {
   const edits = ["edit", "write", "apply_patch"]
   const reads = ["list_mcp_resources", "list_mcp_resource_templates", "read_mcp_resource"]
-  const mark = ruleset.findIndex(isLockMark)
-  const sides = mark === -1 ? [ruleset] : [ruleset.slice(0, mark), ruleset.slice(mark + 1)]
+  // for the verifier, the other rules (an ask counts as a deny) and the lock
+  const locked = split(ruleset)
+  const sides = locked ? [locked.other, VERIFIER_LOCK] : [ruleset]
   return new Set(
     tools.filter((tool) => {
       const permission = edits.includes(tool) ? "edit" : reads.includes(tool) ? "read" : tool

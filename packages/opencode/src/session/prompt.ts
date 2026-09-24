@@ -367,10 +367,11 @@ const layer = Layer.effect(
               .ask({
                 ...req,
                 sessionID,
-                ruleset: Permission.effective(taskAgent, session.permission),
+                ruleset: Permission.effective(taskAgent, session.permission, sessionID),
               })
               .pipe(Effect.orDie),
-          check: (req) => permission.check({ ...req, ruleset: Permission.effective(taskAgent, session.permission) }),
+          check: (req) =>
+            permission.check({ ...req, ruleset: Permission.effective(taskAgent, session.permission, sessionID) }),
         })
         .pipe(
           Effect.catchCause((cause) => {
@@ -844,7 +845,7 @@ const layer = Layer.effect(
               // A file named in a prompt is read under the prompting agent's rules,
               // as its own read tool would read it: a task prompt is model-written,
               // so a mention must not reach what the agent's read rules deny.
-              const ruleset = Permission.effective(ag, current.permission)
+              const ruleset = Permission.effective(ag, current.permission, input.sessionID)
               const readCtx = (abort: AbortSignal, extra?: Tool.Context["extra"]): Tool.Context => ({
                 sessionID: input.sessionID,
                 abort,

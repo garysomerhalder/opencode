@@ -70,7 +70,15 @@ it.instance(
       expect(Permission.evaluate("read", "/repo/.env.local", ruleset).action).toBe("deny")
       // MCP resources are asked as reads of mcp:<server>:<uri>
       expect(Permission.evaluate("read", "mcp:docs:file:///notes", ruleset).action).toBe("deny")
-      expect(Permission.evaluate("external_directory", path.join(Truncate.DIR, "tool_1"), ruleset).action).toBe("allow")
+      // archived tool output: its own session's only, and none without a session
+      expect(Permission.evaluate("external_directory", path.join(Truncate.DIR, "tool_1"), ruleset).action).toBe("deny")
+      const own = Permission.effective(verifier!, session, "ses_mine")
+      expect(
+        Permission.evaluate("external_directory", path.join(Truncate.DIR, "ses_mine", "tool_1"), own).action,
+      ).toBe("allow")
+      expect(
+        Permission.evaluate("external_directory", path.join(Truncate.DIR, "ses_other", "tool_1"), own).action,
+      ).toBe("deny")
       expect(Permission.evaluate("external_directory", "/etc/*", ruleset).action).toBe("deny")
       // nothing is ask: nobody answers inside a goal loop
       expect(ruleset.slice(-Permission.VERIFIER_LOCK.length).some((rule) => rule.action === "ask")).toBe(false)
