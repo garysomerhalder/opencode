@@ -568,7 +568,9 @@ const layer = Layer.effect(
                   time: { ...part.state.time, end: completed },
                   input: part.state.input,
                   title: "",
-                  metadata: code === undefined ? { output } : { output, exit: code },
+                  // ranBy: this command was run by the user or the host (the goal
+                  // loop's checks), never by a model: the verdict tool cites only these
+                  metadata: code === undefined ? { output, ranBy: "user" } : { output, exit: code, ranBy: "user" },
                   output,
                 }
                 yield* sessions.updatePart(part)

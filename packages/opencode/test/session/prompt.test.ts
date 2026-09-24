@@ -1716,6 +1716,9 @@ noLLMServer.instance(
       )
       expect(failed?.state.metadata.exit).toBe(3)
       expect(passed?.state.metadata.exit).toBe(0)
+      // the model's own shell tool records an exit code too: only this marks a host-run check
+      expect(failed?.state.metadata.ranBy).toBe("user")
+      expect(passed?.state.metadata.ranBy).toBe("user")
       yield* run.assertNotBusy(chat.id)
     }),
   { config: cfg },
