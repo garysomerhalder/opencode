@@ -209,6 +209,22 @@ describe("tool.verdict: the goal's declared criteria", () => {
   )
 })
 
+// The verifier learns the rules from the description: it should not find them out
+// only from rejections.
+describe("tool.verdict: the description states the rules the tool enforces", () => {
+  it.instance("checks succeed with exit 0; declared criteria as written; todos need evidence", () =>
+    Effect.gen(function* () {
+      const tool = yield* VerdictTool
+      const description = (yield* tool.init()).description
+      expect(description).toContain("A PASS cannot stand while any check run for this verification failed")
+      expect(description).toContain("a check succeeds only with exit 0")
+      expect(description).toContain("You never declare what exit code a check should have")
+      expect(description).toContain("Judge every criterion the user declared, with its text as written")
+      expect(description).toContain("A todo you mark met needs evidence too")
+    }),
+  )
+})
+
 describe("tool.verdict: submissions", () => {
   it.instance("the third submission stores what checks out, as PARTIAL; a recorded verdict is final", () =>
     Effect.gen(function* () {

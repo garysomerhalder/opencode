@@ -79,11 +79,13 @@ export type Metadata = {
 const DESCRIPTION = [
   "Submit your verdict on the goal. Call it once, at the end, and stop after it is recorded.",
   "",
-  "Judge every acceptance criterion as met, unmet or unknown. A met criterion must cite evidence, and every citation is checked:",
-  '- file: a quote copied from the file at the cited lines ({ kind: "file", path, lines: [first, last], quote });',
+  "Judge every acceptance criterion as met, unmet or unknown. Judge every criterion the user declared, with its text as written; you may add your own. A met criterion must cite evidence, and every citation is checked:",
+  '- file: a quote copied from the file at the cited lines ({ kind: "file", path, lines: [first, last], quote }); only a file you are allowed to read;',
   '- check: a check run for this verification, by call id, with its exit code and an excerpt of its output ({ kind: "check", callID, exit, excerpt });',
   '- diff: an excerpt of the diff for a file it touches ({ kind: "diff", path, excerpt }).',
+  "A todo you mark met needs evidence too, cited the same way.",
   "PASS means every criterion is met. For each criterion that is not met, say in `missing` what evidence would settle it.",
+  "A PASS cannot stand while any check run for this verification failed or was aborted, whether you cite it or not: a check succeeds only with exit 0. You never declare what exit code a check should have.",
   `A verdict whose citations do not check out is returned with the reasons, and you can submit ${MAX_SUBMISSIONS} times. After that, citations that do not check out are dropped, and a PASS they supported is recorded as PARTIAL.`,
 ].join("\n")
 
