@@ -68,8 +68,9 @@ export function evaluate(permission: string, pattern: string, ...rulesets: Permi
  * with every ask as a deny. The divider is found by identity (the frozen
  * LOCK_MARK, the last one), so a rule that only carries its name, from config or
  * a session, is an ordinary rule. The lock is always VERIFIER_LOCK itself; rules
- * after its slice (approvals, a caller's extra ruleset) count as other rules.
- * Undefined for any other ruleset.
+ * after its slice (approvals, a caller's extra ruleset) are returned as `after`,
+ * a side of their own that can take away but never give, with every ask as a
+ * deny too. Undefined for any other ruleset.
  */
 function split(rules: PermissionV1.Ruleset) {
   const mark = rules.findLastIndex((rule) => rule === LOCK_MARK)
