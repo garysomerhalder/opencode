@@ -43,7 +43,7 @@ export interface Verdict {
 /** A check the host ran for this verification (a user-run shell command). */
 export interface Check {
   readonly callID: string
-  /** Undefined when the command was aborted, so its outcome is unknown. */
+  /** Undefined when the command did not finish (running, aborted, orphaned), so its outcome is unknown. */
   readonly exit: number | undefined
   readonly output: string
 }
@@ -128,7 +128,7 @@ export function validate(input: Verdict, world: World, options: { final: boolean
     for (const check of failed)
       errors.push(
         check.exit === undefined
-          ? `PASS, but check ${check.callID} was aborted`
+          ? `PASS, but check ${check.callID} did not finish`
           : `PASS, but check ${check.callID} exited ${check.exit}`,
       )
 
@@ -212,24 +212,25 @@ function citation(evidence: Evidence, world: World): string | undefined {
     if (quote === "") return "the quote is empty"
     const weak = specific(quote, "quote")
     if (weak) return weak
-    if (!normalize(lines.slice(start - 1, end).join("\n")).includes(quote))
+    if (!contains(normalize(lines.slice(start - 1, end).join("\n")), quote))
       return `the quote is not in ${evidence.path} at lines ${start}-${end}`
     return undefined
   }
   if (evidence.kind === "check") {
     const check = world.checks.find((item) => item.callID === evidence.callID)
     if (!check) return `there is no check ${evidence.callID} in this verification`
-    if (check.exit === undefined) return `check ${evidence.callID} has no exit code (it was aborted)`
+    if (check.exit === undefined) return `check ${evidence.callID} has no exit code (it did not finish)`
     if (check.exit !== evidence.exit) return `check ${evidence.callID} exited ${check.exit}, not ${evidence.exit}`
     const excerpt = normalize(evidence.excerpt)
     const weak = excerpt === "" ? undefined : specific(excerpt, "excerpt")
     if (weak) return weak
-    if (excerpt === "" || !normalize(check.output).includes(excerpt))
+    if (excerpt === "" || !contains(normalize(check.output), excerpt))
       return `the excerpt is not in the output of check ${evidence.callID}`
+    // a whole line that is itself specific: "." or "ok" alone does not count
     const whole = check.output
       .split(/\r?\n/)
       .map(normalize)
-      .some((line) => line !== "" && excerpt.includes(line))
+      .some((line) => line !== "" && specific(line, "excerpt") === undefined && contains(excerpt, line))
     if (!whole) return `the excerpt must contain at least one whole line of the output of check ${evidence.callID}`
     return undefined
   }
@@ -240,22 +241,21 @@ function citation(evidence: Evidence, world: World): string | undefined {
   const excerpt = normalize(evidence.excerpt)
   const weak = excerpt === "" ? undefined : specific(excerpt, "excerpt")
   if (weak) return weak
-  if (excerpt === "" || !normalize(section.changed).includes(excerpt))
+  if (excerpt === "" || !contains(normalize(section.changed), excerpt))
     return `the excerpt is not in the diff for ${evidence.path}`
   return undefined
 }
 
 /**
- * A unified diff split by file: the paths from each `diff --git a/<old> b/<new>`
- * header, and the changed lines (+ and -) after the section's first hunk header.
- * The headers, the hunk headers and the context lines are not evidence: they
- * name the file or repeat what was already there.
+ * A unified diff split by file: the paths of each file, and the changed lines
+ * (+ and -) after the section's first hunk header. The headers, the hunk headers
+ * and the context lines are not evidence: they name the file or repeat what was
+ * already there. A section whose paths cannot be read is left out.
  */
 export function sections(diff: string) {
   return diff
     .split(/^(?=diff --git )/m)
     .map((text) => {
-      const header = text.match(/^diff --git a\/(.+?) b\/(.+)$/m)
       const lines = text.split(/\r?\n/)
       const hunk = lines.findIndex((line) => line.startsWith("@@"))
       const changed =
@@ -265,9 +265,54 @@ export function sections(diff: string) {
               .slice(hunk)
               .filter((line) => (line.startsWith("+") || line.startsWith("-")) && !line.startsWith("@@"))
               .join("\n")
-      return { paths: header ? [header[1]!, header[2]!.trimEnd()] : [], text, changed }
+      return { paths: paths(lines), text, changed }
     })
     .filter((section) => section.paths.length > 0)
+}
+
+/**
+ * A diff section's paths. The `diff --git a/<old> b/<new>` header cannot be
+ * split when a path contains " b/", so they come from the `--- a/` and `+++ b/`
+ * lines (/dev/null for an added or deleted file is not a path), then from
+ * `rename from` / `rename to`, then from a header whose two paths are the same.
+ */
+function paths(lines: string[]) {
+  const header = lines.findIndex((line) => line.startsWith("@@"))
+  const head = header === -1 ? lines : lines.slice(0, header)
+  const marked = head.flatMap((line) => {
+    const match = line.match(/^(?:--- a\/|\+\+\+ b\/)(.+?)\t?$/)
+    return match ? [match[1]!] : []
+  })
+  if (marked.length > 0) return marked
+  const renamed = head.flatMap((line) => {
+    const match = line.match(/^rename (?:from|to) (.+)$/)
+    return match ? [match[1]!] : []
+  })
+  if (renamed.length > 0) return renamed
+  const rest = lines[0]?.match(/^diff --git a\/(.+)$/)?.[1]
+  if (!rest) return []
+  // "<path> b/<path>": the same path twice
+  const half = (rest.length - 3) / 2
+  if (!Number.isInteger(half) || rest.slice(0, half) !== rest.slice(half + 3) || rest.slice(half, half + 3) !== " b/")
+    return []
+  return [rest.slice(0, half)]
+}
+
+/**
+ * Whether `text` contains `part` starting and ending on word boundaries: the
+ * character before it and the one after it are not letters or digits (or it is
+ * at an end), so "rt func" does not match inside "export function".
+ */
+function contains(text: string, part: string) {
+  const word = /[\p{L}\p{N}]/u
+  for (let at = text.indexOf(part); at !== -1; at = text.indexOf(part, at + 1)) {
+    const before = at === 0 ? "" : text[at - 1]!
+    const after = text[at + part.length] ?? ""
+    const startsInside = word.test(part[0]!) && word.test(before)
+    const endsInside = word.test(part[part.length - 1]!) && word.test(after)
+    if (!startsInside && !endsInside) return true
+  }
+  return false
 }
 
 /** Whitespace, line endings and indentation do not matter. */
@@ -286,8 +331,10 @@ function same(a: string, b: string) {
  * or eight letters and digits.
  */
 function specific(text: string, what: "quote" | "excerpt") {
-  const words = text.match(/[\p{L}\p{N}]+/gu) ?? []
-  if (words.length === 0) return `the ${what} has no words or numbers in it`
+  const all = text.match(/[\p{L}\p{N}]+/gu) ?? []
+  if (all.length === 0) return `the ${what} has no words or numbers in it`
+  // a word is two letters or digits or more: "t c" is two fragments, not two words
+  const words = all.filter((word) => word.length >= 2)
   if (words.length >= 2 || words.join("").length >= 8) return undefined
   return `the ${what} is too short to be evidence: cite at least two words, or eight letters and digits`
 }

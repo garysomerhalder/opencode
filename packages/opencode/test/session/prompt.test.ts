@@ -1733,13 +1733,17 @@ noLLMServer.instance(
     Effect.gen(function* () {
       const { prompt, sessions, chat } = yield* boot()
       const fiber = yield* prompt
-        .shell({ sessionID: chat.id, agent: "build", command: "sleep 3" })
+        // prints, then keeps running: the mark must survive the streamed output (re-review 1)
+        .shell({ sessionID: chat.id, agent: "build", command: "echo started && sleep 3" })
         .pipe(Effect.forkChild)
       const running = yield* pollWithTimeout(
         Effect.gen(function* () {
           const parts = (yield* sessions.messages({ sessionID: chat.id })).flatMap((message) => message.parts)
           return parts.find(
-            (part): part is SessionV1.ToolPart => part.type === "tool" && part.state.status === "running",
+            (part): part is SessionV1.ToolPart =>
+              part.type === "tool" &&
+              part.state.status === "running" &&
+              String(part.state.metadata?.output ?? "").includes("started"),
           )
         }),
         "the shell part never started running",

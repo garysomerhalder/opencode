@@ -601,7 +601,8 @@ const layer = Layer.effect(
                 Effect.gen(function* () {
                   output += chunk
                   if (part.state.status === "running") {
-                    part.state.metadata = { output }
+                    // keep the mark: a running check that prints still blocks a PASS
+                    part.state.metadata = { output, ranBy: "user" }
                     yield* sessions.updatePart(part)
                   }
                 }),

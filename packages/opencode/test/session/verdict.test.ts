@@ -102,31 +102,31 @@ describe("Verdict.validate: citations", () => {
     })
     const failing: Verdict.Verdict = {
       verdict: "FAIL",
-      criteria: [{ id: "C2", text: "tests pass", status: "unmet", evidence: [cite("call_tests", 1, "3 fail")] }],
+      criteria: [{ id: "C2", text: "tests pass", status: "unmet", evidence: [cite("call_tests", 1, "12 pass 3 fail")] }],
       missing: [],
     }
     expect(Verdict.validate(failing, world, { final: false }).errors).toEqual([])
     const wrongExit = {
       ...failing,
-      criteria: [{ ...failing.criteria[0]!, evidence: [cite("call_tests", 0, "3 fail")] }],
+      criteria: [{ ...failing.criteria[0]!, evidence: [cite("call_tests", 0, "12 pass 3 fail")] }],
     }
     expect(Verdict.validate(wrongExit, world, { final: false }).errors).toEqual([
       "C2: check call_tests exited 1, not 0",
     ])
-    const noCheck = { ...failing, criteria: [{ ...failing.criteria[0]!, evidence: [cite("call_x", 1, "3 fail")] }] }
+    const noCheck = { ...failing, criteria: [{ ...failing.criteria[0]!, evidence: [cite("call_x", 1, "12 pass 3 fail")] }] }
     expect(Verdict.validate(noCheck, world, { final: false }).errors).toEqual([
       "C2: there is no check call_x in this verification",
     ])
     const wrongExcerpt = {
       ...failing,
-      criteria: [{ ...failing.criteria[0]!, evidence: [cite("call_tests", 1, "0 fail")] }],
+      criteria: [{ ...failing.criteria[0]!, evidence: [cite("call_tests", 1, "12 pass 0 fail")] }],
     }
     expect(Verdict.validate(wrongExcerpt, world, { final: false }).errors).toEqual([
       "C2: the excerpt is not in the output of check call_tests",
     ])
     const aborted: Verdict.World = { ...world, checks: [{ callID: "call_tests", exit: undefined, output: "3 fail" }] }
     expect(Verdict.validate(failing, aborted, { final: false }).errors).toEqual([
-      "C2: check call_tests has no exit code (it was aborted)",
+      "C2: check call_tests has no exit code (it did not finish)",
     ])
   })
 
@@ -166,7 +166,7 @@ describe("Verdict.validate: citations", () => {
       "index 83db48f..bf269f4 100644",
       "+++ b/src/budget.ts",
       "--- a/src/budget.ts",
-      "@@ -1,2 +1,4 @@",
+      "@@ -1,2 +1,4 @@ export function budget",
       "export function budget(bytes: number) {",
     ])
       expect([excerpt, Verdict.validate(pass([cite("src/budget.ts", excerpt)]), passing, { final: false }).errors]).toEqual([
@@ -323,7 +323,7 @@ describe("Verdict.validate: the host's records outrank the verifier's text", () 
     ])
     const aborted: Verdict.World = { ...passing, checks: [{ callID: "call_lint", exit: undefined, output: "" }] }
     expect(Verdict.validate(pass([fileCite("return cut(bytes)")]), aborted, { final: false }).errors).toEqual([
-      "PASS, but check call_lint was aborted",
+      "PASS, but check call_lint did not finish",
     ])
     const result = Verdict.validate(pass([fileCite("return cut(bytes)")]), world, { final: true })
     expect(result.downgraded).toBe(true)
@@ -384,8 +384,21 @@ describe("Verdict.validate: evidence is specific (review finding 2)", () => {
     expect(Verdict.validate(pass([fileCite("cut(bytes", [3, 3])]), passing, { final: false }).errors).toEqual([])
   })
 
+  // re-review 2: fragments of words are not words
+  test("one-letter fragments do not count, and a quote must start and end on word boundaries", () => {
+    expect(Verdict.validate(pass([fileCite("t f", [1, 1])]), passing, { final: false }).errors).toEqual([
+      "C1: the quote is too short to be evidence: cite at least two words, or eight letters and digits",
+    ])
+    for (const quote of ["rt function", "function bud", "urn cut(bytes"])
+      expect([quote, Verdict.validate(pass([fileCite(quote, [1, 3])]), passing, { final: false }).errors]).toEqual([
+        quote,
+        ["C1: the quote is not in src/budget.ts at lines 1-3"],
+      ])
+    expect(Verdict.validate(pass([fileCite("function budget", [1, 1])]), passing, { final: false }).errors).toEqual([])
+  })
+
   test("a file citation spans fewer than 40 lines", () => {
-    const cite = (lines: [number, number]): Verdict.Evidence => ({ kind: "file", path: "long.ts", lines, quote: "line 5" })
+    const cite = (lines: [number, number]): Verdict.Evidence => ({ kind: "file", path: "long.ts", lines, quote: "line 15" })
     expect(Verdict.validate(pass([cite([1, 40])]), long, { final: false }).errors).toEqual([
       "C1: lines 1-40 span 40 lines: cite fewer than 40",
     ])
@@ -403,8 +416,54 @@ describe("Verdict.validate: evidence is specific (review finding 2)", () => {
     expect(Verdict.validate(failing("Ran 15"), world, { final: false }).errors).toEqual([
       "C2: the excerpt must contain at least one whole line of the output of check call_tests",
     ])
-    expect(Verdict.validate(failing("3 fail"), world, { final: false }).errors).toEqual([])
+    expect(Verdict.validate(failing("12 pass"), world, { final: false }).errors).toEqual([])
     expect(Verdict.validate(failing("12 pass 3 fail"), world, { final: false }).errors).toEqual([])
+    // re-review 3: a trivial line (".") is not a whole line that counts
+    const dots: Verdict.World = {
+      ...world,
+      checks: [{ callID: "call_tests", exit: 1, output: "alpha beta gamma\n.\ndelta" }],
+    }
+    expect(Verdict.validate(failing("gamma . delta"), dots, { final: false }).errors).toEqual([
+      "C2: the excerpt must contain at least one whole line of the output of check call_tests",
+    ])
+    expect(Verdict.validate(failing("alpha beta gamma ."), dots, { final: false }).errors).toEqual([])
+  })
+})
+
+// re-review 4: a path with " b/" in it
+describe("Verdict.sections: the paths of each file in the diff", () => {
+  test("taken from the ---/+++ lines, with /dev/null for adds and deletes", () => {
+    const diff = [
+      "diff --git a/Plan b/secret.txt b/Plan b/secret.txt",
+      "index 1111111..2222222 100644",
+      "--- a/Plan b/secret.txt",
+      "+++ b/Plan b/secret.txt",
+      "@@ -1 +1 @@",
+      "-KEY old",
+      "+KEY new",
+      "diff --git a/new file.ts b/new file.ts",
+      "new file mode 100644",
+      "--- /dev/null",
+      "+++ b/new file.ts",
+      "@@ -0,0 +1 @@",
+      "+added line here",
+      "diff --git a/gone.ts b/gone.ts",
+      "deleted file mode 100644",
+      "--- a/gone.ts",
+      "+++ /dev/null",
+      "@@ -1 +0,0 @@",
+      "-removed line here",
+      "diff --git a/old name.ts b/new name.ts",
+      "similarity index 100%",
+      "rename from old name.ts",
+      "rename to new name.ts",
+    ].join("\n")
+    expect(Verdict.sections(diff).map((section) => section.paths)).toEqual([
+      ["Plan b/secret.txt", "Plan b/secret.txt"],
+      ["new file.ts"],
+      ["gone.ts"],
+      ["old name.ts", "new name.ts"],
+    ])
   })
 })
 
@@ -439,7 +498,7 @@ describe("Verdict.validate: checks bound to the loop (design ruling)", () => {
     for (const exit of [1, undefined]) {
       const failed: Verdict.World = { ...passing, unlisted: [{ callID: "call_other", exit, output: "" }] }
       expect(Verdict.validate(pass([fileCite("return cut(bytes)")]), failed, { final: false }).errors).toEqual([
-        exit === undefined ? "PASS, but check call_other was aborted" : "PASS, but check call_other exited 1",
+        exit === undefined ? "PASS, but check call_other did not finish" : "PASS, but check call_other exited 1",
       ])
     }
   })
