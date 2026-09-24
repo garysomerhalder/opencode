@@ -863,13 +863,13 @@ describe("session HttpApi", () => {
       Effect.gen(function* () {
         const test = yield* TestInstance
         const headers = { "x-opencode-directory": test.directory, "content-type": "application/json" }
-        const deny = { permission: "read", pattern: "secrets/*", action: "deny" }
+        const deny = { permission: "read", pattern: "secrets/*", action: "deny" } as const
         const parent = yield* requestJson<Session.Info>(SessionPaths.create, {
           method: "POST",
           headers,
           body: JSON.stringify({ title: "worker", permission: [deny] }),
         })
-        const allow = { permission: "read", pattern: "secrets/*", action: "allow" }
+        const allow = { permission: "read", pattern: "secrets/*", action: "allow" } as const
         const child = yield* requestJson<Session.Info>(SessionPaths.create, {
           method: "POST",
           headers,
