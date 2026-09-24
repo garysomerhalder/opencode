@@ -270,6 +270,15 @@ export function fromConfig(permission: ConfigPermissionV1.Info) {
   return ruleset
 }
 
+/**
+ * The `read` asks that can have no effect: `read` is decided on paths relative
+ * to the project, and an absolute (or ~, $HOME, already expanded) pattern is
+ * checked only to find a deny (Tool.askRead). Config loading warns about each.
+ */
+export function ineffectiveAsks(ruleset: PermissionV1.Ruleset) {
+  return ruleset.filter((rule) => rule.permission === "read" && rule.action === "ask" && path.isAbsolute(rule.pattern))
+}
+
 export function merge(...rulesets: PermissionV1.Ruleset[]): PermissionV1.Rule[] {
   return rulesets.flat()
 }

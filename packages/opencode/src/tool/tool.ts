@@ -79,8 +79,9 @@ export function askRead(ctx: Context, worktree: string, file: string) {
   return Effect.gen(function* () {
     const absolute = absolutePaths(file)
     // the absolute paths only find a deny: asking with them would let a broad
-    // "*": "ask" override a relative allow the user wrote
-    if (ctx.check && (yield* ctx.check({ permission: "read", patterns: absolute })) === "deny")
+    // "*": "ask" override a relative allow the user wrote. A context that cannot
+    // check fails closed: it is asked with them, so a deny still refuses.
+    if (!ctx.check || (yield* ctx.check({ permission: "read", patterns: absolute })) === "deny")
       yield* ctx.ask({ permission: "read", patterns: absolute, always: ["*"], metadata: {} })
     yield* ctx.ask({ permission: "read", patterns: readPatterns(worktree, file), always: ["*"], metadata: {} })
   })

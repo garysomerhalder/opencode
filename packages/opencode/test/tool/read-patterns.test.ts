@@ -75,3 +75,18 @@ describe("Permission.evaluate: a deny ignores case", () => {
     expect(Permission.evaluate("read", "src/app.ts", rules).action).toBe("allow")
   })
 })
+
+// Final check 2: an absolute or home read rule can only deny, so an ask on one has
+// no effect; the config load warns about each.
+describe("Permission.ineffectiveAsks", () => {
+  test("names absolute and home read asks, and nothing else", () => {
+    const rules = Permission.fromConfig({
+      read: { "*": "ask", "src/*": "allow", "~/.ssh/*": "ask", [path.join(root, "x", "*")]: "ask", "~/.aws/*": "deny" },
+      bash: { "/usr/bin/*": "ask" },
+    })
+    const patterns = Permission.ineffectiveAsks(rules).map((rule) => rule.pattern)
+    expect(patterns).toHaveLength(2)
+    expect(patterns[0]).toContain(".ssh")
+    expect(patterns[1]).toBe(path.join(root, "x", "*"))
+  })
+})

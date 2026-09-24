@@ -671,6 +671,21 @@ describe("tool.read: rules that name an absolute path", () => {
     }),
   )
 
+  // final check 1: without check() the absolute deny still holds (fail closed)
+  it.live("an absolute read deny holds for a context without check()", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped({ git: true })
+      yield* put(path.join(dir, "secrets", "key.txt"), "KEY sk-live-4f9a2c")
+      const rules = Permission.fromConfig({
+        "*": "allow",
+        read: { "*": "allow", [path.join(dir, "secrets", "*")]: "deny" },
+      })
+      const unchecked: Tool.Context = { ...ruled(rules), check: undefined }
+      const err = yield* fail(dir, { filePath: path.join(dir, "secrets", "key.txt") }, unchecked)
+      expect(err.message).toContain("denied: read")
+    }),
+  )
+
   // re-review 1: the absolute path only finds a deny; the relative paths decide the
   // rest, so an existing "*": ask with a relative allow still allows
   it.live("an absolute path does not make an allowed file ask", () =>

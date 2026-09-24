@@ -106,6 +106,12 @@ You can use `~` or `$HOME` at the start of a pattern to reference your home dire
 - `$HOME/projects/*` -> `/Users/username/projects/*`
 - `~` -> `/Users/username`
 
+For `read` rules, a pattern that names an absolute path (or starts with `~` or `$HOME`) can only
+**deny**: `read` is decided on paths relative to the project, and an absolute or home pattern is
+checked only to find a deny. An `ask` or `allow` on such a pattern has no effect, and opencode
+logs a warning for an absolute or home `ask` when it loads the config. Use relative patterns to
+ask about or allow files in the project.
+
 ### External Directories
 
 Use `external_directory` to allow tool calls that touch paths outside the working directory where OpenCode was started. This applies to any tool that takes a path as input (for example `read`, `edit`, `glob`, `grep`, and many `bash` commands).

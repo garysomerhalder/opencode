@@ -160,6 +160,10 @@ const layer = Layer.effect(
         })
 
         const user = Permission.fromConfig(cfg.permission ?? {})
+        for (const rule of Permission.ineffectiveAsks(user))
+          yield* Effect.logWarning(
+            `permission.read: "${rule.pattern}" is absolute; an absolute read rule can only deny, so this ask has no effect`,
+          )
 
         const drafts: Record<string, Draft> = {
           build: {
