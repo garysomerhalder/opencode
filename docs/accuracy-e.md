@@ -444,3 +444,62 @@ rename drops the lock), `mode`, `hidden`, `prompt` and `permission`. The lock wo
    metadata read by compaction, so the checkpoint shows the goal line and verified marks.
 4. **Loop.** The verify branch in `goal-loop.ts`, the phases, the bounds, the feedback builder, the
    app types, and the settings. The default stays off until the UI shows verdicts (section 7).
+
+### 11.5 The verifier session's metadata: the contract Phase 4 writes (ruled 2026-09-23)
+
+The `verdict` tool (`packages/opencode/src/tool/verdict.ts`) reads the goal from the metadata of
+the session it runs in, the verifier's child session, never from the prompt, so the verifier cannot
+restate or drop it. Phase 4 writes it in exactly this shape:
+
+```ts
+// session.metadata of the verifier's session
+type VerifierSessionMetadata = {
+  verify: {
+    /** Snapshot hash from Snapshot.track() at the loop's start. The tool diffs the workspace
+     *  against it (Snapshot.diff(base)) for `diff` citations. Absent: no diff citation can check out. */
+    base?: string
+    /** The acceptance criteria the user declared, verbatim. Each must be judged with its text as
+     *  written (case and spacing aside), or a PASS is stored as PARTIAL. Absent or []: the
+     *  verifier derives its own criteria, as section 2 describes. Non-string entries are ignored. */
+    criteria?: string[]
+  }
+}
+```
+
+Example, as the loop sends it after creating the child session (`PATCH /session/:child`; the
+`metadata` field replaces the whole object, so send the complete `verify` object in one request,
+before the checks and the verifier's prompt):
+
+```json
+{
+  "metadata": {
+    "verify": {
+      "base": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+      "criteria": ["the output is capped at the budget", "the README documents `--budget`"]
+    }
+  }
+}
+```
+
+The tool reads nothing else from the session. The checks are the shell parts the host ran in that
+session (`POST /session/:child/shell`, recorded with `metadata.ranBy = "user"` and `metadata.exit`);
+a model's own shell call is never one.
+
+**Checks must succeed with exit 0 (ruled 2026-09-23).** A PASS cannot stand while any check run for
+the verification failed or was aborted, cited or not. A negative check is written so that success
+means exit 0: a test that asserts the failure, or `! cmd` where the shell supports it. The expected
+exit code is never something the verifier declares. The tool description tells the verifier this,
+and the loop's settings UI should tell the user.
+
+### 11.6 Follow-ups (not in Phase 2)
+
+- **Test preload teardown is slow.** `packages/opencode/test/preload.ts`'s `afterAll` disposes the
+  whole `AppRuntime`, then retries removing the test data directory up to 30 times. On this machine
+  it sometimes takes about 340 s, which bun reports as an `(unnamed)` hook timeout at the start of
+  a file (seen on `test/session/verdict.test.ts`, `test/tool/lsp.test.ts`, `test/tool/read.test.ts`).
+  Find what `AppRuntime.dispose()` waits on, and bound it.
+- **Each test process downloads ripgrep.** The preload points `XDG_CACHE_HOME` at a per-process
+  directory (`opencode-test-data-<pid>`), so the first search in every test file fetches the `rg`
+  binary again: 20-60 s here, and the usual cause of a 30 s timeout on a file's first grep, glob or
+  listing test. Share one cache for the binary across test processes (or seed it from the
+  developer's cache), keeping the rest of the data directory per process.
