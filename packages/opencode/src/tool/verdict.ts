@@ -115,7 +115,7 @@ export const VerdictTool = Tool.define<
             throw new Error("A verdict can be submitted by only the goal verifier.")
           // one submission at a time per session: parallel calls in one step are
           // taken in turn, and once one is recorded the rest are refused
-          return yield* lock(ctx.sessionID).withPermits(1)(submit(params, ctx))
+          return yield* submitting.withPermits(1)(submit(params, ctx))
         }),
     } satisfies Tool.DefWithoutID<typeof Parameters, Metadata>
 
@@ -130,13 +130,14 @@ export const VerdictTool = Tool.define<
           const earlier = history.filter(
             (part): part is SessionV1.ToolPart => part.type === "tool" && part.tool === ID && part.callID !== ctx.callID,
           )
-          if (recorded.has(ctx.sessionID) || earlier.some((part) => part.state.status === "completed"))
+          const step = current(ctx.sessionID, ctx.messageID)
+          if (step.recorded || earlier.some((part) => part.state.status === "completed"))
             throw new Error("A verdict is already recorded for this verification. Stop here.")
+          const inStorage = new Set(earlier.map((part) => part.callID))
           const submission =
-            Math.max(
-              earlier.filter((part) => part.state.status === "error").length,
-              rejected.get(ctx.sessionID) ?? 0,
-            ) + 1
+            earlier.filter((part) => part.state.status === "error").length +
+            [...step.rejected].filter((callID) => !inStorage.has(callID)).length +
+            1
           const final = submission >= MAX_SUBMISSIONS
 
           const instance = yield* InstanceState.context
@@ -172,8 +173,8 @@ export const VerdictTool = Tool.define<
           }
 
           const result = Verdict.validate(cited, world, { final })
-          if (result.verdict) recorded.add(ctx.sessionID)
-          if (!result.verdict) rejected.set(ctx.sessionID, submission)
+          if (result.verdict) step.recorded = true
+          if (!result.verdict) step.rejected.add(ctx.callID ?? `call_${submission}`)
           if (!result.verdict) {
             const reasons = result.errors.map((error) => `- ${error}`).join("\n")
             if (final)
@@ -198,17 +199,29 @@ export const VerdictTool = Tool.define<
   }),
 )
 
-// Per session, in this process: the submission lock, and what storage may not
-// show yet (a part is written after its tool call returns).
-const locks = new Map<string, Semaphore.Semaphore>()
-const recorded = new Set<string>()
-const rejected = new Map<string, number>()
+// Submissions are taken one at a time (they are rare and quick), so parallel calls
+// in one step see each other.
+const submitting = Semaphore.makeUnsafe(1)
 
-function lock(sessionID: string) {
-  const hit = locks.get(sessionID)
-  if (hit) return hit
-  const next = Semaphore.makeUnsafe(1)
-  locks.set(sessionID, next)
+// What storage cannot show yet: a tool part is written after its call returns, so
+// for the calls of the step in progress (one assistant message) the tool remembers
+// whether one recorded a verdict and which were rejected. Only that step's: a later
+// step reads storage alone, so after a revert removes a recorded verdict the
+// session can submit again. At most one entry per session, and the oldest are
+// dropped past STEPS, so the map does not grow with every session ever verified.
+const STEPS = 256
+const steps = new Map<string, { messageID: string; recorded: boolean; rejected: Set<string> }>()
+
+function current(sessionID: string, messageID: string) {
+  const hit = steps.get(sessionID)
+  if (hit && hit.messageID === messageID) return hit
+  const next = { messageID, recorded: false, rejected: new Set<string>() }
+  steps.delete(sessionID)
+  steps.set(sessionID, next)
+  for (const key of steps.keys()) {
+    if (steps.size <= STEPS) break
+    steps.delete(key)
+  }
   return next
 }
 

@@ -4,7 +4,7 @@
 import { describe, expect } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
-import { Cause, Effect, Exit } from "effect"
+import { Cause, Effect, Exit, Layer } from "effect"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { Database } from "@opencode-ai/core/database/database"
@@ -27,30 +27,60 @@ import { VerdictTool } from "../../src/tool/verdict"
 import { TestInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 
-const it = testEffect(
-  LayerNode.compile(
-    LayerNode.group([
-      CrossSpawnSpawner.node,
-      FSUtil.node,
-      Database.node,
-      EventV2Bridge.node,
-      Session.node,
-      SessionProjector.node,
-      Snapshot.node,
-      Truncate.node,
-      Agent.node,
-    ]),
-  ),
-)
+const nodes = [
+  CrossSpawnSpawner.node,
+  FSUtil.node,
+  Database.node,
+  EventV2Bridge.node,
+  Session.node,
+  SessionProjector.node,
+  Snapshot.node,
+  Truncate.node,
+  Agent.node,
+]
+const it = testEffect(LayerNode.compile(LayerNode.group(nodes)))
 
 const SECRET = "sk-live-4f9a2c"
+
+// The host's diff, as `git diff --cached <base>` writes it (captured from the
+// snapshot service). Snapshot's own timing is not what these tests are about: on
+// this machine its diff can stay empty for a while after files change (reported).
+const DIFF = [
+  "diff --git a/.env b/.env",
+  "index 1111111..9bbcedd 100644",
+  "--- a/.env",
+  "+++ b/.env",
+  "@@ -1 +1,2 @@",
+  ` API_KEY=${SECRET}`,
+  "+OTHER=value",
+  "diff --git a/Plan b/secret.txt b/Plan b/secret.txt",
+  "index 3333333..ff568e8 100644",
+  "--- a/Plan b/secret.txt\t",
+  "+++ b/Plan b/secret.txt\t",
+  "@@ -1 +1 @@",
+  "-KEY old",
+  `+KEY ${SECRET}`,
+  "diff --git a/src/budget.ts b/src/budget.ts",
+  "index 83db48f..bf269f4 100644",
+  "--- a/src/budget.ts",
+  "+++ b/src/budget.ts",
+  "@@ -1,2 +1,2 @@",
+  "-export const LIMIT = 4096",
+  "+export const LIMIT = 81920",
+  " export const cut = 1",
+].join("\n")
+const withDiff = testEffect(
+  LayerNode.compile(LayerNode.group(nodes), [
+    [Snapshot.node, Layer.mock(Snapshot.Service, { diff: () => Effect.succeed(DIFF) })],
+  ]),
+)
 
 // The verifier's rules as the session evaluates them, with a session rule that
 // keeps secrets/ from it: check() answers like the permission service does.
 // (the verifier starts from the default "*": "allow"; the lock takes away)
 const rules = Permission.effective(
   { name: Permission.VERIFIER, native: true, permission: Permission.agentRules(Permission.fromConfig({ "*": "allow" })) },
-  Permission.fromConfig({ read: { "secrets/*": "deny" } }),
+  Permission.fromConfig({ read: { "secrets/*": "deny", "Plan b/*": "deny" } }),
 )
 const check = (input: { permission: string; patterns: ReadonlyArray<string> }) => {
   const actions = input.patterns.map((pattern) => Permission.evaluate(input.permission, pattern, rules).action)
@@ -130,13 +160,14 @@ const shell = (exit: number | undefined, output: string, ranBy?: "user"): Sessio
 const submit = Effect.fn("VerdictTest.submit")(function* (
   sessionID: Session.Info["id"],
   params: Record<string, unknown>,
-  options: { agent?: string } = {},
+  // messageID: the step; parallel calls in one step share it
+  options: { agent?: string; messageID?: MessageID } = {},
 ) {
   const tool = yield* VerdictTool
   const def = yield* tool.init()
   const ctx: Tool.Context = {
     sessionID,
-    messageID: MessageID.ascending(),
+    messageID: options.messageID ?? MessageID.ascending(),
     callID: `call_${Math.random()}`,
     agent: options.agent ?? Permission.VERIFIER,
     abort: AbortSignal.any([]),
@@ -254,7 +285,7 @@ describe("tool.verdict: checks are the host's records, bound to the loop", () =>
       const { session } = yield* setup()
       const listed = yield* record(session.id, ShellID.ToolID, "call_tests", shell(undefined, "", "user"))
       yield* goal(session.id, { checks: [listed] })
-      expect((yield* submit(session.id, passWith([capped]))).error).toContain("PASS, but check call_tests was aborted")
+      expect((yield* submit(session.id, passWith([capped]))).error).toContain("PASS, but check call_tests did not finish")
     }),
   )
 })
@@ -270,23 +301,16 @@ describe("tool.verdict: the goal's declared criteria", () => {
   )
 })
 
-// review findings 1, 3 and 10: a diff from a real snapshot
+// review findings 1, 3 and 10, re-review 4: the host's diff as git writes it
 describe("tool.verdict: diff citations", () => {
-  it.instance(
+  withDiff.instance(
     "only changed lines count, and a diff of a file the agent may not read is not there at all",
     () =>
       Effect.gen(function* () {
-        const { directory } = yield* setup()
-        const snapshot = yield* Snapshot.Service
-        const base = yield* snapshot.track()
-        expect(base).toBeDefined()
-        yield* Effect.promise(async () => {
-          await fs.writeFile(path.join(directory, "src", "budget.ts"), "export const LIMIT = 8192\nexport const cut = 1\n")
-          await fs.writeFile(path.join(directory, ".env"), `API_KEY=${SECRET}\nOTHER=value\n`)
-        })
+        yield* setup()
         const diff = (file: string, excerpt: string) => passWith([{ kind: "diff", path: file, excerpt }])
-        const at = () => another({ base })
-        expect((yield* submit(yield* at(), diff("src/budget.ts", "+export const LIMIT = 8192"))).error).toBe("")
+        const at = () => another({ base: "base" })
+        expect((yield* submit(yield* at(), diff("src/budget.ts", "+export const LIMIT = 81920"))).error).toBe("")
         expect((yield* submit(yield* at(), diff("src/budget.ts", "diff --git a/src/budget.ts"))).error).toContain(
           "the excerpt is not in the diff for src/budget.ts",
         )
@@ -294,6 +318,10 @@ describe("tool.verdict: diff citations", () => {
         const wrong = yield* submit(yield* at(), diff(".env", "+OTHER=nothing"))
         expect(right.error).toEqual(wrong.error)
         expect(right.error).toContain("the diff does not touch .env")
+        const planRight = yield* submit(yield* at(), diff("Plan b/secret.txt", `+KEY ${SECRET}`))
+        const planWrong = yield* submit(yield* at(), diff("Plan b/secret.txt", "+KEY sk-dead-000"))
+        expect(planRight.error).toEqual(planWrong.error)
+        expect(planRight.error).toContain("the diff does not touch Plan b/secret.txt")
       }),
     { git: true },
   )
@@ -339,8 +367,11 @@ describe("tool.verdict: submissions", () => {
   it.instance("a recorded verdict is final, in storage and in this process", () =>
     Effect.gen(function* () {
       const { session } = yield* setup()
-      expect((yield* submit(session.id, passWith([capped]))).error).toBe("")
-      expect((yield* submit(session.id, passWith([capped]))).error).toContain("already recorded")
+      // in one step: the part is not in storage yet
+      const step = MessageID.ascending()
+      expect((yield* submit(session.id, passWith([capped]), { messageID: step })).error).toBe("")
+      expect((yield* submit(session.id, passWith([capped]), { messageID: step })).error).toContain("already recorded")
+      // in a later step: storage holds the recorded verdict
       const other = { id: yield* another() }
       yield* record(other.id, "verdict", "call_done", {
         status: "completed",
@@ -358,12 +389,25 @@ describe("tool.verdict: submissions", () => {
   it.instance("parallel submissions in one step record one verdict", () =>
     Effect.gen(function* () {
       const { session } = yield* setup()
+      const step = { messageID: MessageID.ascending() }
       const results = yield* Effect.all(
-        [submit(session.id, passWith([capped])), submit(session.id, passWith([capped]))],
+        [submit(session.id, passWith([capped]), step), submit(session.id, passWith([capped]), step)],
         { concurrency: "unbounded" },
       )
       expect(results.filter((result) => result.error === "")).toHaveLength(1)
       expect(results.filter((result) => result.error.includes("already recorded"))).toHaveLength(1)
+    }),
+  )
+
+  // re-review 5: what the tool remembers in this process is the step's, not the
+  // session's forever: after a revert removes the recorded verdict from storage,
+  // a later step can submit again
+  it.instance("a reverted session can submit again", () =>
+    Effect.gen(function* () {
+      const { session } = yield* setup()
+      expect((yield* submit(session.id, passWith([capped]))).error).toBe("")
+      // (the verdict's part never reached storage, as after a revert)
+      expect((yield* submit(session.id, passWith([capped]))).error).toBe("")
     }),
   )
 
