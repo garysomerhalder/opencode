@@ -72,6 +72,11 @@ export interface GrepInput {
   readonly pattern: string
   readonly file?: string
   readonly include?: string
+  /**
+   * Paths relative to cwd that are never searched (ripgrep does not open them),
+   * applied after include so an include glob cannot bring them back.
+   */
+  readonly exclude?: readonly string[]
   readonly limit: number
   readonly signal?: AbortSignal
 }
@@ -85,6 +90,10 @@ export interface Interface {
 export class Service extends Context.Service<Service, Interface>()("@opencode/v2/Ripgrep") {}
 
 const failure = (message: string, cause?: unknown) => new Error({ message, cause })
+
+// A path as a glob that matches only itself: each glob metacharacter in a
+// class of its own (works on Windows, where ripgrep has no backslash escape).
+const literalGlob = (file: string) => file.replaceAll("\\", "/").replace(/[*?[\]{}]/g, (char) => `[${char}]`)
 
 const isInvalidPattern = (stderr: string) =>
   stderr.includes("regex parse error") || stderr.includes("error parsing regex")
@@ -225,6 +234,8 @@ const layer = Layer.effect(
             "--no-messages",
             ...(input.include ? [`--glob=${input.include}`] : []),
             "--glob=!**/.git/**",
+            // later globs win: these exclusions hold whatever include says
+            ...(input.exclude ?? []).map((file) => `--glob=!/${literalGlob(file)}`),
             "--",
             input.pattern,
             input.file ?? ".",

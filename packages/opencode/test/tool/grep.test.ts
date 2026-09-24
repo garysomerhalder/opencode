@@ -108,7 +108,8 @@ describe("tool.grep", () => {
       const grep = yield* info.init()
       const result = yield* grep.execute({ pattern: "needle", path: test.directory }, unchecked)
       expect(result.output).not.toContain("needle")
-      expect(result.output).toContain("1 matching files not shown")
+      // nothing it could not read is counted or mentioned
+      expect(result.output).toBe("No files found")
     }),
   )
 

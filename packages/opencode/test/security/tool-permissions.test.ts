@@ -170,7 +170,7 @@ describe("finding 1: grep and glob apply the read rules to what they return", ()
     }),
   )
 
-  it.instance("grep leaves out a file build must ask before reading, and says so", () =>
+  it.instance("grep leaves out a file build must ask before reading", () =>
     Effect.gen(function* () {
       yield* workspace()
       const result = yield* call("build", "grep", { pattern: "API_KEY" })
@@ -186,6 +186,66 @@ describe("finding 1: grep and glob apply the read rules to what they return", ()
       const result = yield* call(Permission.VERIFIER, "glob", { pattern: "**/*env*" })
       expect(result.offered).toBe(true)
       expect(result.output).not.toContain(".env")
+    }),
+  )
+})
+
+// Re-review, item 2: grep must not answer a question about a file it hides. Its
+// output is the same whether or not the hidden .env matches, and however many
+// lines of it match (the match cap must not let hidden matches crowd out others).
+describe("re-review: grep is not an oracle for files it hides", () => {
+  const ask = (agent: string, pattern: string) => call(agent, "grep", { pattern, include: "*" })
+  const env = (directory: string, text: string) =>
+    Effect.promise(() => fs.writeFile(path.join(directory, ".env"), text))
+  for (const agent of [Permission.VERIFIER, "build"]) {
+    it.instance(`${agent}: the output is the same whether or not the hidden file matches`, () =>
+      Effect.gen(function* () {
+        const directory = yield* workspace()
+        const right = yield* ask(agent, `^API_KEY=${SECRET.slice(0, 9)}|process\\.env`)
+        const wrong = yield* ask(agent, `^API_KEY=sk-dead-00|process\\.env`)
+        expect(right.output).toContain("app.ts")
+        expect(right).toEqual(wrong)
+
+        yield* env(directory, `API_KEY=${SECRET}\n`.repeat(250))
+        const crowded = yield* ask(agent, "API_KEY")
+        yield* env(directory, "NOTHING=here\n")
+        const alone = yield* ask(agent, "API_KEY")
+        expect(crowded.output).toContain("app.ts")
+        expect(crowded).toEqual(alone)
+      }),
+    )
+  }
+})
+
+// Re-review, item 1: the external-directory check compares the path the system
+// resolves, for every tool. A link in the workspace to a directory outside it
+// (a junction on Windows) does not take grep, glob or read there.
+describe("re-review: a link to outside the workspace does not take the verifier there", () => {
+  const linked = Effect.fn("SecurityTest.linked")(function* () {
+    const directory = yield* workspace()
+    const outside = path.join(path.dirname(directory), `outside-${path.basename(directory)}`)
+    yield* Effect.promise(async () => {
+      await fs.mkdir(outside, { recursive: true })
+      await fs.writeFile(path.join(outside, "id_rsa"), `KEY ${SECRET}\n`)
+      await fs.symlink(outside, path.join(directory, "l"), "junction")
+    })
+    yield* Effect.addFinalizer(() => Effect.promise(() => fs.rm(outside, { recursive: true, force: true })))
+    return directory
+  })
+
+  it.instance("grep with path set to the link", () =>
+    Effect.gen(function* () {
+      yield* linked()
+      const result = yield* call(Permission.VERIFIER, "grep", { pattern: "KEY", path: "l" })
+      expect(result.output + result.error).not.toContain(SECRET)
+    }),
+  )
+
+  it.instance("glob with path set to the link", () =>
+    Effect.gen(function* () {
+      yield* linked()
+      const result = yield* call(Permission.VERIFIER, "glob", { pattern: "*", path: "l" })
+      expect(result.output + result.error).not.toContain("id_rsa")
     }),
   )
 })
