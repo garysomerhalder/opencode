@@ -6,6 +6,7 @@ import os from "os"
 import path from "path"
 import { Permission } from "../../src/permission"
 import { Tool } from "../../src/tool/tool"
+import { containsPath, type InstanceContext } from "../../src/project/instance-context"
 
 let root = ""
 let workspace = ""
@@ -44,6 +45,17 @@ describe("Tool.readPatterns and Tool.canonicalPath", () => {
   test.skipIf(process.platform !== "win32")("an NTFS stream name is matched as the file it opens", () => {
     expect(Tool.readPatterns(workspace, path.join(workspace, ".env::$DATA"))).toContain(".env")
     expect(Tool.canonicalPath(path.join(workspace, ".env:hidden"))).toBe(path.join(workspace, ".env"))
+  })
+})
+
+// Re-review, item 3: a workspace opened through a link (macOS /tmp is /private/tmp)
+// contains the files the system resolves under it.
+describe("containsPath resolves the workspace as well as the file", () => {
+  test("a file under the workspace's real directory is inside it", () => {
+    const linked = { directory: path.join(workspace, "vendor"), worktree: path.join(workspace, "vendor") } as InstanceContext
+    expect(containsPath(path.join(outside, "id_rsa"), linked)).toBe(true)
+    expect(containsPath(path.join(workspace, "vendor", "id_rsa"), linked)).toBe(true)
+    expect(containsPath(path.join(workspace, ".env"), linked)).toBe(false)
   })
 })
 

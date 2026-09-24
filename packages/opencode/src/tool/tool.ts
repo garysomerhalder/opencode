@@ -3,7 +3,7 @@ import { Effect, Schema } from "effect"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import type { JSONSchema7 } from "@ai-sdk/provider"
 import path from "path"
-import { realpathSync } from "fs"
+import { CanonicalPath } from "@/util/canonical-path"
 import type { MessageV2 } from "../session/message-v2"
 import type { Permission } from "../permission"
 import type { SessionID, MessageID } from "../session/schema"
@@ -60,8 +60,16 @@ export type Context<M extends Metadata = Metadata> = {
  * A deny hides both; content also needs an allow, since there is nobody to
  * ask in the middle of a search. A context without check() hides everything.
  */
-export function readable(ctx: Context, worktree: string, file: string, need: "path" | "content") {
-  const patterns = readPatterns(worktree, file)
+export function readable(
+  ctx: Context,
+  worktree: string,
+  file: string,
+  need: "path" | "content",
+  options?: { resolved?: boolean },
+) {
+  // resolved: the caller passes the worktree and the file already resolved
+  // (CanonicalPath.resolve), so the one pattern is both as named and as opened
+  const patterns = options?.resolved ? [path.relative(worktree, file)] : readPatterns(worktree, file)
   if (!ctx.check) return Effect.succeed(false)
   return ctx
     .check({ permission: "read", patterns })
@@ -79,25 +87,8 @@ export function readPatterns(worktree: string, file: string) {
   return named === opened ? [named] : [named, opened]
 }
 
-/**
- * The file the system opens for a path, on every platform: symbolic links and
- * junctions resolved (for a path that does not exist yet, its nearest existing
- * parent), and on Windows a `name:stream` suffix removed, since
- * `.env::$DATA` opens `.env`.
- */
-export function canonicalPath(file: string): string {
-  const target = path.resolve(file)
-  const base = path.basename(target)
-  const colon = process.platform === "win32" ? base.indexOf(":") : -1
-  const plain = colon > 0 ? path.join(path.dirname(target), base.slice(0, colon)) : target
-  try {
-    return realpathSync.native(plain)
-  } catch {
-    const parent = path.dirname(plain)
-    if (parent === plain) return plain
-    return path.join(canonicalPath(parent), path.basename(plain))
-  }
-}
+/** The file the system opens for a path: see CanonicalPath.resolve. */
+export const canonicalPath = CanonicalPath.resolve
 
 export interface ExecuteResult<M extends Metadata = Metadata> {
   title: string
