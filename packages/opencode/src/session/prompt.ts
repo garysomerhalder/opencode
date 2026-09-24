@@ -349,9 +349,10 @@ const layer = Layer.effect(
           sessionID,
           abort: taskAbort.signal,
           callID: part.callID,
-          // A subtask part is the user's (a `subtask: true` command), not the model's:
-          // userCommand lets it run a primary agent, never the goal verifier.
-          extra: { bypassAgentCheck: true, userCommand: true, promptOps },
+          // A subtask part is not the model's own task call (it comes from a
+          // `subtask: true` command or a client that sent the part): subtaskPart
+          // lets it run a primary agent, never the goal verifier.
+          extra: { bypassAgentCheck: true, subtaskPart: true, promptOps },
           messages: msgs,
           metadata: (val: { title?: string; metadata?: Record<string, any> }) =>
             Effect.gen(function* () {
