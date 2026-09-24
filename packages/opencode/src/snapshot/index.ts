@@ -25,6 +25,8 @@ const limit = 2 * 1024 * 1024
 const core = ["-c", "core.longpaths=true", "-c", "core.symlinks=true"]
 const cfg = ["-c", "core.autocrlf=false", ...core]
 const quote = [...cfg, "-c", "core.quotepath=false"]
+const ATTEMPTS = 4
+const RETRY_MS = 100
 interface GitResult {
   readonly code: ChildProcessSpawner.ExitCode
   readonly text: string
@@ -143,20 +145,33 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
           )
         })
 
+        // Git for Windows sometimes fails to write a loose object ("unable to write file
+        // .git/objects/..: Permission denied") while another process holds the new file.
+        // add and write-tree are idempotent, so a failed one runs again before giving up.
+        const retried = Effect.fnUntraced(function* (run: () => Effect.Effect<GitResult>) {
+          let result = yield* run()
+          for (let attempt = 1; attempt < ATTEMPTS && result.code !== 0; attempt++) {
+            yield* Effect.sleep(`${RETRY_MS * attempt} millis`)
+            result = yield* run()
+          }
+          return result
+        })
+
+        /** false when git could not stage the files: the index is then missing them. */
         const stage = Effect.fnUntraced(function* (files: string[]) {
-          if (!files.length) return
-          const result = yield* git(
-            [...cfg, ...args(["add", "--all", "--sparse", "--pathspec-from-file=-", "--pathspec-file-nul"])],
-            {
+          if (!files.length) return true
+          const result = yield* retried(() =>
+            git([...cfg, ...args(["add", "--all", "--sparse", "--pathspec-from-file=-", "--pathspec-file-nul"])], {
               cwd: state.worktree,
               stdin: encodeTopLevelLiteralPathspecs(files),
-            },
+            }),
           )
-          if (result.code === 0) return
+          if (result.code === 0) return true
           yield* Effect.logWarning("failed to add snapshot files", {
             exitCode: result.code,
             stderr: result.stderr,
           })
+          return false
         })
 
         const exists = (file: string) => fs.exists(file).pipe(Effect.orDie)
@@ -232,6 +247,7 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
           }
         })
 
+        /** false when the index could not be brought up to date with the worktree. */
         const add = Effect.fnUntraced(function* () {
           yield* sync()
           const [diff, other] = yield* Effect.all(
@@ -252,13 +268,13 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
               otherCode: other.code,
               otherStderr: other.stderr,
             })
-            return
+            return false
           }
 
           const tracked = diff.text.split("\0").filter(Boolean)
           const untracked = other.text.split("\0").filter(Boolean)
           const all = Array.from(new Set([...tracked, ...untracked]))
-          if (!all.length) return
+          if (!all.length) return true
 
           // Resolve source-repo ignore rules against the exact candidate set.
           // --no-index keeps this pattern-based even when a path is already tracked.
@@ -272,7 +288,7 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
           }
 
           const allow = all.filter((item) => !ignored.has(item))
-          if (!allow.length) return
+          if (!allow.length) return true
 
           const large = new Set(
             (yield* Effect.all(
@@ -294,7 +310,7 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
           const block = new Set(untracked.filter((item) => large.has(item)))
           yield* sync(Array.from(block))
           // Stage only the allowed candidate paths so snapshot updates stay scoped.
-          yield* stage(allow.filter((item) => !block.has(item)))
+          return yield* stage(allow.filter((item) => !block.has(item)))
         })
 
         const cleanup = Effect.fnUntraced(function* () {
@@ -337,9 +353,18 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
                 yield* seed()
                 yield* Effect.logInfo("initialized")
               }
-              yield* add()
-              const result = yield* git(args(["write-tree"]), { cwd: state.directory })
+              // A tree written from an index that is missing files would be a wrong base
+              // (every file then shows as new), so there is no snapshot rather than that one.
+              if (!(yield* add())) return
+              const result = yield* retried(() => git(args(["write-tree"]), { cwd: state.directory }))
               const hash = result.text.trim()
+              if (result.code !== 0 || !hash) {
+                yield* Effect.logWarning("failed to write snapshot tree", {
+                  exitCode: result.code,
+                  stderr: result.stderr,
+                })
+                return
+              }
               yield* Effect.logInfo("tracking", { hash, cwd: state.directory, git: state.gitdir })
               return hash
             }),

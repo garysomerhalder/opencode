@@ -3,6 +3,7 @@ import { $ } from "bun"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { FSUtil } from "@opencode-ai/core/fs-util"
+import { AppProcess } from "@opencode-ai/core/process"
 import fs from "fs/promises"
 import path from "path"
 import { Effect, Fiber, Layer } from "effect"
@@ -1214,5 +1215,82 @@ it.instance(
     for (let i = 0; i < base.length; i++) expect(yield* readText(base[i])).toBe(`base-${i}`)
     for (const file of fresh) expect(yield* exists(file)).toBe(false)
   }),
+  { git: true },
+)
+
+// Git for Windows sometimes fails to write a loose object ("unable to write file
+// .git/objects/..: Permission denied"), in `git add` or `git write-tree`. The
+// verdict tool's diff test saw both: a base that was the empty tree (every file
+// "new file"), and a base of "" (the diff then fails: "bad revision ''"). These
+// tests make the named git commands fail the given number of times.
+const faults = { add: 0, "write-tree": 0 }
+const denied = (command: string): AppProcess.RunResult => ({
+  command,
+  exitCode: 128,
+  stdout: Buffer.alloc(0),
+  stderr: Buffer.from("error: unable to write file .git/objects/48/ad8d5a: Permission denied\n"),
+  stdoutTruncated: false,
+  stderrTruncated: false,
+})
+const flaky = Layer.effect(
+  AppProcess.Service,
+  Effect.gen(function* () {
+    const real = yield* AppProcess.Service
+    return AppProcess.Service.of({
+      ...real,
+      run: (command, options) => {
+        const verb =
+          "args" in command ? command.args.find((arg): arg is keyof typeof faults => arg in faults) : undefined
+        if (!verb || faults[verb] <= 0) return real.run(command, options)
+        faults[verb]--
+        return Effect.succeed(denied(`git ${verb}`))
+      },
+    })
+  }),
+).pipe(Layer.provide(LayerNode.compile(AppProcess.node)))
+const flakyIt = testEffect(
+  Layer.mergeAll(
+    LayerNode.compile(LayerNode.group([Snapshot.node, FSUtil.node]), [[AppProcess.node, flaky]]),
+    testInstanceStoreLayer,
+  ),
+)
+
+flakyIt.instance(
+  "a snapshot survives git failing to write an object once",
+  () =>
+    Effect.gen(function* () {
+      const tmp = yield* bootstrap()
+      yield* write(`${tmp.path}/src/budget.ts`, "export const LIMIT = 4096\nexport const cut = 1\n")
+      faults.add = 1
+      faults["write-tree"] = 1
+      const snapshot = yield* Snapshot.Service
+      const before = yield* snapshot.track()
+      expect(faults).toEqual({ add: 0, "write-tree": 0 })
+      expect(before).toBeTruthy()
+      yield* write(`${tmp.path}/src/budget.ts`, "export const LIMIT = 8192\nexport const cut = 1\n")
+      faults.add = 1
+      const diff = yield* snapshot.diff(before!)
+      expect(diff).toContain("-export const LIMIT = 4096")
+      expect(diff).toContain("+export const LIMIT = 8192")
+      expect(diff).not.toContain("new file mode")
+    }),
+  { git: true },
+)
+
+flakyIt.instance(
+  "a snapshot git cannot write is no snapshot, not an empty or partial one",
+  () =>
+    Effect.gen(function* () {
+      const tmp = yield* bootstrap()
+      yield* write(`${tmp.path}/src/budget.ts`, "export const LIMIT = 4096\n")
+      const snapshot = yield* Snapshot.Service
+      faults.add = 99
+      expect(yield* snapshot.track()).toBeUndefined()
+      faults.add = 0
+      faults["write-tree"] = 99
+      expect(yield* snapshot.track()).toBeUndefined()
+      faults["write-tree"] = 0
+      expect(yield* snapshot.track()).toBeTruthy()
+    }),
   { git: true },
 )
