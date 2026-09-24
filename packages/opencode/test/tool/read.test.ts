@@ -2,6 +2,7 @@ import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { afterEach, describe, expect } from "bun:test"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { Cause, Effect, Exit, Layer, Stream } from "effect"
+import os from "os"
 import path from "path"
 import { Agent } from "../../src/agent/agent"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
@@ -42,6 +43,7 @@ const ctx = {
   messages: [],
   metadata: () => Effect.void,
   ask: () => Effect.void,
+  check: () => Effect.succeed("allow" as const),
 }
 
 const readLayer = (flags: Partial<RuntimeFlags.Info> = {}) =>
@@ -200,7 +202,8 @@ describe("tool.read external_directory permission", () => {
         yield* exec(dir, { filePath: alt }, next)
         const read = items.find((item) => item.permission === "read")
         expect(read).toBeDefined()
-        expect(read!.patterns).toEqual([path.relative(dir, full(target))])
+        // relative to the worktree, and the absolute path of the file opened
+        expect(read!.patterns).toEqual([path.relative(dir, full(target)), full(target)])
       }),
     )
   }
@@ -214,7 +217,7 @@ describe("tool.read external_directory permission", () => {
       yield* exec(dir, { filePath: path.join(dir, "src", "secret.ts") }, next)
       const read = items.find((item) => item.permission === "read")
       expect(read).toBeDefined()
-      expect(read!.patterns).toEqual([path.join("src", "secret.ts")])
+      expect(read!.patterns).toEqual([path.join("src", "secret.ts"), full(path.join(dir, "src", "secret.ts"))])
     }),
   )
 
@@ -622,6 +625,80 @@ describe("tool.read binary detection", () => {
 
       const err = yield* fail(dir, { filePath: path.join(dir, "module.wasm") })
       expect(err.message).toContain("Cannot read binary file")
+    }),
+  )
+})
+
+/** A context that applies these rules the way the permission service does. */
+const ruled = (rules: PermissionV1.Ruleset): Tool.Context => {
+  const worst = (permission: string, patterns: ReadonlyArray<string>) => {
+    const actions = patterns.map((pattern) => Permission.evaluate(permission, pattern, rules).action)
+    return actions.includes("deny") ? "deny" : actions.includes("ask") ? "ask" : "allow"
+  }
+  return {
+    ...ctx,
+    ask: (req) =>
+      worst(req.permission, req.patterns) === "deny"
+        ? Effect.die(new Error(`denied: ${req.permission} ${req.patterns.join(", ")}`))
+        : Effect.void,
+    check: (req) => Effect.succeed(worst(req.permission, req.patterns)),
+  }
+}
+
+// Security review of the verifier lock, item 3: rules may name files by absolute
+// path or under ~ (fromConfig expands it), but the tools asked with the path
+// relative to the worktree only, so those rules never matched.
+describe("tool.read: rules that name an absolute path", () => {
+  it.live("an absolute read deny holds", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped({ git: true })
+      yield* put(path.join(dir, "secrets", "key.txt"), "KEY sk-live-4f9a2c")
+      const rules = Permission.fromConfig({
+        "*": "allow",
+        read: { "*": "allow", [path.join(dir, "secrets", "*")]: "deny" },
+      })
+      const err = yield* fail(dir, { filePath: path.join(dir, "secrets", "key.txt") }, ruled(rules))
+      expect(err.message).toContain("denied: read")
+    }),
+  )
+
+  it.live("a ~ read deny matches the file under the home directory", () =>
+    Effect.sync(() => {
+      const file = path.join(os.homedir(), ".opencode-read-rule-test", "id_rsa")
+      const rules = Permission.fromConfig({ read: { "*": "allow", "~/.opencode-read-rule-test/*": "deny" } })
+      // a worktree on the same drive as the home directory, so the relative path is relative
+      const actions = Tool.readPatterns(path.join(os.homedir(), "project"), file).map(
+        (pattern) => Permission.evaluate("read", pattern, rules).action,
+      )
+      expect(actions).toContain("deny")
+    }),
+  )
+})
+
+// Item 5: a directory listing and the "Did you mean" suggestions named files the
+// agent may not read.
+describe("tool.read: names of files the rules deny", () => {
+  const rules = Permission.fromConfig({ "*": "allow", read: { "*": "allow", "*.env": "deny" } })
+
+  it.live("a directory listing leaves them out", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped({ git: true })
+      yield* put(path.join(dir, "prod.env"), "API_KEY=sk-live-4f9a2c")
+      yield* put(path.join(dir, "notes.txt"), "notes")
+      const result = yield* exec(dir, { filePath: dir }, ruled(rules))
+      expect(result.output).toContain("notes.txt")
+      expect(result.output).not.toContain("prod.env")
+    }),
+  )
+
+  it.live("the suggestions for a missing file leave them out", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped({ git: true })
+      yield* put(path.join(dir, "prod.env"), "API_KEY=sk-live-4f9a2c")
+      yield* put(path.join(dir, "prod.txt"), "notes")
+      const err = yield* fail(dir, { filePath: path.join(dir, "prod") }, ruled(rules))
+      expect(err.message).toContain("prod.txt")
+      expect(err.message).not.toContain("prod.env")
     }),
   )
 })

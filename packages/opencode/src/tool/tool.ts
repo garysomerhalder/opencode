@@ -83,8 +83,11 @@ export function readable(
  */
 export function readPatterns(worktree: string, file: string) {
   const named = path.relative(worktree, path.resolve(file))
-  const opened = path.relative(canonicalPath(worktree), canonicalPath(file))
-  return named === opened ? [named] : [named, opened]
+  const absolute = canonicalPath(file)
+  const opened = path.relative(canonicalPath(worktree), absolute)
+  // and the absolute path of the file opened, so a rule that names a file by its
+  // absolute path, or under ~ (fromConfig expands it), matches too
+  return [...new Set([named, opened, absolute])]
 }
 
 /** The file the system opens for a path: see CanonicalPath.resolve. */
