@@ -418,7 +418,7 @@ const layer = Layer.effect(
             const metadata = part.state.metadata
             if (receipts && !metadata?.archive && typeof metadata?.outputPath !== "string") {
               const text = part.state.output
-              const written = yield* Effect.exit(truncate.write(text))
+              const written = yield* Effect.exit(truncate.write(text, part.sessionID))
               if (Exit.isSuccess(written))
                 part.state.metadata = { ...part.state.metadata, archive: Receipt.whole({ path: written.value, text }) }
             }

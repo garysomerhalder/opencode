@@ -84,10 +84,14 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
           ...req,
           sessionID: input.session.id,
           tool: { messageID: input.processor.message.id, callID: options.toolCallId },
-          ruleset: Permission.effective(input.agent, input.session.permission),
+          ruleset: Permission.effective(input.agent, input.session.permission, input.session.id),
         })
         .pipe(Effect.orDie),
-    check: (req) => permission.check({ ...req, ruleset: Permission.effective(input.agent, input.session.permission) }),
+    check: (req) =>
+      permission.check({
+        ...req,
+        ruleset: Permission.effective(input.agent, input.session.permission, input.session.id),
+      }),
   })
 
   for (const item of yield* registry.tools({
@@ -197,7 +201,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             const content = JSON.stringify({ resources: filtered.map(formatMcpResource) }, null, 2)
             const truncated = yield* truncate.output(
               content,
-              { tool: MCP_RESOURCE_TOOLS.list, call: opts.toolCallId },
+              { tool: MCP_RESOURCE_TOOLS.list, call: opts.toolCallId, session: input.session.id },
               input.agent,
             )
             const output = {
@@ -283,7 +287,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             const content = JSON.stringify({ resourceTemplates: filtered.map(formatMcpResourceTemplate) }, null, 2)
             const truncated = yield* truncate.output(
               content,
-              { tool: MCP_RESOURCE_TOOLS.listTemplates, call: opts.toolCallId },
+              { tool: MCP_RESOURCE_TOOLS.listTemplates, call: opts.toolCallId, session: input.session.id },
               input.agent,
             )
             const output = {
@@ -361,7 +365,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             const formatted = formatMcpResourceContent(parsed.server, parsed.uri, content)
             const truncated = yield* truncate.output(
               formatted.text,
-              { tool: MCP_RESOURCE_TOOLS.read, call: opts.toolCallId },
+              { tool: MCP_RESOURCE_TOOLS.read, call: opts.toolCallId, session: input.session.id },
               input.agent,
             )
             const output = {
@@ -474,7 +478,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
 
           const truncated = yield* truncate.output(
             textParts.join("\n\n"),
-            { tool: key, call: opts.toolCallId },
+            { tool: key, call: opts.toolCallId, session: input.session.id },
             input.agent,
           )
           const metadata = {

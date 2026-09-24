@@ -45,15 +45,55 @@ interface State {
  * system. Allow and ask keep the platform's matching.
  */
 export function evaluate(permission: string, pattern: string, ...rulesets: PermissionV1.Ruleset[]): PermissionV1.Rule {
+  const rules = rulesets.flat()
+  const locked = split(rules)
+  if (!locked) return last(permission, pattern, rules)
+  // A locked ruleset (effective() for the verifier): the lock only takes away.
+  // The stricter of the other rules and the lock decides. Nobody answers inside
+  // a goal loop, so an ask among the other rules is a deny, and is matched as
+  // one (ignoring case), before any matching: an ask that would miss `SECRETS/`
+  // on a case-sensitive match must not become an allow.
+  const other = last(permission, pattern, locked.other)
+  const lock = last(permission, pattern, VERIFIER_LOCK)
+  if (other.action !== "allow") return { ...other, action: "deny" }
+  if (lock.action !== "allow") return { ...lock, action: "deny" }
+  // rules after the lock (a caller's extra ruleset, such as approvals) are a side
+  // of their own: a deny or an ask there denies, an allow never lifts anything
+  const extra = locked.after.findLast((rule) => matches(rule, permission, pattern))
+  if (extra && extra.action !== "allow") return { ...extra, action: "deny" }
+  return lock
+}
+
+/**
+ * For a ruleset from effective() for the verifier: the rules other than the lock,
+ * with every ask as a deny. The divider is found by identity (the frozen
+ * LOCK_MARK, the last one), so a rule that only carries its name, from config or
+ * a session, is an ordinary rule. The lock is always VERIFIER_LOCK itself; rules
+ * after its slice (approvals, a caller's extra ruleset) are returned as `after`,
+ * a side of their own that can take away but never give, with every ask as a
+ * deny too. Undefined for any other ruleset.
+ */
+function split(rules: PermissionV1.Ruleset) {
+  const mark = rules.findLastIndex((rule) => rule === LOCK_MARK)
+  if (mark === -1) return undefined
+  const asDeny = (rule: PermissionV1.Rule): PermissionV1.Rule => (rule.action === "ask" ? { ...rule, action: "deny" } : rule)
+  return {
+    other: rules.slice(0, mark).map(asDeny),
+    after: rules.slice(mark + 1 + VERIFIER_LOCK.length).map(asDeny),
+  }
+}
+
+function matches(rule: PermissionV1.Rule, permission: string, pattern: string) {
   return (
-    rulesets
-      .flat()
-      .findLast(
-        (rule) =>
-          Wildcard.match(permission, rule.permission) &&
-          (Wildcard.match(pattern, rule.pattern) ||
-            (rule.action === "deny" && Wildcard.match(pattern.toLowerCase(), rule.pattern.toLowerCase()))),
-      ) ?? {
+    Wildcard.match(permission, rule.permission) &&
+    (Wildcard.match(pattern, rule.pattern) ||
+      (rule.action === "deny" && Wildcard.match(pattern.toLowerCase(), rule.pattern.toLowerCase())))
+  )
+}
+
+function last(permission: string, pattern: string, rules: PermissionV1.Ruleset): PermissionV1.Rule {
+  return (
+    rules.findLast((rule) => matches(rule, permission, pattern)) ?? {
       action: "ask",
       permission,
       pattern: "*",
@@ -74,7 +114,7 @@ function decide(
   approved: PermissionV1.Ruleset,
 ): PermissionV1.Rule {
   const own = evaluate(permission, pattern, ruleset)
-  return own.action === "deny" ? own : evaluate(permission, pattern, ruleset, approved)
+  return own.action === "ask" ? evaluate(permission, pattern, ruleset, approved) : own
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Permission") {}
@@ -256,9 +296,24 @@ function resolvePrefix(pattern: string): string {
   return path.join(resolved, path.relative(dir, pattern))
 }
 
+/**
+ * The divider's permission name (see LOCK_MARK). No tool or request uses it, and
+ * config and session rules may not: fromConfig() throws, and the session API
+ * refuses a ruleset that names it (reserved()).
+ */
+export const LOCK_NAME = "<verifier-lock>"
+
+/** Why a ruleset from outside (config, a client) may not be used, or undefined. */
+export function reserved(ruleset: PermissionV1.Ruleset) {
+  return ruleset.some((rule) => rule.permission === LOCK_NAME)
+    ? `the permission name "${LOCK_NAME}" is reserved`
+    : undefined
+}
+
 export function fromConfig(permission: ConfigPermissionV1.Info) {
   const ruleset: PermissionV1.Rule[] = []
   for (const [key, value] of Object.entries(permission)) {
+    if (key === LOCK_NAME) throw new Error(`permission: the key "${LOCK_NAME}" is reserved`)
     if (typeof value === "string") {
       ruleset.push({ permission: key, action: value, pattern: "*" })
       continue
@@ -289,7 +344,8 @@ export const VERIFIER = "verifier"
 /**
  * The verifier's fixed ruleset: reads and lookups, the verdict tool, archived
  * tool output, nothing else. Nothing is `ask`, since nobody answers inside a
- * goal loop. effective() appends it after every other rule.
+ * goal loop. effective() appends it after every other rule, behind a mark, and
+ * the stricter of it and those rules decides: it takes away, never gives.
  */
 export const VERIFIER_LOCK = fromConfig({
   "*": "deny",
@@ -330,28 +386,64 @@ export function agentRules(rules: PermissionV1.Ruleset): AgentRules {
 }
 
 /**
+ * Separates the other rules from the verifier's lock in an effective ruleset.
+ * evaluate() and disabled() find it by identity (this frozen object), never by
+ * name, and take the stricter of the two sides, so the lock only ever takes
+ * away: its allows (read, grep, ...) cannot lift a deny or an ask from the
+ * user's config or the session.
+ */
+const LOCK_MARK: PermissionV1.Rule = Object.freeze({ permission: LOCK_NAME, pattern: "*", action: "deny" })
+
+/**
  * The ruleset a request is evaluated against: the agent's rules, then the
  * session's, then, for the verifier, its lock. It is the only way to read an
  * agent's rules (AgentRules is opaque everywhere else, and the compiler
- * enforces it), so the lock is always last and nothing from config or the
- * session can loosen it.
+ * enforces it). The lock comes after a mark, so it is always applied and
+ * nothing from config or the session can loosen it, and it cannot loosen them.
  */
 export function effective(
   agent: { name: string; native?: boolean; permission: AgentRules },
   session: PermissionV1.Ruleset = [],
+  sessionID?: string,
 ): PermissionV1.Rule[] {
   const own = agent.permission as unknown as PermissionV1.Ruleset | undefined
-  return merge(own ?? [], session, isVerifier(agent) ? VERIFIER_LOCK : [])
+  if (!isVerifier(agent)) return merge(own ?? [], session)
+  return merge(own ?? [], session, archiveScope(sessionID), [LOCK_MARK, ...VERIFIER_LOCK])
+}
+
+/**
+ * The archive of cut tool output is shared by every session and project for 7
+ * days. The verifier reaches only its own session's directory in it (see
+ * Truncate.sessionDir), and none of it when the caller does not say which
+ * session it runs in.
+ */
+/** A session id as the schema accepts it (SessionID): no wildcard, dot, slash or space. */
+export const SESSION_ID = /^ses[A-Za-z0-9_-]*$/
+
+function archiveScope(sessionID: string | undefined): PermissionV1.Rule[] {
+  return [
+    { permission: "external_directory", pattern: path.join(TRUNCATION_DIR, "*"), action: "deny" },
+    // only a well-formed id: a wildcard or a path in it would widen or move the directory
+    ...(sessionID && SESSION_ID.test(sessionID)
+      ? [{ permission: "external_directory", pattern: path.join(TRUNCATION_DIR, sessionID, "*"), action: "allow" as const }]
+      : []),
+  ]
 }
 
 export function disabled(tools: string[], ruleset: PermissionV1.Ruleset): Set<string> {
   const edits = ["edit", "write", "apply_patch"]
   const reads = ["list_mcp_resources", "list_mcp_resource_templates", "read_mcp_resource"]
+  // for the verifier, the other rules (an ask counts as a deny) and the lock
+  const locked = split(ruleset)
+  const sides = locked ? [locked.other, VERIFIER_LOCK, locked.after] : [ruleset]
   return new Set(
     tools.filter((tool) => {
       const permission = edits.includes(tool) ? "edit" : reads.includes(tool) ? "read" : tool
-      const rule = ruleset.findLast((rule) => Wildcard.match(permission, rule.permission))
-      return rule?.pattern === "*" && rule.action === "deny"
+      // hidden when either side's last rule for the tool denies all of it
+      return sides.some((side) => {
+        const rule = side.findLast((rule) => Wildcard.match(permission, rule.permission))
+        return rule?.pattern === "*" && rule.action === "deny"
+      })
     }),
   )
 }

@@ -10,6 +10,7 @@ import type { ProviderMetadata, Usage } from "@opencode-ai/llm"
 import { InstallationVersion } from "@opencode-ai/core/installation/version"
 import { Database } from "@opencode-ai/core/database/database"
 import { EventV2Bridge } from "@/event-v2-bridge"
+import { Permission } from "@/permission"
 import { SessionV2 } from "@opencode-ai/core/session"
 import * as SessionExecutionLocal from "@opencode-ai/core/session/execution/local"
 import { locationServiceMapLayer } from "@opencode-ai/core/location-services"
@@ -257,6 +258,14 @@ export const GlobalInfo = Schema.Struct({
 }).annotate({ identifier: "GlobalSession" })
 export type GlobalInfo = Types.DeepMutable<Schema.Schema.Type<typeof GlobalInfo>>
 
+/**
+ * A session ruleset a client sends: any ruleset, except one that names the
+ * verifier lock's divider, whose name is reserved (Permission.reserved).
+ */
+export const ClientRuleset = PermissionV1.Ruleset.check(
+  Schema.makeFilter((rules) => Permission.reserved(rules)),
+)
+
 export const CreateInput = Schema.optional(
   Schema.Struct({
     parentID: Schema.optional(SessionID),
@@ -264,7 +273,7 @@ export const CreateInput = Schema.optional(
     agent: Schema.optional(Schema.String),
     model: Schema.optional(Model),
     metadata: Schema.optional(Metadata),
-    permission: Schema.optional(PermissionV1.Ruleset),
+    permission: Schema.optional(ClientRuleset),
     workspaceID: Schema.optional(WorkspaceV2.ID),
   }),
 )
@@ -664,6 +673,29 @@ const layer: Layer.Layer<
       } as SessionV1.Part
     })
 
+    /**
+     * A child session keeps its parent's denies and asks: every such rule of the
+     * parent session, appended after the child's own rules, so no rule given to
+     * the child lifts it. For the verifier an ask is a deny (nobody answers inside
+     * a goal loop). The goal loop's verifier runs in a child of the worker's
+     * session. Taken at creation: a rule added to the parent later does not
+     * reach the child. A parent allow that makes an exception under a parent deny
+     * is not carried, so the child is stricter there, never looser.
+     */
+    const inheritedRules = Effect.fnUntraced(function* (parentID: SessionID, agent: string | undefined) {
+      // no such parent, nothing to keep
+      const parent = yield* get(parentID).pipe(
+        Effect.catchIf(
+          (error) => error instanceof NotFoundError,
+          () => Effect.succeed(undefined),
+        ),
+        Effect.orDie,
+      )
+      return (parent?.permission ?? [])
+        .filter((rule) => rule.action === "deny" || rule.action === "ask")
+        .map((rule) => (agent === Permission.VERIFIER && rule.action === "ask" ? { ...rule, action: "deny" as const } : rule))
+    })
+
     const create = Effect.fn("Session.create")(function* (input?: {
       parentID?: SessionID
       title?: string
@@ -675,6 +707,7 @@ const layer: Layer.Layer<
     }) {
       const ctx = yield* InstanceState.context
       const workspace = yield* InstanceState.workspaceID
+      const inherited = input?.parentID ? yield* inheritedRules(input.parentID, input.agent) : []
       return yield* createNext({
         parentID: input?.parentID,
         directory: ctx.directory,
@@ -683,7 +716,7 @@ const layer: Layer.Layer<
         agent: input?.agent,
         model: input?.model,
         metadata: input?.metadata,
-        permission: input?.permission,
+        permission: input?.permission || inherited.length > 0 ? [...(input?.permission ?? []), ...inherited] : undefined,
         workspaceID: input?.workspaceID ?? workspace,
       })
     })
@@ -698,6 +731,8 @@ const layer: Layer.Layer<
         workspaceID: original.workspaceID,
         title,
         metadata: structuredClone(original.metadata),
+        // a fork keeps the session's rules: forking must not shed a deny
+        permission: original.permission ? [...original.permission] : undefined,
       })
       const msgs = yield* messages({ sessionID: input.sessionID })
       const idMap = new Map<string, MessageID>()

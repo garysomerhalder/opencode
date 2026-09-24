@@ -1,1 +1,1 @@
-export { effective, evaluate } from "."
+export { effective, evaluate, SESSION_ID } from "."

@@ -100,10 +100,11 @@ const asks = () => {
 }
 
 // The verifier's rules (accuracy E): what lsp shows must follow them like read does.
+// The verifier starts from the default "*": "allow" like any agent; the lock takes away.
 const verifierRules = Permission.effective({
   name: Permission.VERIFIER,
   native: true,
-  permission: Permission.agentRules([]),
+  permission: Permission.agentRules(Permission.fromConfig({ "*": "allow" })),
 })
 const verifierCtx: Tool.Context = {
   ...ctx,
