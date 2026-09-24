@@ -1,5 +1,6 @@
 // Accuracy E, phase 2: the verdict tool checks every citation against the host's
-// records, with the agent's own read rules, before it records anything.
+// records, with the agent's own read rules, before it records anything. The
+// records are the session's full history in storage, not the model's context.
 import { describe, expect } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
@@ -10,6 +11,8 @@ import { Database } from "@opencode-ai/core/database/database"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { FSUtil } from "@opencode-ai/core/fs-util"
+import { ModelV2 } from "@opencode-ai/core/model"
+import { ProviderV2 } from "@opencode-ai/core/provider"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { Agent } from "../../src/agent/agent"
@@ -55,33 +58,7 @@ const check = (input: { permission: string; patterns: ReadonlyArray<string> }) =
   return Effect.succeed(action)
 }
 
-/** A shell part in the verifier's session: ranBy "user" when the host ran it. */
-const shellPart = (callID: string, exit: number, output: string, ranBy?: "user"): SessionV1.WithParts => {
-  const id = MessageID.ascending()
-  return {
-    info: { id, role: "assistant" } as SessionV1.Assistant,
-    parts: [
-      {
-        type: "tool",
-        id: PartID.ascending(),
-        messageID: id,
-        sessionID: "ses_verify" as SessionV1.ToolPart["sessionID"],
-        tool: ShellID.ToolID,
-        callID,
-        state: {
-          status: "completed",
-          input: { command: "bun test" },
-          output,
-          title: "",
-          metadata: ranBy ? { output, exit, ranBy } : { output, exit },
-          time: { start: 1, end: 2 },
-        },
-      } as SessionV1.ToolPart,
-    ],
-  }
-}
-
-const setup = Effect.fn("VerdictTest.setup")(function* (metadata?: Record<string, unknown>) {
+const setup = Effect.fn("VerdictTest.setup")(function* () {
   const { directory } = yield* TestInstance
   yield* Effect.promise(async () => {
     await fs.mkdir(path.join(directory, "src"), { recursive: true })
@@ -92,14 +69,68 @@ const setup = Effect.fn("VerdictTest.setup")(function* (metadata?: Record<string
     await fs.symlink(path.join(directory, ".env"), path.join(directory, "notes.txt"), "file")
   })
   const sessions = yield* Session.Service
-  const session = yield* sessions.create({ title: "verify", ...(metadata ? { metadata } : {}) })
+  const session = yield* sessions.create({ title: "verify" })
   return { directory, session }
 })
+
+/** Another verifier session in the same workspace: one verdict each, since a recorded one is final. */
+const another = Effect.fn("VerdictTest.another")(function* (verify?: Record<string, unknown>) {
+  const sessions = yield* Session.Service
+  const session = yield* sessions.create({ title: "verify" })
+  if (verify) yield* sessions.setMetadata({ sessionID: session.id, metadata: { verify } })
+  return session.id
+})
+
+/** Records the goal as the loop does (docs/accuracy-e.md §11.5). */
+const goal = Effect.fn("VerdictTest.goal")(function* (sessionID: Session.Info["id"], verify: Record<string, unknown>) {
+  const sessions = yield* Session.Service
+  yield* sessions.setMetadata({ sessionID, metadata: { verify } })
+})
+
+/** Stores a tool part in the session, in a message of its own, and returns the part's id. */
+const record = Effect.fn("VerdictTest.record")(function* (
+  sessionID: Session.Info["id"],
+  tool: string,
+  callID: string,
+  state: SessionV1.ToolPart["state"],
+) {
+  const sessions = yield* Session.Service
+  const message = yield* sessions.updateMessage({
+    id: MessageID.ascending(),
+    sessionID,
+    role: "assistant",
+    parentID: MessageID.ascending(),
+    agent: "build",
+    mode: "build",
+    path: { cwd: "/", root: "/" },
+    cost: 0,
+    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    modelID: ModelV2.ID.make("test-model"),
+    providerID: ProviderV2.ID.make("test"),
+    time: { created: Date.now() },
+  })
+  const id = PartID.ascending()
+  yield* sessions.updatePart({ id, messageID: message.id, sessionID, type: "tool", tool, callID, state })
+  return id
+})
+
+/** A shell run: ranBy "user" when the host ran it; exit undefined while it runs. */
+const shell = (exit: number | undefined, output: string, ranBy?: "user"): SessionV1.ToolPart["state"] =>
+  exit === undefined
+    ? { status: "running", input: { command: "bun test" }, time: { start: 1 }, ...(ranBy ? { metadata: { ranBy } } : {}) }
+    : {
+        status: "completed",
+        input: { command: "bun test" },
+        output,
+        title: "",
+        metadata: ranBy ? { output, exit, ranBy } : { output, exit },
+        time: { start: 1, end: 2 },
+      }
 
 const submit = Effect.fn("VerdictTest.submit")(function* (
   sessionID: Session.Info["id"],
   params: Record<string, unknown>,
-  messages: SessionV1.WithParts[] = [],
+  options: { agent?: string } = {},
 ) {
   const tool = yield* VerdictTool
   const def = yield* tool.init()
@@ -107,9 +138,10 @@ const submit = Effect.fn("VerdictTest.submit")(function* (
     sessionID,
     messageID: MessageID.ascending(),
     callID: `call_${Math.random()}`,
-    agent: Permission.VERIFIER,
+    agent: options.agent ?? Permission.VERIFIER,
     abort: AbortSignal.any([]),
-    messages,
+    // what the model sees: after a compaction, not the whole history
+    messages: [],
     metadata: () => Effect.void,
     ask: () => Effect.void,
     check,
@@ -125,37 +157,41 @@ const passWith = (evidence: unknown[]) => ({
   criteria: [{ id: "C1", text: "the output is capped", status: "met", evidence }],
   missing: [],
 })
+const capped = { kind: "file", path: "src/budget.ts", lines: [1, 1], quote: "LIMIT = 4096" }
 
 describe("tool.verdict: file citations follow the agent's read rules", () => {
-  it.instance("a readable file in the workspace can be cited", () =>
+  it.instance("a readable file in the workspace can be cited, by any spelling of its path", () =>
     Effect.gen(function* () {
-      const { session } = yield* setup()
-      const result = yield* submit(
-        session.id,
-        passWith([{ kind: "file", path: "src/budget.ts", lines: [1, 1], quote: "LIMIT = 4096" }]),
-      )
-      expect(result.error).toBe("")
-      expect(result.output).toContain("Verdict recorded: PASS")
+      const { directory } = yield* setup()
+      for (const file of ["src/budget.ts", "./src/budget.ts", path.join(directory, "src", "budget.ts")]) {
+        const result = yield* submit(yield* another(), passWith([{ ...capped, path: file }]))
+        expect([file, result.error]).toEqual([file, ""])
+        if (file === "src/budget.ts") expect(result.output).toContain("Verdict recorded: PASS")
+      }
     }),
   )
 
   // Otherwise "the quote is not in the file" answers questions about a file the
   // verifier may not read: the same oracle grep had.
-  it.instance("a link to .env, or a file a session rule denies, cannot be cited, whatever the quote", () =>
-    Effect.gen(function* () {
-      const { session } = yield* setup()
-      for (const [file, line] of [
-        ["notes.txt", `API_KEY=${SECRET}`],
-        ["secrets/key.txt", `KEY ${SECRET}`],
-        [".env", `API_KEY=${SECRET}`],
-      ]) {
-        const right = yield* submit(session.id, passWith([{ kind: "file", path: file, lines: [1, 1], quote: line }]))
-        const wrong = yield* submit(session.id, passWith([{ kind: "file", path: file, lines: [1, 1], quote: "nope" }]))
-        expect([file, right.error]).toEqual([file, wrong.error])
-        expect(right.error).toContain(`${file} cannot be read`)
-      }
-    }),
-    // a git workspace, so the session's "secrets/*" rule is matched against a relative path
+  it.instance(
+    "a link to .env, or a file a session rule denies, cannot be cited, whatever the quote",
+    () =>
+      Effect.gen(function* () {
+        yield* setup()
+        for (const [file, line] of [
+          ["notes.txt", `API_KEY=${SECRET}`],
+          ["secrets/key.txt", `KEY ${SECRET}`],
+          [".env", `API_KEY=${SECRET}`],
+        ]) {
+          const right = yield* submit(yield* another(), passWith([{ kind: "file", path: file, lines: [1, 1], quote: line }]))
+          const wrong = yield* submit(
+            yield* another(),
+            passWith([{ kind: "file", path: file, lines: [1, 1], quote: "nothing like it" }]),
+          )
+          expect([file, right.error]).toEqual([file, wrong.error])
+          expect(right.error).toContain(`${file} cannot be read`)
+        }
+      }),
     { git: true },
   )
 
@@ -163,35 +199,62 @@ describe("tool.verdict: file citations follow the agent's read rules", () => {
     Effect.gen(function* () {
       const { directory, session } = yield* setup()
       const outside = path.join(path.dirname(directory), "outside.txt")
-      yield* Effect.promise(() => fs.writeFile(outside, "capped\n"))
+      yield* Effect.promise(() => fs.writeFile(outside, "capped at four\n"))
       yield* Effect.addFinalizer(() => Effect.promise(() => fs.rm(outside, { force: true })))
-      const result = yield* submit(session.id, passWith([{ kind: "file", path: outside, lines: [1, 1], quote: "capped" }]))
+      const result = yield* submit(
+        session.id,
+        passWith([{ kind: "file", path: outside, lines: [1, 1], quote: "capped at four" }]),
+      )
       expect(result.error).toContain("cannot be read")
     }),
   )
 })
 
-describe("tool.verdict: checks are the host's records", () => {
-  it.instance("only a shell part the host ran is a check; a model's shell part is not", () =>
+describe("tool.verdict: checks are the host's records, bound to the loop", () => {
+  it.instance("only a check the loop listed is evidence; a model's shell part or an unlisted one is not", () =>
     Effect.gen(function* () {
       const { session } = yield* setup()
-      const cite = [{ kind: "check", callID: "call_tests", exit: 0, excerpt: "15 pass" }]
-      const model = yield* submit(session.id, passWith(cite), [shellPart("call_tests", 0, "15 pass")])
-      expect(model.error).toContain("there is no check call_tests in this verification")
-      const host = yield* submit(session.id, passWith(cite), [shellPart("call_tests", 0, "15 pass", "user")])
-      expect(host.error).toBe("")
+      const listed = yield* record(session.id, ShellID.ToolID, "call_tests", shell(0, "15 pass", "user"))
+      yield* record(session.id, ShellID.ToolID, "call_model", shell(0, "15 pass"))
+      yield* record(session.id, ShellID.ToolID, "call_other", shell(0, "15 pass", "user"))
+      yield* goal(session.id, { checks: [listed] })
+      const cite = (callID: string) => passWith([{ kind: "check", callID, exit: 0, excerpt: "15 pass" }])
+      for (const callID of ["call_model", "call_other"])
+        expect((yield* submit(session.id, cite(callID))).error).toContain(
+          `there is no check ${callID} in this verification`,
+        )
+      expect((yield* submit(session.id, cite("call_tests"))).error).toBe("")
     }),
   )
 
-  it.instance("a PASS is not recorded while a check the host ran failed, cited or not", () =>
+  it.instance("a failed check blocks a PASS, listed or not, cited or not", () =>
     Effect.gen(function* () {
       const { session } = yield* setup()
-      const result = yield* submit(
-        session.id,
-        passWith([{ kind: "file", path: "src/budget.ts", lines: [1, 1], quote: "LIMIT = 4096" }]),
-        [shellPart("call_tests", 1, "3 fail", "user")],
-      )
-      expect(result.error).toContain("PASS, but check call_tests exited 1")
+      const listed = yield* record(session.id, ShellID.ToolID, "call_lint", shell(0, "no problems", "user"))
+      yield* record(session.id, ShellID.ToolID, "call_other", shell(1, "3 fail", "user"))
+      yield* goal(session.id, { checks: [listed] })
+      expect((yield* submit(session.id, passWith([capped]))).error).toContain("PASS, but check call_other exited 1")
+    }),
+  )
+
+  // review finding 4: the model's context is filtered after a compaction; the
+  // failed check is still in the session's history
+  it.instance("a failed check the model no longer sees still blocks a PASS", () =>
+    Effect.gen(function* () {
+      const { session } = yield* setup()
+      const listed = yield* record(session.id, ShellID.ToolID, "call_tests", shell(1, "3 fail", "user"))
+      yield* goal(session.id, { checks: [listed] })
+      expect((yield* submit(session.id, passWith([capped]))).error).toContain("PASS, but check call_tests exited 1")
+    }),
+  )
+
+  // review finding 6
+  it.instance("a check still running, or orphaned, blocks a PASS", () =>
+    Effect.gen(function* () {
+      const { session } = yield* setup()
+      const listed = yield* record(session.id, ShellID.ToolID, "call_tests", shell(undefined, "", "user"))
+      yield* goal(session.id, { checks: [listed] })
+      expect((yield* submit(session.id, passWith([capped]))).error).toContain("PASS, but check call_tests was aborted")
     }),
   )
 })
@@ -199,13 +262,40 @@ describe("tool.verdict: checks are the host's records", () => {
 describe("tool.verdict: the goal's declared criteria", () => {
   it.instance("every criterion the session's goal declares must be judged", () =>
     Effect.gen(function* () {
-      const { session } = yield* setup({ verify: { criteria: ["the output is capped", "the README names --budget"] } })
-      const result = yield* submit(
-        session.id,
-        passWith([{ kind: "file", path: "src/budget.ts", lines: [1, 1], quote: "LIMIT = 4096" }]),
-      )
+      const { session } = yield* setup()
+      yield* goal(session.id, { criteria: ["the output is capped", "the README names --budget"] })
+      const result = yield* submit(session.id, passWith([capped]))
       expect(result.error).toContain('the declared criterion "the README names --budget" is not judged')
     }),
+  )
+})
+
+// review findings 1, 3 and 10: a diff from a real snapshot
+describe("tool.verdict: diff citations", () => {
+  it.instance(
+    "only changed lines count, and a diff of a file the agent may not read is not there at all",
+    () =>
+      Effect.gen(function* () {
+        const { directory } = yield* setup()
+        const snapshot = yield* Snapshot.Service
+        const base = yield* snapshot.track()
+        expect(base).toBeDefined()
+        yield* Effect.promise(async () => {
+          await fs.writeFile(path.join(directory, "src", "budget.ts"), "export const LIMIT = 8192\nexport const cut = 1\n")
+          await fs.writeFile(path.join(directory, ".env"), `API_KEY=${SECRET}\nOTHER=value\n`)
+        })
+        const diff = (file: string, excerpt: string) => passWith([{ kind: "diff", path: file, excerpt }])
+        const at = () => another({ base })
+        expect((yield* submit(yield* at(), diff("src/budget.ts", "+export const LIMIT = 8192"))).error).toBe("")
+        expect((yield* submit(yield* at(), diff("src/budget.ts", "diff --git a/src/budget.ts"))).error).toContain(
+          "the excerpt is not in the diff for src/budget.ts",
+        )
+        const right = yield* submit(yield* at(), diff(".env", "+OTHER=value"))
+        const wrong = yield* submit(yield* at(), diff(".env", "+OTHER=nothing"))
+        expect(right.error).toEqual(wrong.error)
+        expect(right.error).toContain("the diff does not touch .env")
+      }),
+    { git: true },
   )
 })
 
@@ -226,38 +316,64 @@ describe("tool.verdict: the description states the rules the tool enforces", () 
 })
 
 describe("tool.verdict: submissions", () => {
-  it.instance("the third submission stores what checks out, as PARTIAL; a recorded verdict is final", () =>
+  it.instance("submissions are counted from the session's history; the third stores what checks out", () =>
     Effect.gen(function* () {
       const { session } = yield* setup()
-      const bad = passWith([{ kind: "file", path: "src/budget.ts", lines: [1, 1], quote: "LIMIT = 9" }])
-      const earlier = (status: "error" | "completed"): SessionV1.WithParts => {
-        const id = MessageID.ascending()
-        return {
-          info: { id, role: "assistant" } as SessionV1.Assistant,
-          parts: [
-            {
-              type: "tool",
-              id: PartID.ascending(),
-              messageID: id,
-              sessionID: session.id,
-              tool: "verdict",
-              callID: `call_${status}_${Math.random()}`,
-              state:
-                status === "error"
-                  ? { status, input: {}, error: "not accepted", time: { start: 1, end: 2 } }
-                  : { status, input: {}, output: "", title: "", metadata: {}, time: { start: 1, end: 2 } },
-            } as SessionV1.ToolPart,
-          ],
-        }
-      }
+      const bad = passWith([{ ...capped, quote: "LIMIT = 9999" }])
       const first = yield* submit(session.id, bad)
       expect(first.error).toContain("2 of 3 submissions left")
-      const third = yield* submit(session.id, bad, [earlier("error"), earlier("error")])
+      for (const n of [1, 2])
+        yield* record(session.id, "verdict", `call_err_${n}`, {
+          status: "error",
+          input: {},
+          error: "not accepted",
+          time: { start: 1, end: 2 },
+        })
+      const third = yield* submit(session.id, bad)
       expect(third.error).toBe("")
       expect(third.output).toContain("Recorded as PARTIAL")
       expect(third.metadata?.verdict?.verdict).toBe("PARTIAL")
-      const again = yield* submit(session.id, passWith([]), [earlier("completed")])
-      expect(again.error).toContain("already recorded")
+    }),
+  )
+
+  it.instance("a recorded verdict is final, in storage and in this process", () =>
+    Effect.gen(function* () {
+      const { session } = yield* setup()
+      expect((yield* submit(session.id, passWith([capped]))).error).toBe("")
+      expect((yield* submit(session.id, passWith([capped]))).error).toContain("already recorded")
+      const other = { id: yield* another() }
+      yield* record(other.id, "verdict", "call_done", {
+        status: "completed",
+        input: {},
+        output: "",
+        title: "",
+        metadata: {},
+        time: { start: 1, end: 2 },
+      })
+      expect((yield* submit(other.id, passWith([capped]))).error).toContain("already recorded")
+    }),
+  )
+
+  // review finding 5
+  it.instance("parallel submissions in one step record one verdict", () =>
+    Effect.gen(function* () {
+      const { session } = yield* setup()
+      const results = yield* Effect.all(
+        [submit(session.id, passWith([capped])), submit(session.id, passWith([capped]))],
+        { concurrency: "unbounded" },
+      )
+      expect(results.filter((result) => result.error === "")).toHaveLength(1)
+      expect(results.filter((result) => result.error.includes("already recorded"))).toHaveLength(1)
+    }),
+  )
+
+  // review finding 11
+  it.instance("no agent but the verifier can submit a verdict", () =>
+    Effect.gen(function* () {
+      const { session } = yield* setup()
+      expect((yield* submit(session.id, passWith([capped]), { agent: "build" })).error).toContain(
+        "only the goal verifier",
+      )
     }),
   )
 })

@@ -4,12 +4,16 @@
 // comes back as a tool error with the reasons, and after the third submission
 // what survives the check is stored. A recorded verdict is final.
 
-import { Effect, Schema } from "effect"
+import { Effect, Schema, Semaphore } from "effect"
 import path from "path"
 import { FSUtil } from "@opencode-ai/core/fs-util"
+import { Database } from "@opencode-ai/core/database/database"
+import { SessionV1 } from "@opencode-ai/core/v1/session"
 import * as Tool from "./tool"
 import { InstanceState } from "@/effect/instance-state"
+import { Permission } from "@/permission"
 import { containsPath } from "@/project/instance-context"
+import { MessageV2 } from "@/session/message-v2"
 import { Session } from "@/session/session"
 import { CanonicalPath } from "@/util/canonical-path"
 import { Snapshot } from "@/snapshot"
@@ -37,7 +41,7 @@ const Evidence = Schema.Union([
   }),
   Schema.Struct({
     kind: Schema.Literal("diff"),
-    path: Schema.String,
+    path: Schema.String.annotate({ description: "The file the diff changes, relative to the workspace root" }),
     excerpt: Schema.String.annotate({ description: "Text copied from the diff for that file" }),
   }),
 ])
@@ -89,30 +93,59 @@ const DESCRIPTION = [
   `A verdict whose citations do not check out is returned with the reasons, and you can submit ${MAX_SUBMISSIONS} times. After that, citations that do not check out are dropped, and a PASS they supported is recorded as PARTIAL.`,
 ].join("\n")
 
-export const VerdictTool = Tool.define<typeof Parameters, Metadata, FSUtil.Service | Session.Service | Snapshot.Service>(
+export const VerdictTool = Tool.define<
+  typeof Parameters,
+  Metadata,
+  FSUtil.Service | Session.Service | Snapshot.Service | Database.Service
+>(
   ID,
   Effect.gen(function* () {
     const fs = yield* FSUtil.Service
     const sessions = yield* Session.Service
     const snapshot = yield* Snapshot.Service
+    const database = yield* Database.Service
 
     return {
       description: DESCRIPTION,
       parameters: Parameters,
       execute: (params: Schema.Schema.Type<typeof Parameters>, ctx: Tool.Context<Metadata>) =>
         Effect.gen(function* () {
-          const earlier = ctx.messages
-            .flatMap((message) => message.parts)
-            .filter((part) => part.type === "tool" && part.tool === ID && part.callID !== ctx.callID)
-          if (earlier.some((part) => part.type === "tool" && part.state.status === "completed"))
+          // the registry offers it to the verifier only; refuse anyone else anyway
+          if (ctx.agent !== Permission.VERIFIER)
+            throw new Error("A verdict can be submitted by only the goal verifier.")
+          // one submission at a time per session: parallel calls in one step are
+          // taken in turn, and once one is recorded the rest are refused
+          return yield* lock(ctx.sessionID).withPermits(1)(submit(params, ctx))
+        }),
+    } satisfies Tool.DefWithoutID<typeof Parameters, Metadata>
+
+    function submit(params: Schema.Schema.Type<typeof Parameters>, ctx: Tool.Context<Metadata>) {
+      return Effect.gen(function* () {
+          // The session's whole history, from storage: the model's context is
+          // filtered after a compaction, and must not hide a failed check or an
+          // earlier submission.
+          const history = (
+            yield* MessageV2.stream(ctx.sessionID).pipe(Effect.provideService(Database.Service, database), Effect.orDie)
+          ).flatMap((message) => message.parts)
+          const earlier = history.filter(
+            (part): part is SessionV1.ToolPart => part.type === "tool" && part.tool === ID && part.callID !== ctx.callID,
+          )
+          if (recorded.has(ctx.sessionID) || earlier.some((part) => part.state.status === "completed"))
             throw new Error("A verdict is already recorded for this verification. Stop here.")
-          const submission = earlier.filter((part) => part.type === "tool" && part.state.status === "error").length + 1
+          const submission =
+            Math.max(
+              earlier.filter((part) => part.state.status === "error").length,
+              rejected.get(ctx.sessionID) ?? 0,
+            ) + 1
           const final = submission >= MAX_SUBMISSIONS
 
+          const instance = yield* InstanceState.context
+          // one spelling per file for every citation: relative to the worktree
+          const cited = normalizePaths(params, instance.directory, instance.worktree)
           const files = new Map<string, string | undefined>()
           for (const item of [
-            ...params.criteria.flatMap((criterion) => criterion.evidence),
-            ...(params.todos ?? []).flatMap((todo) => todo.evidence ?? []),
+            ...cited.criteria.flatMap((criterion) => criterion.evidence),
+            ...(cited.todos ?? []).flatMap((todo) => todo.evidence ?? []),
           ]) {
             if (item.kind !== "file" || files.has(item.path)) continue
             const target = yield* citable(ctx, item.path)
@@ -121,20 +154,26 @@ export const VerdictTool = Tool.define<typeof Parameters, Metadata, FSUtil.Servi
               target === undefined ? undefined : yield* fs.readFileString(target).pipe(Effect.orElseSucceed(() => undefined)),
             )
           }
-          // The loop records the goal on the session it verifies in (phase 4):
-          // the diff's base snapshot and the criteria the user declared.
+          // The loop records the goal on the session it verifies in (phase 4,
+          // docs/accuracy-e.md §11.5): the diff's base snapshot, the criteria the
+          // user declared, and the part ids of the checks it ran.
           const verify = (yield* sessions.get(ctx.sessionID).pipe(Effect.orDie)).metadata?.verify
           const base = verify?.base
-          const diff = typeof base === "string" ? yield* snapshot.diff(base) : undefined
+          const diff = typeof base === "string" ? yield* readableDiff(ctx, yield* snapshot.diff(base)) : undefined
           const declared: unknown = verify?.criteria
+          const listed: unknown = verify?.checks
+          const runs = checks(history, Array.isArray(listed) ? listed.filter((id) => typeof id === "string") : [])
           const world: Verdict.World = {
             file: (file) => files.get(file),
-            checks: checks(ctx.messages),
+            checks: runs.listed,
+            unlisted: runs.unlisted,
             diff: diff || undefined,
             criteria: Array.isArray(declared) ? declared.filter((item) => typeof item === "string") : undefined,
           }
 
-          const result = Verdict.validate(params, world, { final })
+          const result = Verdict.validate(cited, world, { final })
+          if (result.verdict) recorded.add(ctx.sessionID)
+          if (!result.verdict) rejected.set(ctx.sessionID, submission)
           if (!result.verdict) {
             const reasons = result.errors.map((error) => `- ${error}`).join("\n")
             if (final)
@@ -154,10 +193,56 @@ export const VerdictTool = Tool.define<typeof Parameters, Metadata, FSUtil.Servi
               : `Verdict recorded: ${stored.verdict}.${dropped} Stop here.`,
             metadata: { verdict: stored, downgraded: result.downgraded, errors: result.errors, submission },
           }
-        }),
-    } satisfies Tool.DefWithoutID<typeof Parameters, Metadata>
+      })
+    }
   }),
 )
+
+// Per session, in this process: the submission lock, and what storage may not
+// show yet (a part is written after its tool call returns).
+const locks = new Map<string, Semaphore.Semaphore>()
+const recorded = new Set<string>()
+const rejected = new Map<string, number>()
+
+function lock(sessionID: string) {
+  const hit = locks.get(sessionID)
+  if (hit) return hit
+  const next = Semaphore.makeUnsafe(1)
+  locks.set(sessionID, next)
+  return next
+}
+
+/** The citations with each file path relative to the worktree, with forward slashes. */
+function normalizePaths(params: Schema.Schema.Type<typeof Parameters>, directory: string, worktree: string) {
+  const relative = (file: string) => path.relative(worktree, path.resolve(directory, file)).replaceAll("\\", "/")
+  const evidence = (item: Verdict.Evidence): Verdict.Evidence =>
+    item.kind === "check" ? item : { ...item, path: relative(item.path) }
+  return {
+    ...params,
+    criteria: params.criteria.map((criterion) => ({ ...criterion, evidence: criterion.evidence.map(evidence) })),
+    ...(params.todos
+      ? { todos: params.todos.map((todo) => ({ ...todo, evidence: todo.evidence?.map(evidence) })) }
+      : {}),
+  }
+}
+
+/**
+ * The host's diff without the sections for files the agent may not read, old or
+ * new path: a citation of one reads as "does not touch", the same answer whatever
+ * the excerpt, so the diff cannot be used to probe a file's content.
+ */
+const readableDiff = Effect.fnUntraced(function* (ctx: Tool.Context, diff: string) {
+  const instance = yield* InstanceState.context
+  const kept: string[] = []
+  for (const section of Verdict.sections(diff)) {
+    let readable = true
+    for (const file of section.paths)
+      if (!(yield* Tool.readable(ctx, instance.worktree, path.resolve(instance.worktree, file), "content")))
+        readable = false
+    if (readable) kept.push(section.text)
+  }
+  return kept.join("")
+})
 
 /**
  * The file a citation may be checked against, as the system resolves it, or
@@ -169,25 +254,35 @@ export const VerdictTool = Tool.define<typeof Parameters, Metadata, FSUtil.Servi
  */
 const citable = Effect.fnUntraced(function* (ctx: Tool.Context, file: string) {
   const instance = yield* InstanceState.context
-  const named = path.resolve(instance.directory, file)
+  const named = path.resolve(instance.worktree, file)
   const target = CanonicalPath.resolve(named)
-  const inside = containsPath(target, instance) || FSUtil.contains(CanonicalPath.resolve(TRUNCATION_DIR), target)
+  // the workspace, or this session's own archived tool output
+  const archive = CanonicalPath.resolve(path.join(TRUNCATION_DIR, ctx.sessionID))
+  const inside = containsPath(target, instance) || FSUtil.contains(archive, target)
   if (!inside) return undefined
   if (!(yield* Tool.readable(ctx, instance.worktree, named, "content"))) return undefined
   return target
 })
 
 /**
- * The checks run for this verification: shell parts the host ran (ranBy
- * "user", which no tool sets), so a model's own shell call is never one.
+ * The commands the host ran in this session: shell parts with ranBy "user"
+ * (set from the part's start; no tool sets it), so a model's own shell call is
+ * never one. Those whose part ids the loop listed (verify.checks) are the
+ * citable checks; the rest are unlisted, never evidence but still able to block
+ * a PASS. A part that did not complete (running, or orphaned by a crash, or an
+ * error) has no exit code, which blocks a PASS.
  */
-function checks(messages: Tool.Context["messages"]): Verdict.Check[] {
-  return messages.flatMap((message) =>
-    message.parts.flatMap((part) => {
-      if (part.type !== "tool" || part.tool !== ShellID.ToolID || part.state.status !== "completed") return []
-      if (part.state.metadata?.ranBy !== "user") return []
-      const exit = part.state.metadata?.exit
-      return [{ callID: part.callID, exit: typeof exit === "number" ? exit : undefined, output: part.state.output }]
-    }),
-  )
+function checks(parts: SessionV1.Part[], listed: string[]) {
+  const runs = parts.flatMap((part) => {
+    if (part.type !== "tool" || part.tool !== ShellID.ToolID) return []
+    const metadata = "metadata" in part.state ? part.state.metadata : undefined
+    if (metadata?.ranBy !== "user") return []
+    const exit = part.state.status === "completed" ? metadata?.exit : undefined
+    const output = part.state.status === "completed" ? part.state.output : ""
+    return [{ id: part.id, check: { callID: part.callID, exit: typeof exit === "number" ? exit : undefined, output } }]
+  })
+  return {
+    listed: runs.filter((run) => listed.includes(run.id)).map((run) => run.check),
+    unlisted: runs.filter((run) => !listed.includes(run.id)).map((run) => run.check),
+  }
 }
