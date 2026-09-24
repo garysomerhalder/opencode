@@ -2,6 +2,8 @@ import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { afterEach, describe, expect } from "bun:test"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { Cause, Effect, Exit, Layer, Stream } from "effect"
+import fs from "fs/promises"
+import os from "os"
 import path from "path"
 import { Agent } from "../../src/agent/agent"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
@@ -42,6 +44,7 @@ const ctx = {
   messages: [],
   metadata: () => Effect.void,
   ask: () => Effect.void,
+  check: () => Effect.succeed("allow" as const),
 }
 
 const readLayer = (flags: Partial<RuntimeFlags.Info> = {}) =>
@@ -622,6 +625,130 @@ describe("tool.read binary detection", () => {
 
       const err = yield* fail(dir, { filePath: path.join(dir, "module.wasm") })
       expect(err.message).toContain("Cannot read binary file")
+    }),
+  )
+})
+
+/** A context that applies these rules the way the permission service does. */
+const ruled = (rules: PermissionV1.Ruleset): Tool.Context => {
+  const worst = (permission: string, patterns: ReadonlyArray<string>) => {
+    const actions = patterns.map((pattern) => Permission.evaluate(permission, pattern, rules).action)
+    return actions.includes("deny") ? "deny" : actions.includes("ask") ? "ask" : "allow"
+  }
+  return {
+    ...ctx,
+    ask: (req) =>
+      worst(req.permission, req.patterns) === "deny"
+        ? Effect.die(new Error(`denied: ${req.permission} ${req.patterns.join(", ")}`))
+        : Effect.void,
+    check: (req) => Effect.succeed(worst(req.permission, req.patterns)),
+  }
+}
+
+// Security review of the verifier lock, item 3: rules may name files by absolute
+// path or under ~ (fromConfig expands it), but the tools asked with the path
+// relative to the worktree only, so those rules never matched.
+describe("tool.read: rules that name an absolute path", () => {
+  it.live("an absolute read deny holds", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped({ git: true })
+      yield* put(path.join(dir, "secrets", "key.txt"), "KEY sk-live-4f9a2c")
+      const rules = Permission.fromConfig({
+        "*": "allow",
+        read: { "*": "allow", [path.join(dir, "secrets", "*")]: "deny" },
+      })
+      const err = yield* fail(dir, { filePath: path.join(dir, "secrets", "key.txt") }, ruled(rules))
+      expect(err.message).toContain("denied: read")
+    }),
+  )
+
+  it.live("a ~ read deny matches the file under the home directory", () =>
+    Effect.sync(() => {
+      const file = path.join(os.homedir(), ".opencode-read-rule-test", "id_rsa")
+      const rules = Permission.fromConfig({ read: { "*": "allow", "~/.opencode-read-rule-test/*": "deny" } })
+      const actions = Tool.absolutePaths(file).map((pattern) => Permission.evaluate("read", pattern, rules).action)
+      expect(actions).toContain("deny")
+    }),
+  )
+
+  // final check 1: without check() the absolute deny still holds (fail closed)
+  it.live("an absolute read deny holds for a context without check()", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped({ git: true })
+      yield* put(path.join(dir, "secrets", "key.txt"), "KEY sk-live-4f9a2c")
+      const rules = Permission.fromConfig({
+        "*": "allow",
+        read: { "*": "allow", [path.join(dir, "secrets", "*")]: "deny" },
+      })
+      const unchecked: Tool.Context = { ...ruled(rules), check: undefined }
+      const err = yield* fail(dir, { filePath: path.join(dir, "secrets", "key.txt") }, unchecked)
+      expect(err.message).toContain("denied: read")
+    }),
+  )
+
+  // re-review 1: the absolute path only finds a deny; the relative paths decide the
+  // rest, so an existing "*": ask with a relative allow still allows
+  it.live("an absolute path does not make an allowed file ask", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped({ git: true })
+      yield* put(path.join(dir, "src", "x.ts"), "export const x = 1")
+      const rules = Permission.fromConfig({ "*": "allow", read: { "*": "ask", "src/*": "allow" } })
+      const asked: string[] = []
+      const tracked: Tool.Context = {
+        ...ruled(rules),
+        ask: (req) => Effect.sync(() => void asked.push(...req.patterns)),
+      }
+      yield* exec(dir, { filePath: path.join(dir, "src", "x.ts") }, tracked)
+      const actions = asked.map((pattern) => Permission.evaluate("read", pattern, rules).action)
+      expect(actions).not.toContain("ask")
+    }),
+  )
+
+  // re-review 2: a rule that names a linked path (a symlinked or junctioned home)
+  // still matches the file reached by its real path, and the other way round
+  it.live("an absolute deny through a linked directory holds", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped({ git: true })
+      const real = path.join(dir, "real")
+      const link = path.join(dir, "link")
+      yield* put(path.join(real, "secret", "key.txt"), "KEY sk-live-4f9a2c")
+      yield* Effect.promise(() => fs.symlink(real, link, "junction"))
+      for (const [rule, file] of [
+        [path.join(link, "secret", "*"), path.join(real, "secret", "key.txt")],
+        [path.join(real, "secret", "*"), path.join(link, "secret", "key.txt")],
+      ]) {
+        const rules = Permission.fromConfig({ "*": "allow", read: { "*": "allow", [rule]: "deny" } })
+        const err = yield* fail(dir, { filePath: file }, ruled(rules))
+        expect([rule, err.message]).toEqual([rule, expect.stringContaining("denied: read")])
+      }
+    }),
+  )
+})
+
+// Item 5: a directory listing and the "Did you mean" suggestions named files the
+// agent may not read.
+describe("tool.read: names of files the rules deny", () => {
+  const rules = Permission.fromConfig({ "*": "allow", read: { "*": "allow", "*.env": "deny" } })
+
+  it.live("a directory listing leaves them out", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped({ git: true })
+      yield* put(path.join(dir, "prod.env"), "API_KEY=sk-live-4f9a2c")
+      yield* put(path.join(dir, "notes.txt"), "notes")
+      const result = yield* exec(dir, { filePath: dir }, ruled(rules))
+      expect(result.output).toContain("notes.txt")
+      expect(result.output).not.toContain("prod.env")
+    }),
+  )
+
+  it.live("the suggestions for a missing file leave them out", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped({ git: true })
+      yield* put(path.join(dir, "prod.env"), "API_KEY=sk-live-4f9a2c")
+      yield* put(path.join(dir, "prod.txt"), "notes")
+      const err = yield* fail(dir, { filePath: path.join(dir, "prod") }, ruled(rules))
+      expect(err.message).toContain("prod.txt")
+      expect(err.message).not.toContain("prod.env")
     }),
   )
 })

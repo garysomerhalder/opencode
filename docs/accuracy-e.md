@@ -516,3 +516,12 @@ and the loop's settings UI should tell the user.
   binary again: 20-60 s here, and the usual cause of a 30 s timeout on a file's first grep, glob or
   listing test. Share one cache for the binary across test processes (or seed it from the
   developer's cache), keeping the rest of the data directory per process.
+
+### 11.7 Security notes: accepted risks
+
+- **lsp hover for agents other than the verifier (accepted 2026-09-24).** A hover is shown only
+  when the agent may read every file the symbol is defined in. Type information can still flow in
+  from elsewhere: an alias or an inferred literal type in a readable file can carry a value defined
+  in a denied one. That is accepted for agents a person supervises. The verifier, which nobody
+  supervises, is refused hover by its lock (`VERIFIER_LOCK` lsp `hover: "deny"`); it has
+  goToDefinition and read, which are filtered by the read rules.

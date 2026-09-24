@@ -992,12 +992,7 @@ const layer = Layer.effect(
               const worktree = (yield* InstanceState.context).worktree
               const guarded = yield* Effect.gen(function* () {
                 yield* assertExternalDirectoryEffect(guard, filepath)
-                yield* guard.ask({
-                  permission: "read",
-                  patterns: Tool.readPatterns(worktree, filepath),
-                  always: ["*"],
-                  metadata: {},
-                })
+                yield* Tool.askRead(guard, worktree, filepath)
               }).pipe(Effect.exit)
               if (Exit.isFailure(guarded)) {
                 const error = Cause.squash(guarded.cause)

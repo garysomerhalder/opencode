@@ -74,7 +74,7 @@ export const ReadTool = Tool.define<
     const lsp = yield* LSP.Service
     const scope = yield* Scope.Scope
 
-    const miss = Effect.fn("ReadTool.miss")(function* (filepath: string) {
+    const miss = Effect.fn("ReadTool.miss")(function* (filepath: string, ctx: Tool.Context, worktree: string) {
       // A receipt outlived its archive (accuracy C): say why, so the model does
       // not take it for a wrong path.
       if (FSUtil.contains(TRUNCATION_DIR, filepath)) {
@@ -86,18 +86,23 @@ export const ReadTool = Tool.define<
       }
       const dir = path.dirname(filepath)
       const base = path.basename(filepath)
-      const items = yield* fs.readDirectory(dir).pipe(
+      const similar = yield* fs.readDirectory(dir).pipe(
         Effect.map((items) =>
           items
             .filter(
               (item) =>
                 item.toLowerCase().includes(base.toLowerCase()) || base.toLowerCase().includes(item.toLowerCase()),
             )
-            .map((item) => path.join(dir, item))
-            .slice(0, 3),
+            .map((item) => path.join(dir, item)),
         ),
         Effect.catch(() => Effect.succeed([] as string[])),
       )
+      // a suggestion never names a file the agent's read rules deny
+      const items: string[] = []
+      for (const item of similar) {
+        if (items.length === 3) break
+        if (yield* Tool.readable(ctx, worktree, item, "path")) items.push(item)
+      }
 
       if (items.length > 0) {
         return yield* Effect.fail(
@@ -267,17 +272,15 @@ export const ReadTool = Tool.define<
         kind: stat?.type === "Directory" ? "directory" : "file",
       })
 
-      yield* ctx.ask({
-        permission: "read",
-        patterns: Tool.readPatterns(instance.worktree, named),
-        always: ["*"],
-        metadata: {},
-      })
+      yield* Tool.askRead(ctx, instance.worktree, named)
 
-      if (!stat) return yield* miss(filepath)
+      if (!stat) return yield* miss(filepath, ctx, instance.worktree)
 
       if (stat.type === "Directory") {
-        const items = yield* list(filepath)
+        // an entry the agent's read rules deny is not named
+        const items: string[] = []
+        for (const item of yield* list(filepath))
+          if (yield* Tool.readable(ctx, instance.worktree, path.join(filepath, item), "path")) items.push(item)
         const limit = params.limit ?? DEFAULT_READ_LIMIT
         const offset = params.offset || 1
         const start = offset - 1

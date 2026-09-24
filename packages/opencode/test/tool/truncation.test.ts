@@ -322,5 +322,22 @@ describe("Truncate", () => {
         expect(yield* fs.exists(recent)).toBe(true)
       }),
     )
+
+    // every session directory the archive can hold (Permission.SESSION_ID), not only ses_
+    it.live("sweeps each session's directory, whatever form its id takes", () =>
+      Effect.gen(function* () {
+        const svc = yield* Truncate.Service
+        const fs = yield* FileSystem.FileSystem
+        for (const session of ["ses_abc", "ses-abc"]) {
+          const old = path.join(Truncate.DIR, session, "tool_old")
+          yield* fs.makeDirectory(path.dirname(old), { recursive: true })
+          yield* writeFileStringScoped(old, "old content")
+          yield* fs.utimes(old, new Date(), new Date(Date.now() - 10 * DAY_MS))
+        }
+        yield* svc.cleanup()
+        for (const session of ["ses_abc", "ses-abc"])
+          expect([session, yield* fs.exists(path.join(Truncate.DIR, session))]).toEqual([session, false])
+      }),
+    )
   })
 })

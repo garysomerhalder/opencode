@@ -60,31 +60,52 @@ export type Context<M extends Metadata = Metadata> = {
  * A deny hides both; content also needs an allow, since there is nobody to
  * ask in the middle of a search. A context without check() hides everything.
  */
-export function readable(
-  ctx: Context,
-  worktree: string,
-  file: string,
-  need: "path" | "content",
-  options?: { resolved?: boolean },
-) {
-  // resolved: the caller passes the worktree and the file already resolved
-  // (CanonicalPath.resolve), so the one pattern is both as named and as opened
-  const patterns = options?.resolved ? [path.relative(worktree, file)] : readPatterns(worktree, file)
-  if (!ctx.check) return Effect.succeed(false)
-  return ctx
-    .check({ permission: "read", patterns })
-    .pipe(Effect.map((action) => (need === "path" ? action !== "deny" : action === "allow")))
+export function readable(ctx: Context, worktree: string, file: string, need: "path" | "content") {
+  const check = ctx.check
+  if (!check) return Effect.succeed(false)
+  return Effect.gen(function* () {
+    if ((yield* check({ permission: "read", patterns: absolutePaths(file) })) === "deny") return false
+    const action = yield* check({ permission: "read", patterns: readPatterns(worktree, file) })
+    return need === "path" ? action !== "deny" : action === "allow"
+  })
+}
+
+/**
+ * The read tool's ask for a file, and lsp's: refused when a rule denies the file
+ * by its absolute path; otherwise the rules decide on the paths relative to the
+ * worktree (readPatterns).
+ */
+export function askRead(ctx: Context, worktree: string, file: string) {
+  return Effect.gen(function* () {
+    const absolute = absolutePaths(file)
+    // the absolute paths only find a deny: asking with them would let a broad
+    // "*": "ask" override a relative allow the user wrote. A context that cannot
+    // check fails closed: it is asked with them, so a deny still refuses.
+    if (!ctx.check || (yield* ctx.check({ permission: "read", patterns: absolute })) === "deny")
+      yield* ctx.ask({ permission: "read", patterns: absolute, always: ["*"], metadata: {} })
+    yield* ctx.ask({ permission: "read", patterns: readPatterns(worktree, file), always: ["*"], metadata: {} })
+  })
 }
 
 /**
  * The patterns the read rules are matched against for a file, as the read tool
  * asks them: the path as named, and the file the system actually opens (links
- * resolved, an NTFS stream suffix removed). A deny on either is a deny.
+ * resolved, an NTFS stream suffix removed), relative to the worktree. A deny on
+ * either is a deny.
  */
 export function readPatterns(worktree: string, file: string) {
   const named = path.relative(worktree, path.resolve(file))
   const opened = path.relative(canonicalPath(worktree), canonicalPath(file))
   return named === opened ? [named] : [named, opened]
+}
+
+/**
+ * The file's absolute paths, as named and as the system opens it, for rules that
+ * name a file by its absolute path or under ~ (fromConfig expands both, and
+ * resolves a linked prefix). Only a deny on them counts (askRead, readable).
+ */
+export function absolutePaths(file: string) {
+  return [...new Set([path.resolve(file), canonicalPath(file)])]
 }
 
 /** The file the system opens for a path: see CanonicalPath.resolve. */

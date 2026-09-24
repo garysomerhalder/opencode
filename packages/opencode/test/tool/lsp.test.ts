@@ -34,6 +34,8 @@ const ctx = {
 
 const workspaceSymbolQueries: string[] = []
 let workspaceSymbols: unknown[] = []
+let hovers: unknown[] = []
+let definitions: unknown[] = []
 
 const lsp = Layer.succeed(
   LSP.Service,
@@ -43,8 +45,8 @@ const lsp = Layer.succeed(
     hasClients: () => Effect.succeed(true),
     touchFile: () => Effect.void,
     diagnostics: () => Effect.succeed({}),
-    hover: () => Effect.succeed([]),
-    definition: () => Effect.succeed([]),
+    hover: () => Effect.sync(() => hovers as any),
+    definition: () => Effect.sync(() => definitions as any),
     references: () => Effect.succeed([]),
     implementation: () => Effect.succeed([]),
     documentSymbol: () => Effect.succeed([]),
@@ -128,7 +130,8 @@ describe("tool.lsp", () => {
           const dir = (yield* TestInstance).directory
           const file = path.join(dir, ".env")
           yield* put(file)
-          const exit = yield* run({ operation: "hover", filePath: file, line: 1, character: 1 }, verifierCtx).pipe(
+          // (not hover: the lock refuses hover before any file is read)
+          const exit = yield* run({ operation: "documentSymbol", filePath: file, line: 1, character: 1 }, verifierCtx).pipe(
             Effect.exit,
           )
           expect(exit._tag).toBe("Failure")
@@ -154,6 +157,50 @@ describe("tool.lsp", () => {
           )
           workspaceSymbols = []
           expect((result.metadata.result as { name: string }[]).map((item) => item.name)).toEqual(["x"])
+        }),
+      { git: true },
+    )
+
+    // Security review, item 4: a hover can carry the values of a file the rules
+    // deny (the type of a constant defined there).
+    it.instance(
+      "a hover on a symbol defined in a file the agent may not read shows nothing",
+      () =>
+        Effect.gen(function* () {
+          const dir = (yield* TestInstance).directory
+          const file = path.join(dir, "test.ts")
+          yield* put(file)
+          hovers = [{ contents: { kind: "markdown", value: 'const API_KEY: "sk-live-4f9a2c"' } }]
+          definitions = [{ uri: pathToFileURL(path.join(dir, "prod.env")).href, range: {} }]
+          const denied = {
+            ...ctx,
+            check: (req: { permission: string; patterns: ReadonlyArray<string> }) =>
+              Effect.succeed(req.patterns.some((pattern) => pattern.endsWith(".env")) ? ("deny" as const) : ("allow" as const)),
+          }
+          const hidden = yield* run({ operation: "hover", filePath: file, line: 1, character: 1 }, denied)
+          definitions = [{ uri: pathToFileURL(file).href, range: {} }]
+          const shown = yield* run({ operation: "hover", filePath: file, line: 1, character: 1 }, denied)
+          hovers = []
+          definitions = []
+          expect(hidden.output).not.toContain("sk-live")
+          expect(shown.output).toContain("API_KEY")
+        }),
+      { git: true },
+    )
+
+    // Type information can flow from any file, not only the definition's, so the
+    // verifier, which nobody supervises, is not offered hover at all.
+    it.instance(
+      "the verifier's lock refuses hover",
+      () =>
+        Effect.gen(function* () {
+          const dir = (yield* TestInstance).directory
+          const file = path.join(dir, "test.ts")
+          yield* put(file)
+          const exit = yield* run({ operation: "hover", filePath: file, line: 1, character: 1 }, verifierCtx).pipe(
+            Effect.exit,
+          )
+          expect(String(exit._tag === "Failure" ? exit.cause : "")).toContain("denied: lsp hover")
         }),
       { git: true },
     )

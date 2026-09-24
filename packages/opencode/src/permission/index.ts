@@ -7,6 +7,7 @@ import os from "os"
 import path from "path"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { TRUNCATION_DIR } from "@/tool/truncation-dir"
+import { CanonicalPath } from "@/util/canonical-path"
 import { EventV2Bridge } from "@/event-v2-bridge"
 
 export const Event = PermissionV1.Event
@@ -68,8 +69,9 @@ export function evaluate(permission: string, pattern: string, ...rulesets: Permi
  * with every ask as a deny. The divider is found by identity (the frozen
  * LOCK_MARK, the last one), so a rule that only carries its name, from config or
  * a session, is an ordinary rule. The lock is always VERIFIER_LOCK itself; rules
- * after its slice (approvals, a caller's extra ruleset) count as other rules.
- * Undefined for any other ruleset.
+ * after its slice (approvals, a caller's extra ruleset) are returned as `after`,
+ * a side of their own that can take away but never give, with every ask as a
+ * deny too. Undefined for any other ruleset.
  */
 function split(rules: PermissionV1.Ruleset) {
   const mark = rules.findLastIndex((rule) => rule === LOCK_MARK)
@@ -266,11 +268,32 @@ const layer = Layer.effect(
 )
 
 function expand(pattern: string): string {
+  return resolvePrefix(home(pattern))
+}
+
+function home(pattern: string): string {
   if (pattern.startsWith("~/")) return os.homedir() + pattern.slice(1)
   if (pattern === "~") return os.homedir()
   if (pattern.startsWith("$HOME/")) return os.homedir() + pattern.slice(5)
   if (pattern.startsWith("$HOME")) return os.homedir() + pattern.slice(5)
   return pattern
+}
+
+/**
+ * An absolute pattern's fixed directory prefix (up to the first wildcard) as the
+ * system resolves it, so a rule written through a link (a symlinked or
+ * junctioned home) matches the files it names, which the tools check by their
+ * resolved absolute paths too. Relative patterns, and prefixes that do not
+ * exist, are left as they are.
+ */
+function resolvePrefix(pattern: string): string {
+  if (!path.isAbsolute(pattern)) return pattern
+  const wild = pattern.search(/[*?]/)
+  const fixed = wild === -1 ? pattern : pattern.slice(0, wild)
+  const dir = /[\\/]$/.test(fixed) || wild === -1 ? fixed : path.dirname(fixed)
+  const resolved = CanonicalPath.resolve(dir)
+  if (resolved === path.resolve(dir)) return pattern
+  return path.join(resolved, path.relative(dir, pattern))
 }
 
 /**
@@ -302,6 +325,15 @@ export function fromConfig(permission: ConfigPermissionV1.Info) {
   return ruleset
 }
 
+/**
+ * The `read` asks that can have no effect: `read` is decided on paths relative
+ * to the project, and an absolute (or ~, $HOME, already expanded) pattern is
+ * checked only to find a deny (Tool.askRead). Config loading warns about each.
+ */
+export function ineffectiveAsks(ruleset: PermissionV1.Ruleset) {
+  return ruleset.filter((rule) => rule.permission === "read" && rule.action === "ask" && path.isAbsolute(rule.pattern))
+}
+
 export function merge(...rulesets: PermissionV1.Ruleset[]): PermissionV1.Rule[] {
   return rulesets.flat()
 }
@@ -323,7 +355,8 @@ export const VERIFIER_LOCK = fromConfig({
   read: { "*": "allow", "mcp:*": "deny", "*.env": "deny", "*.env.*": "deny", "*.env.example": "allow" },
   grep: "allow",
   glob: "allow",
-  lsp: "allow",
+  // not hover: type information can carry values from files it may not read
+  lsp: { "*": "allow", hover: "deny" },
   verdict: "allow",
   external_directory: { "*": "deny", [path.join(TRUNCATION_DIR, "*")]: "allow" },
 })
