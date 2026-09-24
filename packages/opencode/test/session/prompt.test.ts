@@ -1725,6 +1725,33 @@ noLLMServer.instance(
   30_000,
 )
 
+// Code review of feat/verdict, finding 6: a check that is still running, or was
+// orphaned by a crash, must block a PASS, so the part is marked from its start.
+noLLMServer.instance(
+  "shell marks the command as run by the user while it runs",
+  () =>
+    Effect.gen(function* () {
+      const { prompt, sessions, chat } = yield* boot()
+      const fiber = yield* prompt
+        .shell({ sessionID: chat.id, agent: "build", command: "sleep 3" })
+        .pipe(Effect.forkChild)
+      const running = yield* pollWithTimeout(
+        Effect.gen(function* () {
+          const parts = (yield* sessions.messages({ sessionID: chat.id })).flatMap((message) => message.parts)
+          return parts.find(
+            (part): part is SessionV1.ToolPart => part.type === "tool" && part.state.status === "running",
+          )
+        }),
+        "the shell part never started running",
+        "20 seconds",
+      )
+      expect(running.state.status === "running" ? running.state.metadata?.ranBy : undefined).toBe("user")
+      yield* Fiber.join(fiber)
+    }),
+  { config: cfg },
+  60_000,
+)
+
 unixNoLLMServer(
   "shell completes a fast command on the preferred shell",
   () =>

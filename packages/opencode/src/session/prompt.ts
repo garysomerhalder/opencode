@@ -539,6 +539,9 @@ const layer = Layer.effect(
                 status: "running",
                 time: { start: started },
                 input: { command: input.command },
+                // from its start: a check still running, or orphaned by a crash,
+                // blocks a verifier's PASS (tool/verdict.ts)
+                metadata: { ranBy: "user" },
               },
             }
             yield* sessions.updatePart(part)
