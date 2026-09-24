@@ -420,4 +420,18 @@ describe("tool.verdict: submissions", () => {
       )
     }),
   )
+
+  // final check: a fork is not the verification it was forked from
+  it.instance("a fork carries no metadata.verify, and its copied checks cannot be cited", () =>
+    Effect.gen(function* () {
+      const { session } = yield* setup()
+      const listed = yield* record(session.id, ShellID.ToolID, "call_tests", shell(0, "15 pass", "user"))
+      yield* goal(session.id, { criteria: ["the output is capped"], checks: [listed] })
+      const sessions = yield* Session.Service
+      const forked = yield* sessions.fork({ sessionID: session.id })
+      expect(forked.metadata?.verify).toBeUndefined()
+      const cite = passWith([{ kind: "check", callID: "call_tests", exit: 0, excerpt: "15 pass" }])
+      expect((yield* submit(forked.id, cite)).error).toContain("there is no check call_tests in this verification")
+    }),
+  )
 })

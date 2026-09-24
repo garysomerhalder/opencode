@@ -742,7 +742,11 @@ const layer: Layer.Layer<
         path: sessionPath(ctx.worktree, ctx.directory),
         workspaceID: original.workspaceID,
         title,
-        metadata: structuredClone(original.metadata),
+        // not the goal loop's verify: a fork is not the verification it came from,
+        // and its copied parts have new ids, so its checks would not match anyway
+        metadata: original.metadata
+          ? Object.fromEntries(Object.entries(structuredClone(original.metadata)).filter(([key]) => key !== "verify"))
+          : undefined,
         // a fork keeps the session's rules: forking must not shed a deny
         permission: original.permission ? [...original.permission] : undefined,
       })
