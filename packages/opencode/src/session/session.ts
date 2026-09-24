@@ -674,15 +674,16 @@ const layer: Layer.Layer<
     })
 
     /**
-     * A child session keeps its parent's denies: each deny rule of the parent
-     * session that the child's own rules do not already carry, appended after
-     * them, so no rule given to the child lifts it. The goal loop's verifier runs
-     * in a child of the worker's session; the task tool already copies them
-     * (deriveSubagentSessionPermission), so its children are unchanged. Taken at
-     * creation: a deny added to the parent later does not reach the child.
+     * A child session keeps its parent's denies and asks: every such rule of the
+     * parent session, appended after the child's own rules, so no rule given to
+     * the child lifts it. For the verifier an ask is a deny (nobody answers inside
+     * a goal loop). The goal loop's verifier runs in a child of the worker's
+     * session. Taken at creation: a rule added to the parent later does not
+     * reach the child. A parent allow that makes an exception under a parent deny
+     * is not carried, so the child is stricter there, never looser.
      */
-    const inheritedDenies = Effect.fnUntraced(function* (parentID: SessionID, own: PermissionV1.Ruleset) {
-      // no such parent, no denies to keep
+    const inheritedRules = Effect.fnUntraced(function* (parentID: SessionID, agent: string | undefined) {
+      // no such parent, nothing to keep
       const parent = yield* get(parentID).pipe(
         Effect.catchIf(
           (error) => error instanceof NotFoundError,
@@ -690,11 +691,9 @@ const layer: Layer.Layer<
         ),
         Effect.orDie,
       )
-      return (parent?.permission ?? []).filter(
-        (rule) =>
-          rule.action === "deny" &&
-          !own.some((mine) => mine.permission === rule.permission && mine.pattern === rule.pattern && mine.action === "deny"),
-      )
+      return (parent?.permission ?? [])
+        .filter((rule) => rule.action === "deny" || rule.action === "ask")
+        .map((rule) => (agent === Permission.VERIFIER && rule.action === "ask" ? { ...rule, action: "deny" as const } : rule))
     })
 
     const create = Effect.fn("Session.create")(function* (input?: {
@@ -708,7 +707,7 @@ const layer: Layer.Layer<
     }) {
       const ctx = yield* InstanceState.context
       const workspace = yield* InstanceState.workspaceID
-      const inherited = input?.parentID ? yield* inheritedDenies(input.parentID, input.permission ?? []) : []
+      const inherited = input?.parentID ? yield* inheritedRules(input.parentID, input.agent) : []
       return yield* createNext({
         parentID: input?.parentID,
         directory: ctx.directory,
@@ -732,6 +731,8 @@ const layer: Layer.Layer<
         workspaceID: original.workspaceID,
         title,
         metadata: structuredClone(original.metadata),
+        // a fork keeps the session's rules: forking must not shed a deny
+        permission: original.permission ? [...original.permission] : undefined,
       })
       const msgs = yield* messages({ sessionID: input.sessionID })
       const idMap = new Map<string, MessageID>()

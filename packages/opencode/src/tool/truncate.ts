@@ -44,6 +44,8 @@ export interface Options {
  * Output written without a session goes in the archive's root.
  */
 export function sessionDir(session: string) {
+  // a wildcard or a path in the id would widen or move the directory
+  if (!/^ses[A-Za-z0-9_-]*$/.test(session)) throw new Error(`not a session id: ${JSON.stringify(session)}`)
   return path.join(TRUNCATION_DIR, session)
 }
 
@@ -119,7 +121,8 @@ const layer = Layer.effect(
     })
 
     const write = Effect.fn("Truncate.write")(function* (text: string, session?: string) {
-      const dir = session ? sessionDir(session) : TRUNCATION_DIR
+      // an id that is not well formed goes to the root, which the verifier cannot reach
+      const dir = session && /^ses[A-Za-z0-9_-]*$/.test(session) ? sessionDir(session) : TRUNCATION_DIR
       const file = path.join(dir, ToolID.ascending())
       yield* fs.ensureDir(dir).pipe(Effect.orDie)
       yield* fs.writeFileString(file, text).pipe(Effect.orDie)
