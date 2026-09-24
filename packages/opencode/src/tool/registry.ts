@@ -164,7 +164,11 @@ const layer = Layer.effect(
                 const metadata = typeof result === "string" ? {} : (result.metadata ?? {})
                 const attachments = typeof result === "string" ? undefined : result.attachments
                 const info = yield* agent.get(toolCtx.agent)
-                const out = yield* truncate.output(output, { tool: id, call: toolCtx.callID }, info)
+                const out = yield* truncate.output(
+                  output,
+                  { tool: id, call: toolCtx.callID, session: toolCtx.sessionID },
+                  info,
+                )
                 return {
                   title: typeof result === "string" ? "" : (result.title ?? ""),
                   output: out.truncated ? out.content : output,

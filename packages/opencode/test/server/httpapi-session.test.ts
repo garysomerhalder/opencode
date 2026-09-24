@@ -824,6 +824,62 @@ describe("session HttpApi", () => {
     { git: true, config: { formatter: false, lsp: false, share: "disabled" } },
   )
 
+  // Security review of the verifier lock: the lock's divider is found by identity,
+  // and its name is reserved, so no client can put a rule with that name on a session.
+  it.instance(
+    "refuses a session ruleset that names the lock's divider, on create and on update",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const headers = { "x-opencode-directory": test.directory, "content-type": "application/json" }
+        const permission = [{ permission: "<verifier-lock>", pattern: "*", action: "deny" }]
+        const created = yield* request(SessionPaths.create, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ title: "fake divider", permission }),
+        })
+        expect(created.status).toBe(400)
+        const session = yield* createSession({ title: "update" })
+        const updated = yield* request(pathFor(SessionPaths.update, { sessionID: session.id }), {
+          method: "PATCH",
+          headers,
+          body: JSON.stringify({ permission }),
+        })
+        expect(updated.status).toBe(400)
+        const ok = yield* request(pathFor(SessionPaths.update, { sessionID: session.id }), {
+          method: "PATCH",
+          headers,
+          body: JSON.stringify({ permission: [{ permission: "read", pattern: "secrets/*", action: "deny" }] }),
+        })
+        expect(ok.status).toBe(200)
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+  )
+
+  // Investigation (b): the goal loop creates the verifier's session this way.
+  it.instance(
+    "a child session created over HTTP keeps its parent's denies, after its own rules",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const headers = { "x-opencode-directory": test.directory, "content-type": "application/json" }
+        const deny = { permission: "read", pattern: "secrets/*", action: "deny" }
+        const parent = yield* requestJson<Session.Info>(SessionPaths.create, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ title: "worker", permission: [deny] }),
+        })
+        const allow = { permission: "read", pattern: "secrets/*", action: "allow" }
+        const child = yield* requestJson<Session.Info>(SessionPaths.create, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ title: "verifier", parentID: parent.id, agent: "verifier", permission: [allow] }),
+        })
+        expect(child.permission).toEqual([allow, deny])
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+  )
+
   it.instance(
     "validates archived timestamp values",
     () =>

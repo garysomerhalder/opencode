@@ -442,10 +442,12 @@ const layer = Layer.effect(
     /** Gives the entry an output file and moves everything captured so far into it. */
     const spill = Effect.fn("ShellTasks.spill")(function* (entry: Entry) {
       if (entry.file) return
-      yield* Effect.promise(() => fs.mkdir(TRUNCATION_DIR, { recursive: true })).pipe(Effect.ignore)
-      // The `tool_` prefix keeps these files inside the existing truncation
-      // retention sweep and the existing read permission glob.
-      entry.file = path.join(TRUNCATION_DIR, ToolID.ascending())
+      // In the owning session's archive directory (Truncate.sessionDir). The
+      // `tool_` prefix keeps these files inside the truncation retention sweep
+      // and the existing read permission glob.
+      const dir = path.join(TRUNCATION_DIR, entry.info.sessionID)
+      yield* Effect.promise(() => fs.mkdir(dir, { recursive: true })).pipe(Effect.ignore)
+      entry.file = path.join(dir, ToolID.ascending())
       entry.info.file = entry.file
       entry.info.fileBytes = 0
       entry.written = 0

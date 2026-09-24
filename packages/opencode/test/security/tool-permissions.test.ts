@@ -8,6 +8,7 @@ import fs from "fs/promises"
 import path from "path"
 import { Effect, Layer } from "effect"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
+import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
@@ -56,7 +57,11 @@ const plugins = (tools: Record<string, unknown>[]) =>
     }),
   )
 
-const harness = (plugin: Layer.Layer<Plugin.Service>, config: Partial<ConfigV1.Info> = {}) =>
+const harness = (
+  plugin: Layer.Layer<Plugin.Service>,
+  config: Partial<ConfigV1.Info> = {},
+  flags: Partial<RuntimeFlags.Info> = {},
+) =>
   testEffect(
     LayerNode.compile(
       LayerNode.group([
@@ -64,6 +69,7 @@ const harness = (plugin: Layer.Layer<Plugin.Service>, config: Partial<ConfigV1.I
         Agent.node,
         Permission.node,
         Session.node,
+        SessionProjector.node,
         Plugin.node,
         MCP.node,
         Config.node,
@@ -78,7 +84,7 @@ const harness = (plugin: Layer.Layer<Plugin.Service>, config: Partial<ConfigV1.I
             directories: () => InstanceState.directory.pipe(Effect.map((dir) => [path.join(dir, ".opencode")])),
           }),
         ],
-        [RuntimeFlags.node, RuntimeFlags.layer()],
+        [RuntimeFlags.node, RuntimeFlags.layer(flags)],
         [MCP.node, mcp],
         [Plugin.node, plugin],
       ],
@@ -92,9 +98,8 @@ const withPluginGrep = harness(
 )
 const windows = process.platform === "win32" ? it.instance : it.instance.skip
 // A user whose config keeps secrets/ from every agent, and asks before docs/private/.
-const withReadRules = harness(plugins([]), {
-  permission: { read: { "secrets/*": "deny", "docs/private/*": "ask" } },
-} as Partial<ConfigV1.Info>)
+const readRules = { permission: { read: { "secrets/*": "deny", "docs/private/*": "ask" } } } as Partial<ConfigV1.Info>
+const withReadRules = harness(plugins([]), readRules, { experimentalLspTool: true })
 
 afterEach(async () => {
   await disposeAllInstances()
@@ -103,12 +108,16 @@ afterEach(async () => {
 const model = { providerID: ProviderV2.ID.make("test"), api: { id: "test-model" } } as Provider.Model
 
 /** The tools an agent is offered, as the session builds them. */
-const offered = Effect.fn("SecurityTest.offered")(function* (agentName: string, permission?: PermissionV1.Ruleset) {
+const offered = Effect.fn("SecurityTest.offered")(function* (
+  agentName: string,
+  permission?: PermissionV1.Ruleset,
+  existing?: Session.Info,
+) {
   const agents = yield* Agent.Service
   const sessions = yield* Session.Service
   const agent = yield* agents.get(agentName)
   if (!agent) throw new Error(`no agent ${agentName}`)
-  const session = yield* sessions.create({ title: "security", ...(permission ? { permission } : {}) })
+  const session = existing ?? (yield* sessions.create({ title: "security", ...(permission ? { permission } : {}) }))
   const message: SessionV1.Assistant = {
     id: MessageID.ascending(),
     sessionID: session.id,
@@ -145,8 +154,9 @@ const call = Effect.fn("SecurityTest.call")(function* (
   tool: string,
   args: Record<string, unknown>,
   permission?: PermissionV1.Ruleset,
+  session?: Session.Info,
 ) {
-  const tools = yield* offered(agentName, permission)
+  const tools = yield* offered(agentName, permission, session)
   const execute = tools[tool]?.execute
   if (!execute) return { offered: false as const, output: "", error: "" }
   return yield* Effect.promise(() =>
@@ -432,7 +442,120 @@ describe("the lock never loosens a user's or a session's rule", () => {
         const deny = Permission.fromConfig({ read: { "secrets/*": "deny" } })
         const read = yield* call(Permission.VERIFIER, "read", { filePath: path.join(directory, "secrets", "key.txt") }, deny)
         expect(read.output + read.error).not.toContain(SECRET)
+        const grep = yield* call(Permission.VERIFIER, "grep", { pattern: "KEY" }, deny)
+        expect(grep.output).not.toContain(SECRET)
+        expect(grep.output).not.toContain("key.txt")
       }),
     { git: true },
+  )
+
+  withReadRules.instance(
+    "glob and lsp hold a config deny for the verifier",
+    () =>
+      Effect.gen(function* () {
+        const directory = yield* secrets()
+        const glob = yield* call(Permission.VERIFIER, "glob", { pattern: "**/*" })
+        expect(glob.output).toContain("app.ts")
+        expect(glob.output).not.toContain("key.txt")
+        const lsp = yield* call(Permission.VERIFIER, "lsp", {
+          operation: "documentSymbol",
+          filePath: path.join(directory, "secrets", "key.txt"),
+          line: 1,
+          character: 1,
+        })
+        expect(lsp.offered).toBe(true)
+        expect(lsp.output).not.toContain(SECRET)
+        expect(lsp.error).toContain("PermissionDeniedError")
+      }),
+    { git: true },
+  )
+
+  // The lock changes nothing for other agents: build is still asked, not denied.
+  withReadRules.instance(
+    "under the same config build is still asked about docs/private, and denied secrets",
+    () =>
+      Effect.gen(function* () {
+        yield* secrets()
+        const agents = yield* Agent.Service
+        const rules = Permission.effective((yield* agents.get("build"))!)
+        expect(Permission.evaluate("read", path.join("docs", "private", "plan.md"), rules).action).toBe("ask")
+        expect(Permission.evaluate("read", path.join("secrets", "key.txt"), rules).action).toBe("deny")
+        // through the real glob: a path build may ask to read is listed, a denied one is not
+        const glob = yield* call("build", "glob", { pattern: "**/*" })
+        expect(glob.output).toContain("plan.md")
+        expect(glob.output).not.toContain("key.txt")
+      }),
+    { git: true },
+  )
+})
+
+// Security review, investigation (b): the goal loop creates the verifier's session
+// as a child of the worker's (POST /session with parentID). The worker's session
+// denies must hold there too, whatever the child is given.
+describe("a child session keeps its parent's denies", () => {
+  it.instance(
+    "the verifier in a child session cannot read what the parent session denies",
+    () =>
+      Effect.gen(function* () {
+        const directory = yield* workspace()
+        yield* Effect.promise(async () => {
+          await fs.mkdir(path.join(directory, "secrets"), { recursive: true })
+          await fs.writeFile(path.join(directory, "secrets", "key.txt"), `KEY ${SECRET}\n`)
+        })
+        const sessions = yield* Session.Service
+        const parent = yield* sessions.create({
+          title: "worker",
+          permission: Permission.fromConfig({ read: { "secrets/*": "deny" } }),
+        })
+        for (const permission of [undefined, Permission.fromConfig({ read: { "secrets/*": "allow" } })]) {
+          const child = yield* sessions.create({ parentID: parent.id, title: "verifier", permission })
+          const read = yield* call(
+            Permission.VERIFIER,
+            "read",
+            { filePath: path.join(directory, "secrets", "key.txt") },
+            undefined,
+            child,
+          )
+          expect(read.output + read.error).not.toContain(SECRET)
+        }
+      }),
+    { git: true },
+  )
+})
+
+// Security review, investigation (a): the archive of cut tool output is shared by
+// every session and project for 7 days, and the lock let the verifier into all of
+// it. It reaches its own session's archive only.
+describe("the verifier reaches only its own session's archived tool output", () => {
+  it.instance("another session's archive is not read, listed or searched; its own is", () =>
+    Effect.gen(function* () {
+      yield* workspace()
+      const sessions = yield* Session.Service
+      const mine = yield* sessions.create({ title: "verifier" })
+      const flat = path.join(Truncate.DIR, `tool_zzother${Date.now()}`)
+      const theirs = path.join(Truncate.DIR, "ses_zzother", "tool_zzother")
+      const own = path.join(Truncate.DIR, mine.id, "tool_zzown")
+      yield* Effect.promise(async () => {
+        for (const file of [flat, theirs, own]) await fs.mkdir(path.dirname(file), { recursive: true })
+        await fs.writeFile(flat, `KEY ${SECRET}\n`)
+        await fs.writeFile(theirs, `KEY ${SECRET}\n`)
+        await fs.writeFile(own, "OWN OUTPUT\n")
+      })
+      yield* Effect.addFinalizer(() =>
+        Effect.promise(async () => {
+          for (const file of [flat, theirs, own]) await fs.rm(file, { force: true })
+        }),
+      )
+      for (const file of [flat, theirs]) {
+        const read = yield* call(Permission.VERIFIER, "read", { filePath: file }, undefined, mine)
+        expect([file, read.output + read.error]).not.toEqual([file, expect.stringContaining(SECRET)])
+      }
+      const glob = yield* call(Permission.VERIFIER, "glob", { pattern: "**/*", path: Truncate.DIR }, undefined, mine)
+      expect(glob.output).not.toContain("zzother")
+      const grep = yield* call(Permission.VERIFIER, "grep", { pattern: "KEY", path: Truncate.DIR }, undefined, mine)
+      expect(grep.output).not.toContain(SECRET)
+      const read = yield* call(Permission.VERIFIER, "read", { filePath: own }, undefined, mine)
+      expect(read.output).toContain("OWN OUTPUT")
+    }),
   )
 })

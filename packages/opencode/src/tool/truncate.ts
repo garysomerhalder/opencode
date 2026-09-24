@@ -33,6 +33,18 @@ export interface Options {
   /** Named in the receipt, so the model knows which call it belongs to. */
   tool?: string
   call?: string
+  /** The session the output belongs to: its archive goes in that session's directory (see sessionDir). */
+  session?: string
+}
+
+/**
+ * Where a session's cut output is archived: `<tool-output>/<session id>/`. The
+ * verifier's lock lets it reach only its own session's directory
+ * (Permission.effective); other agents reach the whole archive, as before.
+ * Output written without a session goes in the archive's root.
+ */
+export function sessionDir(session: string) {
+  return path.join(TRUNCATION_DIR, session)
 }
 
 /** The tool-part metadata for a truncation result: `truncated`, and `outputPath` / `archive` when it was cut. */
@@ -53,7 +65,7 @@ function hasTaskTool(agent?: Agent.Info) {
 
 export interface Interface {
   readonly cleanup: () => Effect.Effect<void>
-  readonly write: (text: string) => Effect.Effect<string>
+  readonly write: (text: string, session?: string) => Effect.Effect<string>
   /**
    * Returns output unchanged when it fits within the limits, otherwise writes the full text
    * to the truncation directory and returns a preview plus a hint to inspect the saved file.
@@ -74,24 +86,42 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const fs = yield* FSUtil.Service
 
-    const cleanup = Effect.fn("Truncate.cleanup")(function* () {
-      const cutoff = Date.now() - Duration.toMillis(RETENTION)
-      const entries = yield* fs.readDirectory(TRUNCATION_DIR).pipe(
-        Effect.map((all) => all.filter((name) => name.startsWith("tool_"))),
-        Effect.catch(() => Effect.succeed([])),
-      )
-      for (const entry of entries) {
-        const file = path.join(TRUNCATION_DIR, entry)
+    // Removes archives older than the retention in a directory; true when none is left.
+    const sweep = Effect.fnUntraced(function* (dir: string, cutoff: number) {
+      const entries = yield* fs.readDirectory(dir).pipe(Effect.catch(() => Effect.succeed([] as string[])))
+      const archives = entries.filter((name) => name.startsWith("tool_"))
+      let kept = entries.length - archives.length
+      for (const entry of archives) {
+        const file = path.join(dir, entry)
         const info = yield* fs.stat(file).pipe(Effect.catch(() => Effect.succeed(undefined)))
         const mtime = info && Option.getOrUndefined(info.mtime)
-        if (!mtime || mtime.getTime() >= cutoff) continue
+        if (!mtime || mtime.getTime() >= cutoff) {
+          kept++
+          continue
+        }
         yield* fs.remove(file).pipe(Effect.catch(() => Effect.void))
+      }
+      return kept === 0
+    })
+
+    const cleanup = Effect.fn("Truncate.cleanup")(function* () {
+      const cutoff = Date.now() - Duration.toMillis(RETENTION)
+      yield* sweep(TRUNCATION_DIR, cutoff)
+      // and each session's directory (sessionDir), removed once it is empty
+      const sessions = yield* fs.readDirectory(TRUNCATION_DIR).pipe(
+        Effect.map((all) => all.filter((name) => name.startsWith("ses_"))),
+        Effect.catch(() => Effect.succeed([] as string[])),
+      )
+      for (const session of sessions) {
+        const dir = path.join(TRUNCATION_DIR, session)
+        if (yield* sweep(dir, cutoff)) yield* fs.remove(dir, { recursive: true }).pipe(Effect.catch(() => Effect.void))
       }
     })
 
-    const write = Effect.fn("Truncate.write")(function* (text: string) {
-      const file = path.join(TRUNCATION_DIR, ToolID.ascending())
-      yield* fs.ensureDir(TRUNCATION_DIR).pipe(Effect.orDie)
+    const write = Effect.fn("Truncate.write")(function* (text: string, session?: string) {
+      const dir = session ? sessionDir(session) : TRUNCATION_DIR
+      const file = path.join(dir, ToolID.ascending())
+      yield* fs.ensureDir(dir).pipe(Effect.orDie)
       yield* fs.writeFileString(file, text).pipe(Effect.orDie)
       return file
     })
@@ -126,7 +156,7 @@ const layer = Layer.effect(
 
       if (resolved.receipts) {
         const preview = Receipt.preview(text, { maxLines, maxBytes, direction: options.direction ?? "both" })
-        const file = yield* write(text)
+        const file = yield* write(text, options.session)
         const archive = Receipt.archive({ path: file, text, preview })
         return {
           content: Receipt.envelope({
@@ -175,7 +205,7 @@ const layer = Layer.effect(
       const removed = hitBytes ? totalBytes - bytes : lines.length - out.length
       const unit = hitBytes ? "bytes" : "lines"
       const preview = out.join("\n")
-      const file = yield* write(text)
+      const file = yield* write(text, options.session)
 
       const hint = hasTaskTool(agent)
         ? `The tool call succeeded but the output was truncated. Full output saved to: ${file}\nUse the Task tool to have explore agent process this file with Grep and Read (with offset/limit). Do NOT read the full file yourself - delegate to save context.`
