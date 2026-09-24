@@ -824,6 +824,40 @@ describe("session HttpApi", () => {
     { git: true, config: { formatter: false, lsp: false, share: "disabled" } },
   )
 
+  // Re-review of feat/verdict, 6: the worker being verified has bash and can call
+  // this API. metadata.verify (what the verifier's verdict is checked against) is
+  // written in-process by the goal loop only: the API refuses to write it, and an
+  // update of other metadata keeps it.
+  it.instance(
+    "refuses to write metadata.verify, and keeps it when other metadata changes",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const headers = { "x-opencode-directory": test.directory, "content-type": "application/json" }
+        const verify = { base: "abc", criteria: ["the output is capped"], checks: ["prt_1"] }
+        const created = yield* request(SessionPaths.create, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ title: "verifier", metadata: { verify } }),
+        })
+        expect(created.status).toBe(400)
+        const session = yield* createSession({ title: "verifier" })
+        const sessions = yield* Session.Service
+        yield* sessions.setMetadata({ sessionID: session.id, metadata: { verify } })
+        const update = (metadata: Record<string, unknown>) =>
+          request(pathFor(SessionPaths.update, { sessionID: session.id }), {
+            method: "PATCH",
+            headers,
+            body: JSON.stringify({ metadata }),
+          })
+        expect((yield* update({ verify: { criteria: [] } })).status).toBe(400)
+        const other = yield* update({ note: "hello" })
+        expect(other.status).toBe(200)
+        expect((yield* json<Session.Info>(other)).metadata).toEqual({ note: "hello", verify })
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+  )
+
   // Security review of the verifier lock: the lock's divider is found by identity,
   // and its name is reserved, so no client can put a rule with that name on a session.
   it.instance(

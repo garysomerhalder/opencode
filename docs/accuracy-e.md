@@ -471,9 +471,12 @@ type VerifierSessionMetadata = {
 }
 ```
 
-Example, as the loop sends it after creating the child session and running the checks
-(`PATCH /session/:child`; the `metadata` field replaces the whole object, so send the complete
-`verify` object in one request, after the checks and before the verifier's prompt):
+**Written in-process only (ruled 2026-09-24).** The worker being verified has bash and can call
+the local HTTP API, so the API refuses any `metadata.verify` on session create and update (400),
+and an update of other metadata keeps the existing `verify`. Phase 4 therefore writes it inside
+the server (`Session.setMetadata`), for example from a server-side "start verification" step, not
+with `PATCH /session/:child`. Write the complete object once, after the checks and before the
+verifier's prompt. Example of the stored value:
 
 ```json
 {

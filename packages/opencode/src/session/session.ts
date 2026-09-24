@@ -266,13 +266,25 @@ export const ClientRuleset = PermissionV1.Ruleset.check(
   Schema.makeFilter((rules) => Permission.reserved(rules)),
 )
 
+/**
+ * Session metadata a client sends: anything but `verify`, which the goal loop
+ * writes in-process on a verifier's session (docs/accuracy-e.md §11.5). The
+ * worker being verified can call this API, so it must not rewrite what its
+ * verdict is checked against.
+ */
+export const ClientMetadata = Metadata.check(
+  Schema.makeFilter((metadata) =>
+    Object.hasOwn(metadata, "verify") ? "metadata.verify is written by the goal loop only" : undefined,
+  ),
+)
+
 export const CreateInput = Schema.optional(
   Schema.Struct({
     parentID: Schema.optional(SessionID),
     title: Schema.optional(Schema.String),
     agent: Schema.optional(Schema.String),
     model: Schema.optional(Model),
-    metadata: Schema.optional(Metadata),
+    metadata: Schema.optional(ClientMetadata),
     permission: Schema.optional(ClientRuleset),
     workspaceID: Schema.optional(WorkspaceV2.ID),
   }),

@@ -189,7 +189,13 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
         yield* session.setTitle({ sessionID: ctx.params.sessionID, title: ctx.payload.title })
       }
       if (ctx.payload.metadata !== undefined) {
-        yield* session.setMetadata({ sessionID: ctx.params.sessionID, metadata: ctx.payload.metadata })
+        // metadata replaces the whole object: keep the goal loop's verify, which a
+        // client may not write (Session.ClientMetadata) and so may not erase either
+        const verify = current.metadata?.verify
+        yield* session.setMetadata({
+          sessionID: ctx.params.sessionID,
+          metadata: verify === undefined ? ctx.payload.metadata : { ...ctx.payload.metadata, verify },
+        })
       }
       if (ctx.payload.permission !== undefined) {
         yield* session.setPermission({
