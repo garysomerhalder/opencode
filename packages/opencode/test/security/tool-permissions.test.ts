@@ -11,6 +11,8 @@ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
+import { ConfigV1 } from "@opencode-ai/core/v1/config/config"
+import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { Agent } from "@/agent/agent"
 import { Config } from "@/config/config"
 import { InstanceState } from "@/effect/instance-state"
@@ -54,7 +56,7 @@ const plugins = (tools: Record<string, unknown>[]) =>
     }),
   )
 
-const harness = (plugin: Layer.Layer<Plugin.Service>) =>
+const harness = (plugin: Layer.Layer<Plugin.Service>, config: Partial<ConfigV1.Info> = {}) =>
   testEffect(
     LayerNode.compile(
       LayerNode.group([
@@ -72,6 +74,7 @@ const harness = (plugin: Layer.Layer<Plugin.Service>) =>
         [
           Config.node,
           TestConfig.layer({
+            get: () => Effect.succeed(config as ConfigV1.Info),
             directories: () => InstanceState.directory.pipe(Effect.map((dir) => [path.join(dir, ".opencode")])),
           }),
         ],
@@ -88,6 +91,10 @@ const withPluginGrep = harness(
   plugins([{ grep: { description: "PLANTED plugin grep", args: {}, execute: async () => "PLANTED plugin grep" } }]),
 )
 const windows = process.platform === "win32" ? it.instance : it.instance.skip
+// A user whose config keeps secrets/ from every agent, and asks before docs/private/.
+const withReadRules = harness(plugins([]), {
+  permission: { read: { "secrets/*": "deny", "docs/private/*": "ask" } },
+} as Partial<ConfigV1.Info>)
 
 afterEach(async () => {
   await disposeAllInstances()
@@ -96,12 +103,12 @@ afterEach(async () => {
 const model = { providerID: ProviderV2.ID.make("test"), api: { id: "test-model" } } as Provider.Model
 
 /** The tools an agent is offered, as the session builds them. */
-const offered = Effect.fn("SecurityTest.offered")(function* (agentName: string) {
+const offered = Effect.fn("SecurityTest.offered")(function* (agentName: string, permission?: PermissionV1.Ruleset) {
   const agents = yield* Agent.Service
   const sessions = yield* Session.Service
   const agent = yield* agents.get(agentName)
   if (!agent) throw new Error(`no agent ${agentName}`)
-  const session = yield* sessions.create({ title: "security" })
+  const session = yield* sessions.create({ title: "security", ...(permission ? { permission } : {}) })
   const message: SessionV1.Assistant = {
     id: MessageID.ascending(),
     sessionID: session.id,
@@ -133,8 +140,13 @@ const offered = Effect.fn("SecurityTest.offered")(function* (agentName: string) 
 })
 
 /** Calls a tool the way the model's call does; a refusal comes back as `error`. */
-const call = Effect.fn("SecurityTest.call")(function* (agentName: string, tool: string, args: Record<string, unknown>) {
-  const tools = yield* offered(agentName)
+const call = Effect.fn("SecurityTest.call")(function* (
+  agentName: string,
+  tool: string,
+  args: Record<string, unknown>,
+  permission?: PermissionV1.Ruleset,
+) {
+  const tools = yield* offered(agentName, permission)
   const execute = tools[tool]?.execute
   if (!execute) return { offered: false as const, output: "", error: "" }
   return yield* Effect.promise(() =>
@@ -375,5 +387,52 @@ describe("finding 9: the verifier may read .env.example, like the default rules"
       const result = yield* call(Permission.VERIFIER, "read", { filePath: path.join(directory, ".env:x.env.example") })
       expect(result.output + result.error).not.toContain(SECRET)
     }),
+  )
+})
+
+// Found in phase 2: the lock is appended last and rules are last-match, so its
+// read "*": "allow" (there to lift the verifier's own "*": "deny") also lifted a
+// user's or a session's deny, and turned their ask into an allow. The lock may
+// only ever take away.
+describe("the lock never loosens a user's or a session's rule", () => {
+  const secrets = Effect.fn("SecurityTest.secrets")(function* () {
+    const directory = yield* workspace()
+    yield* Effect.promise(async () => {
+      await fs.mkdir(path.join(directory, "secrets"), { recursive: true })
+      await fs.mkdir(path.join(directory, "docs", "private"), { recursive: true })
+      await fs.writeFile(path.join(directory, "secrets", "key.txt"), `KEY ${SECRET}\n`)
+      await fs.writeFile(path.join(directory, "docs", "private", "plan.md"), `PLAN ${SECRET}\n`)
+    })
+    return directory
+  })
+
+  withReadRules.instance(
+    "a config read deny, or ask, holds for the verifier",
+    () =>
+      Effect.gen(function* () {
+        const directory = yield* secrets()
+        for (const file of [path.join("secrets", "key.txt"), path.join("docs", "private", "plan.md")]) {
+          const read = yield* call(Permission.VERIFIER, "read", { filePath: path.join(directory, file) })
+          expect([file, read.output + read.error]).not.toEqual([file, expect.stringContaining(SECRET)])
+          const grep = yield* call(Permission.VERIFIER, "grep", { pattern: "KEY|PLAN" })
+          expect(grep.output).not.toContain(SECRET)
+        }
+        // what the user did not restrict is still readable
+        const app = yield* call(Permission.VERIFIER, "read", { filePath: path.join(directory, "src", "app.ts") })
+        expect(app.output).toContain("process.env.API_KEY")
+      }),
+    { git: true },
+  )
+
+  it.instance(
+    "a session read deny holds for the verifier",
+    () =>
+      Effect.gen(function* () {
+        const directory = yield* secrets()
+        const deny = Permission.fromConfig({ read: { "secrets/*": "deny" } })
+        const read = yield* call(Permission.VERIFIER, "read", { filePath: path.join(directory, "secrets", "key.txt") }, deny)
+        expect(read.output + read.error).not.toContain(SECRET)
+      }),
+    { git: true },
   )
 })

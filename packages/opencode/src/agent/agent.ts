@@ -286,10 +286,12 @@ const layer = Layer.effect(
             ),
             prompt: PROMPT_SUMMARY,
           },
-          // Accuracy E: the goal loop's independent read-only verifier. Its real
-          // rules are Permission.VERIFIER_LOCK, which Permission.effective() appends
-          // after these, the user's and the session's, so nothing can loosen them.
-          // Hidden and primary, so it is not offered to the task tool.
+          // Accuracy E: the goal loop's independent read-only verifier. It starts
+          // from the defaults and the user's rules like any agent; the stricter of
+          // those (with the session's) and Permission.VERIFIER_LOCK decides, so the
+          // lock takes away everything but reads and the verdict, and a user's or a
+          // session's deny or ask still holds. Hidden and primary, so it is not
+          // offered to the task tool.
           [Permission.VERIFIER]: {
             name: Permission.VERIFIER,
             description: "Independent read-only verifier for goal loops. Cites evidence; cannot change anything.",
@@ -297,7 +299,7 @@ const layer = Layer.effect(
             native: true,
             hidden: true,
             steps: VERIFIER_STEPS,
-            permission: Permission.merge(defaults, Permission.fromConfig({ "*": "deny" }), user),
+            permission: Permission.merge(defaults, user),
             prompt: PROMPT_VERIFIER,
             options: {},
           },
