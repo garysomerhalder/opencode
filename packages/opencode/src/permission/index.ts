@@ -268,7 +268,8 @@ export const VERIFIER_LOCK = fromConfig({
   read: { "*": "allow", "mcp:*": "deny", "*.env": "deny", "*.env.*": "deny", "*.env.example": "allow" },
   grep: "allow",
   glob: "allow",
-  lsp: "allow",
+  // not hover: type information can carry values from files it may not read
+  lsp: { "*": "allow", hover: "deny" },
   verdict: "allow",
   external_directory: { "*": "deny", [path.join(TRUNCATION_DIR, "*")]: "allow" },
 })

@@ -55,7 +55,9 @@ export const LspTool = Tool.define(
                 : { operation: args.operation, filePath: file, line: args.line, character: args.character }
           yield* ctx.ask({
             permission: "lsp",
-            patterns: ["*"],
+            // the operation, so rules can allow some and not others (the verifier's
+            // lock refuses hover)
+            patterns: [args.operation],
             always: ["*"],
             metadata: meta,
           })
@@ -87,6 +89,18 @@ export const LspTool = Tool.define(
 
           yield* lsp.touchFile(file, "document")
 
+          // A hover describes the symbol where it is defined, and can carry that
+          // file's values (the type of a constant). Shown only when the agent may
+          // read every file the symbol is defined in. Type information can still
+          // flow in from elsewhere, so the verifier's lock refuses hover outright.
+          const hover = Effect.fnUntraced(function* (at: typeof position) {
+            for (const item of yield* lsp.definition(at)) {
+              const target = locationFile(item)
+              if (!target || !(yield* Tool.readable(ctx, instance.worktree, target, "content"))) return []
+            }
+            return yield* lsp.hover(at)
+          })
+
           const raw: unknown[] = yield* (() => {
             switch (args.operation) {
               case "goToDefinition":
@@ -94,7 +108,7 @@ export const LspTool = Tool.define(
               case "findReferences":
                 return lsp.references(position)
               case "hover":
-                return lsp.hover(position)
+                return hover(position)
               case "documentSymbol":
                 return lsp.documentSymbol(uri)
               case "workspaceSymbol":
