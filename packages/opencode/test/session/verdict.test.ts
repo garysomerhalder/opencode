@@ -17,11 +17,24 @@ const world: Verdict.World = {
     { callID: "call_tests", exit: 1, output: "12 pass\n3 fail\nRan 15 tests" },
     { callID: "call_lint", exit: 0, output: "no problems" },
   ],
+  // as `git diff` writes it
   diff: [
     "diff --git a/src/budget.ts b/src/budget.ts",
+    "index 83db48f..bf269f4 100644",
+    "--- a/src/budget.ts",
+    "+++ b/src/budget.ts",
+    "@@ -1,2 +1,4 @@",
+    " export function budget(bytes: number) {",
     "+  if (bytes > LIMIT)",
     "+    return cut(bytes)",
+    " }",
     "diff --git a/README.md b/README.md",
+    "index 1111111..2222222 100644",
+    "--- a/README.md",
+    "+++ b/README.md",
+    "@@ -1 +1,3 @@",
+    " # Tool",
+    "+",
     "+Pass `--budget` to cap the output.",
   ].join("\n"),
 }
@@ -147,6 +160,19 @@ describe("Verdict.validate: citations", () => {
     expect(Verdict.validate(pass([cite("LIMIT", "if (bytes > LIMIT)")]), passing, { final: false }).errors).toEqual([
       "C1: the diff does not touch LIMIT",
     ])
+    // review finding 1: only changed lines are evidence, not the headers or context
+    for (const excerpt of [
+      "diff --git a/src/budget.ts b/src/budget.ts",
+      "index 83db48f..bf269f4 100644",
+      "+++ b/src/budget.ts",
+      "--- a/src/budget.ts",
+      "@@ -1,2 +1,4 @@",
+      "export function budget(bytes: number) {",
+    ])
+      expect([excerpt, Verdict.validate(pass([cite("src/budget.ts", excerpt)]), passing, { final: false }).errors]).toEqual([
+        excerpt,
+        ["C1: the excerpt is not in the diff for src/budget.ts"],
+      ])
     expect(
       Verdict.validate(pass([cite("src/budget.ts", "return cut")]), { ...passing, diff: undefined }, { final: false })
         .errors,
@@ -260,7 +286,7 @@ describe("Verdict.validate: the host's records outrank the verifier's text", () 
           id: "C2",
           text: "docs exist",
           status: "met",
-          evidence: [{ kind: "file", path: "README.md", lines: [3, 3], quote: "--budget" }],
+          evidence: [{ kind: "file", path: "README.md", lines: [3, 3], quote: "Pass `--budget`" }],
         },
       ],
       missing: [],
@@ -313,17 +339,22 @@ describe("Verdict.validate: the host's records outrank the verifier's text", () 
     expect(Verdict.validate(todo("met"), passing, { final: false }).errors).toEqual([
       'todo "cap the output": met, but cites no evidence',
     ])
-    expect(Verdict.validate(todo("met", [fileCite("nowhere")]), passing, { final: false }).errors).toEqual([
+    expect(Verdict.validate(todo("met", [fileCite("nowhere at all")]), passing, { final: false }).errors).toEqual([
       'todo "cap the output": the quote is not in src/budget.ts at lines 2-3',
     ])
     expect(Verdict.validate(todo("met", [fileCite("return cut(bytes)")]), passing, { final: false }).errors).toEqual(
       [],
     )
     expect(Verdict.validate(todo("unmet"), passing, { final: false }).errors).toEqual([])
-    // on the last submission the unsupported mark is dropped, not kept
-    const stored = Verdict.validate(todo("met", [fileCite("nowhere")]), passing, { final: true }).verdict
-    expect(stored?.todos).toEqual([{ content: "cap the output", status: "unknown", evidence: [] }])
-    expect(stored?.verdict).toBe("PASS")
+    // on the last submission the unsupported mark is dropped, not kept, and (review
+    // finding 7) it is missing evidence: a PASS is stored as PARTIAL
+    const result = Verdict.validate(todo("met", [fileCite("nowhere at all")]), passing, { final: true })
+    expect(result.verdict?.todos).toEqual([{ content: "cap the output", status: "unknown", evidence: [] }])
+    expect(result.verdict?.verdict).toBe("PARTIAL")
+    expect(result.downgraded).toBe(true)
+    expect(result.verdict?.missing).toEqual([
+      { criterion: 'todo "cap the output"', need: "evidence that checks out: the quote is not in src/budget.ts at lines 2-3" },
+    ])
   })
 
   test("missing evidence must name a criterion the verdict judged", () => {
@@ -337,3 +368,83 @@ describe("Verdict.validate: the host's records outrank the verifier's text", () 
     ])
   })
 })
+
+// Code review of feat/verdict.
+describe("Verdict.validate: evidence is specific (review finding 2)", () => {
+  const long: Verdict.World = {
+    ...passing,
+    file: (file) => (file === "long.ts" ? Array.from({ length: 50 }, (_, i) => `line ${i + 1}`).join("\n") : undefined),
+  }
+  test("a quote or excerpt needs two words or eight letters and digits", () => {
+    for (const quote of ["cut", "c", "(bytes"])
+      expect([quote, Verdict.validate(pass([fileCite(quote, [3, 3])]), passing, { final: false }).errors]).toEqual([
+        quote,
+        ["C1: the quote is too short to be evidence: cite at least two words, or eight letters and digits"],
+      ])
+    expect(Verdict.validate(pass([fileCite("cut(bytes", [3, 3])]), passing, { final: false }).errors).toEqual([])
+  })
+
+  test("a file citation spans fewer than 40 lines", () => {
+    const cite = (lines: [number, number]): Verdict.Evidence => ({ kind: "file", path: "long.ts", lines, quote: "line 5" })
+    expect(Verdict.validate(pass([cite([1, 40])]), long, { final: false }).errors).toEqual([
+      "C1: lines 1-40 span 40 lines: cite fewer than 40",
+    ])
+    expect(Verdict.validate(pass([cite([1, 39])]), long, { final: false }).errors).toEqual([])
+  })
+
+  test("a check excerpt contains at least one whole line of the check's output", () => {
+    const failing = (excerpt: string): Verdict.Verdict => ({
+      verdict: "FAIL",
+      criteria: [
+        { id: "C2", text: "tests pass", status: "unmet", evidence: [{ kind: "check", callID: "call_tests", exit: 1, excerpt }] },
+      ],
+      missing: [],
+    })
+    expect(Verdict.validate(failing("Ran 15"), world, { final: false }).errors).toEqual([
+      "C2: the excerpt must contain at least one whole line of the output of check call_tests",
+    ])
+    expect(Verdict.validate(failing("3 fail"), world, { final: false }).errors).toEqual([])
+    expect(Verdict.validate(failing("12 pass 3 fail"), world, { final: false }).errors).toEqual([])
+  })
+})
+
+describe("Verdict.validate: generated ids (review finding 8)", () => {
+  test("an id made for a skipped declared criterion never repeats one the verdict used", () => {
+    const declared: Verdict.World = { ...passing, criteria: ["the output is capped", "the README names --budget"] }
+    const input: Verdict.Verdict = {
+      verdict: "PASS",
+      criteria: [{ id: "declared-2", text: "the output is capped", status: "met", evidence: [fileCite("return cut(bytes)")] }],
+      missing: [],
+    }
+    const ids = Validate(input, declared).verdict!.criteria.map((criterion) => criterion.id)
+    expect(new Set(ids).size).toBe(ids.length)
+  })
+})
+
+describe("Verdict.validate: checks bound to the loop (design ruling)", () => {
+  // call_lint is one the loop ran and listed; call_other was run by the user
+  // (ranBy "user") but not listed.
+  const bound: Verdict.World = {
+    ...passing,
+    unlisted: [{ callID: "call_other", exit: 0, output: "15 pass" }],
+  }
+  test("a check the loop did not list is not evidence", () => {
+    const cite: Verdict.Evidence = { kind: "check", callID: "call_other", exit: 0, excerpt: "15 pass" }
+    expect(Verdict.validate(pass([cite]), bound, { final: false }).errors).toEqual([
+      "C1: there is no check call_other in this verification",
+    ])
+  })
+
+  test("but it still blocks a PASS when it failed or did not finish", () => {
+    for (const exit of [1, undefined]) {
+      const failed: Verdict.World = { ...passing, unlisted: [{ callID: "call_other", exit, output: "" }] }
+      expect(Verdict.validate(pass([fileCite("return cut(bytes)")]), failed, { final: false }).errors).toEqual([
+        exit === undefined ? "PASS, but check call_other was aborted" : "PASS, but check call_other exited 1",
+      ])
+    }
+  })
+})
+
+function Validate(input: Verdict.Verdict, world: Verdict.World) {
+  return Verdict.validate(input, world, { final: true })
+}
