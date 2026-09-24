@@ -2,7 +2,11 @@
 // the divider between the rules and the lock cannot be faked, and nothing after
 // the lock is read as part of it. Security review of fix/verifier-lock-denies.
 import { afterEach, describe, expect, test } from "bun:test"
+import path from "path"
+import { Exit, Schema } from "effect"
+import { SessionID } from "@opencode-ai/schema/session-id"
 import { Permission } from "../../src/permission"
+import { Truncate } from "../../src/tool/truncate"
 
 const platform = process.platform
 afterEach(() => {
@@ -101,5 +105,41 @@ describe("disabled(): what the verifier is not offered", () => {
     const rules = { "*": "allow", grep: "ask" } as const
     expect(Permission.disabled(["grep", "read"], Permission.effective(verifier(rules)))).toEqual(new Set(["grep"]))
     expect(Permission.disabled(["grep", "read"], Permission.effective(build(rules)))).toEqual(new Set())
+  })
+})
+
+// Security re-review, 2: rules after the lock are a side of their own under
+// "stricter decides": they can take away, never give.
+describe("rules after the lock never loosen the rules before it", () => {
+  test("an allow after the lock does not lift a user's deny", () => {
+    const rules = Permission.effective(verifier({ "*": "allow", read: { "*": "allow", "secrets/*": "deny" } }))
+    const lifted = Permission.fromConfig({ read: { "secrets/*": "allow" } })
+    expect(Permission.evaluate("read", "secrets/key.txt", rules, lifted).action).toBe("deny")
+    expect(Permission.evaluate("read", "src/app.ts", rules, lifted).action).toBe("allow")
+  })
+})
+
+// Security re-review, 4: a session id is only ses_ and letters and digits, so one
+// cannot widen or move the verifier's archive directory.
+describe("session ids", () => {
+  test("the schema refuses wildcards, dots, slashes and spaces", () => {
+    const decode = Schema.decodeUnknownExit(SessionID)
+    for (const id of ["ses_0A1b2C", "ses_code-mode", "session_test"])
+      expect([id, Exit.isSuccess(decode(id))]).toEqual([id, true])
+    for (const id of ["ses*", "ses_*", "ses?", "ses/../..", "ses_a/../../b", "ses\\a", "ses.a", "ses a", "abc"])
+      expect([id, Exit.isSuccess(decode(id))]).toEqual([id, false])
+  })
+
+  test("the archive directory and the verifier's archive rules refuse a bad id", () => {
+    expect(() => Truncate.sessionDir("ses/../..")).toThrow()
+    expect(() => Truncate.sessionDir("ses*")).toThrow()
+    const own = (id: string) =>
+      Permission.evaluate(
+        "external_directory",
+        path.join(Truncate.DIR, "ses_other", "*"),
+        Permission.effective(verifier({ "*": "allow" }), [], id),
+      ).action
+    expect(own("ses*")).toBe("deny")
+    expect(own("ses_other")).toBe("allow")
   })
 })

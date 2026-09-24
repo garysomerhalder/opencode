@@ -824,6 +824,25 @@ describe("session HttpApi", () => {
     { git: true, config: { formatter: false, lsp: false, share: "disabled" } },
   )
 
+  // Security re-review 3: a fork keeps the session's rules.
+  it.instance(
+    "a fork keeps the session's permission rules",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const headers = { "x-opencode-directory": test.directory, "content-type": "application/json" }
+        const permission = [{ permission: "read", pattern: "secrets/*", action: "deny" } as const]
+        const session = yield* createSession({ title: "original", permission })
+        const forked = yield* requestJson<Session.Info>(pathFor(SessionPaths.fork, { sessionID: session.id }), {
+          method: "POST",
+          headers,
+          body: JSON.stringify({}),
+        })
+        expect(forked.permission).toEqual(permission)
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+  )
+
   // Re-review of feat/verdict, 6: the worker being verified has bash and can call
   // this API. metadata.verify (what the verifier's verdict is checked against) is
   // written in-process by the goal loop only: the API refuses to write it, and an
@@ -898,18 +917,24 @@ describe("session HttpApi", () => {
         const test = yield* TestInstance
         const headers = { "x-opencode-directory": test.directory, "content-type": "application/json" }
         const deny = { permission: "read", pattern: "secrets/*", action: "deny" } as const
+        const ask = { permission: "bash", pattern: "*", action: "ask" } as const
         const parent = yield* requestJson<Session.Info>(SessionPaths.create, {
           method: "POST",
           headers,
-          body: JSON.stringify({ title: "worker", permission: [deny] }),
+          body: JSON.stringify({ title: "worker", permission: [deny, ask] }),
         })
         const allow = { permission: "read", pattern: "secrets/*", action: "allow" } as const
-        const child = yield* requestJson<Session.Info>(SessionPaths.create, {
-          method: "POST",
-          headers,
-          body: JSON.stringify({ title: "verifier", parentID: parent.id, agent: "verifier", permission: [allow] }),
-        })
-        expect(child.permission).toEqual([allow, deny])
+        const create = (agent: string, permission: unknown[]) =>
+          requestJson<Session.Info>(SessionPaths.create, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ title: agent, parentID: parent.id, agent, permission }),
+          })
+        // security re-review 1: asks too, after the child's own rules, and a rule the
+        // child already carries is still appended (a later allow cannot lift it)
+        expect((yield* create("general", [allow, deny])).permission).toEqual([allow, deny, deny, ask])
+        // for the verifier, an ask is a deny: nobody answers inside a goal loop
+        expect((yield* create("verifier", [allow])).permission).toEqual([allow, deny, { ...ask, action: "deny" }])
       }),
     { git: true, config: { formatter: false, lsp: false } },
   )

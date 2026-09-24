@@ -56,6 +56,10 @@ export function evaluate(permission: string, pattern: string, ...rulesets: Permi
   const lock = last(permission, pattern, VERIFIER_LOCK)
   if (other.action !== "allow") return { ...other, action: "deny" }
   if (lock.action !== "allow") return { ...lock, action: "deny" }
+  // rules after the lock (a caller's extra ruleset, such as approvals) are a side
+  // of their own: a deny or an ask there denies, an allow never lifts anything
+  const extra = locked.after.findLast((rule) => matches(rule, permission, pattern))
+  if (extra && extra.action !== "allow") return { ...extra, action: "deny" }
   return lock
 }
 
@@ -70,22 +74,24 @@ export function evaluate(permission: string, pattern: string, ...rulesets: Permi
 function split(rules: PermissionV1.Ruleset) {
   const mark = rules.findLastIndex((rule) => rule === LOCK_MARK)
   if (mark === -1) return undefined
-  const after = rules.slice(mark + 1 + VERIFIER_LOCK.length)
+  const asDeny = (rule: PermissionV1.Rule): PermissionV1.Rule => (rule.action === "ask" ? { ...rule, action: "deny" } : rule)
   return {
-    other: [...rules.slice(0, mark), ...after].map((rule): PermissionV1.Rule =>
-      rule.action === "ask" ? { ...rule, action: "deny" } : rule,
-    ),
+    other: rules.slice(0, mark).map(asDeny),
+    after: rules.slice(mark + 1 + VERIFIER_LOCK.length).map(asDeny),
   }
+}
+
+function matches(rule: PermissionV1.Rule, permission: string, pattern: string) {
+  return (
+    Wildcard.match(permission, rule.permission) &&
+    (Wildcard.match(pattern, rule.pattern) ||
+      (rule.action === "deny" && Wildcard.match(pattern.toLowerCase(), rule.pattern.toLowerCase())))
+  )
 }
 
 function last(permission: string, pattern: string, rules: PermissionV1.Ruleset): PermissionV1.Rule {
   return (
-    rules.findLast(
-      (rule) =>
-        Wildcard.match(permission, rule.permission) &&
-        (Wildcard.match(pattern, rule.pattern) ||
-          (rule.action === "deny" && Wildcard.match(pattern.toLowerCase(), rule.pattern.toLowerCase()))),
-    ) ?? {
+    rules.findLast((rule) => matches(rule, permission, pattern)) ?? {
       action: "ask",
       permission,
       pattern: "*",
@@ -378,10 +384,14 @@ export function effective(
  * Truncate.sessionDir), and none of it when the caller does not say which
  * session it runs in.
  */
+/** A session id as the schema accepts it (SessionID): no wildcard, dot, slash or space. */
+export const SESSION_ID = /^ses[A-Za-z0-9_-]*$/
+
 function archiveScope(sessionID: string | undefined): PermissionV1.Rule[] {
   return [
     { permission: "external_directory", pattern: path.join(TRUNCATION_DIR, "*"), action: "deny" },
-    ...(sessionID
+    // only a well-formed id: a wildcard or a path in it would widen or move the directory
+    ...(sessionID && SESSION_ID.test(sessionID)
       ? [{ permission: "external_directory", pattern: path.join(TRUNCATION_DIR, sessionID, "*"), action: "allow" as const }]
       : []),
   ]
@@ -392,7 +402,7 @@ export function disabled(tools: string[], ruleset: PermissionV1.Ruleset): Set<st
   const reads = ["list_mcp_resources", "list_mcp_resource_templates", "read_mcp_resource"]
   // for the verifier, the other rules (an ask counts as a deny) and the lock
   const locked = split(ruleset)
-  const sides = locked ? [locked.other, VERIFIER_LOCK] : [ruleset]
+  const sides = locked ? [locked.other, VERIFIER_LOCK, locked.after] : [ruleset]
   return new Set(
     tools.filter((tool) => {
       const permission = edits.includes(tool) ? "edit" : reads.includes(tool) ? "read" : tool
