@@ -10266,6 +10266,10 @@ export type SessionDeleteErrors = {
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
   /**
+   * Forbidden
+   */
+  403: EffectHttpApiErrorForbidden
+  /**
    * NotFoundError
    */
   404: NotFoundError
@@ -10531,6 +10535,10 @@ export type SessionPromptErrors = {
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
   /**
+   * Forbidden
+   */
+  403: EffectHttpApiErrorForbidden
+  /**
    * NotFoundError
    */
   404: NotFoundError
@@ -10568,6 +10576,10 @@ export type SessionDeleteMessageErrors = {
    * BadRequest | InvalidRequestError
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * Forbidden
+   */
+  403: EffectHttpApiErrorForbidden
   /**
    * NotFoundError
    */
@@ -10879,6 +10891,10 @@ export type SessionPromptAsyncErrors = {
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
   /**
+   * Forbidden
+   */
+  403: EffectHttpApiErrorForbidden
+  /**
    * NotFoundError
    */
   404: NotFoundError
@@ -10928,6 +10944,10 @@ export type SessionCommandErrors = {
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
   /**
+   * Forbidden
+   */
+  403: EffectHttpApiErrorForbidden
+  /**
    * NotFoundError
    */
   404: NotFoundError
@@ -10973,6 +10993,10 @@ export type SessionShellErrors = {
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
   /**
+   * Forbidden
+   */
+  403: EffectHttpApiErrorForbidden
+  /**
    * NotFoundError
    */
   404: NotFoundError
@@ -11017,6 +11041,10 @@ export type SessionRevertErrors = {
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
   /**
+   * Forbidden
+   */
+  403: EffectHttpApiErrorForbidden
+  /**
    * NotFoundError
    */
   404: NotFoundError
@@ -11054,6 +11082,10 @@ export type SessionUnrevertErrors = {
    * BadRequest | InvalidRequestError
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * Forbidden
+   */
+  403: EffectHttpApiErrorForbidden
   /**
    * NotFoundError
    */
@@ -11132,6 +11164,10 @@ export type PartDeleteErrors = {
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
   /**
+   * Forbidden
+   */
+  403: EffectHttpApiErrorForbidden
+  /**
    * NotFoundError
    */
   404: NotFoundError
@@ -11167,6 +11203,10 @@ export type PartUpdateErrors = {
    * BadRequest | InvalidRequestError
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * Forbidden
+   */
+  403: EffectHttpApiErrorForbidden
   /**
    * NotFoundError
    */

@@ -273,7 +273,7 @@ export const ClientRuleset = PermissionV1.Ruleset.check(
  * rewrite what its verdict is checked against. A client's metadata update keeps
  * them, and a fork drops them: a fork is neither the verification nor the loop.
  */
-export const HOST_METADATA = ["verify", "goal", "lastVerdict"] as const
+export const HOST_METADATA = ["verify", "goal", "lastVerdict", "verifyRecord"] as const
 
 /** `metadata` without the host-written keys: for a session that is a copy (a fork, an import). */
 export function withoutHostMetadata(metadata: Record<string, unknown>) {

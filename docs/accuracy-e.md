@@ -679,6 +679,25 @@ It fails open like the rest of the checkpoint: a record that cannot be read is l
 call the goal endpoint itself. The security review replaced that with the host token above: the
 worker's shell cannot write the goal through the API. Every change is still kept and shown.
 
+**Sealed verifier sessions (re-review of branch 2).** What the verdict tool checks against lived
+in the verifier session's message storage, which clients could write without a token. So:
+
+- **The session is sealed.** A session with `metadata.verify`, or with checks the host ran,
+  refuses these routes without the host token (403): `prompt`, `prompt_async`, `command`,
+  `shell`, `revert`, `unrevert`, the part update, the part delete, the message delete and the
+  session delete.
+- **Checks are recorded on the host.** A `shell` run with the token seals the session before
+  it runs. When the run finishes, it records the check in `metadata.verifyRecord.checks[partID]`:
+  `{ exit, sha256, length }` of its output, a host-only key written under the metadata lock. The
+  tool reads a check's exit from there. A check counts only while its part's output still
+  matches the recorded hash. A run with no record, or whose part changed, reads as not finished:
+  it cannot be cited, and it blocks a PASS.
+- **Submissions are recorded on the host.** The tool keeps the submission count and "recorded"
+  in the same record. Deleting parts, or a revert, cannot reset them. A recorded verdict is
+  final: to verify again, the host starts a new verifier session. This replaces re-review 5 of
+  Phase 2, where a revert re-opened a verification.
+- **No client writes a tool part**, on any session (`PATCH …/part/:id` with `type: "tool"` is 400).
+
 **Threat model: what the API checks do not stop.** Everything above is enforced at the API layer
 of a server that runs as the same OS user as the worker's shell. That worker can still:
 
