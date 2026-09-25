@@ -460,6 +460,9 @@ type VerifierSessionMetadata = {
      *  when git cannot write a snapshot), or a base git cannot diff against: every diff citation
      *  fails with "no host snapshot for this verification; diff citations are unavailable". */
     base?: string
+    /** The id of the worker session's goal this verification is for (11.8, ruled 2026-09-24).
+     *  The verdict is refused once that is no longer the worker's active goal. */
+    goal?: string
     /** The acceptance criteria the user declared, verbatim. Each must be judged with its text as
      *  written (case and spacing aside), or a PASS is stored as PARTIAL. Absent or []: the
      *  verifier derives its own criteria, as section 2 describes. Non-string entries are ignored. */
@@ -528,7 +531,7 @@ and the loop's settings UI should tell the user.
   supervises, is refused hover by its lock (`VERIFIER_LOCK` lsp `hover: "deny"`); it has
   goToDefinition and read, which are filtered by the read rules.
 
-### 11.8 Phase 3 (Records): design note (2026-09-24, for review)
+### 11.8 Phase 3 (Records): design note (2026-09-24, approved with the rulings at the end)
 
 Phase 3 gives the host three records: the goal and the snapshot it started from, the last verdict,
 and the todo items a verdict found met. Compaction reads them, so the checkpoint shows the goal
@@ -559,27 +562,39 @@ swapped on the way back, so instead the server takes the snapshot and keeps it:
     criteria?: string[]
     base?: string         // Snapshot.track(); absent when git could not write a snapshot
     startedAt: number
-    changes?: { text: string; at: number }[]  // earlier goals of this session, newest last, capped at 10
+    endedAt?: number
+    history: GoalChange[] // every change, oldest first; appended, never rewritten
     lastVerdict?: LastVerdict                 // item 2
+  }
+  type GoalChange = {
+    type: "set" | "replace" | "end"
+    at: number
+    via: "api"            // every change so far comes through the endpoint (ruling 5)
+    goal: string          // the goal id the change set or ended
+    text?: string         // for set and replace
   }
   ```
 
   The response is `{ id, base: string | null, startedAt }`, so the loop can warn when `base` is
   null. Its diff citations will then be unavailable (the error ruled in 80acc1bdab).
-- `DELETE /experimental/session/:id/goal` ends the goal: it sets `endedAt` and keeps the record.
+- `DELETE /experimental/session/:id/goal` ends the goal: it sets `endedAt`, appends an `end` change
+  and keeps the record.
 - The client-metadata filter that refuses `verify` (11.5) refuses `goal` too, on session create and
   update (400). An update of other metadata keeps the existing `goal`, and a fork drops it, as it
   does `verify`.
-- Starting a goal while one is active replaces it. The old text moves into `changes`, and the
-  checkpoint says the goal was changed and when. Phase 4's server-side "start verification" copies
+- Starting a goal while one is active replaces it (a `replace` change; `set` when none is active),
+  and the checkpoint says the goal was changed via the API and when. Phase 4's server-side "start verification" copies
   `goal.base` and `goal.criteria` into the verifier's `verify`, with a new field
   **`verify.goal = goal.id`** (an addition to the 11.5 contract). The base never goes through the
   client.
 
 **2. The last verdict.** It is written by the `verdict` tool when a verdict is recorded, onto the
 worker session: the verifier session's `parentID`. It is written only while that session's
-`goal.id` equals the verification's `verify.goal`, so a stale verifier cannot overwrite a newer
-goal's result.
+`goal.id` equals the verification's `verify.goal` and the goal has not ended, so a stale verifier
+cannot overwrite a newer goal's result. A verdict for a stale goal is refused, and nothing is
+recorded: "this verification is for goal <id>, which is no longer the session's goal; the verdict
+is not recorded". A verifier session without `verify.goal` (none outside the loop can have
+`verify`, 11.5) records its verdict in its own session only.
 
 ```ts
 type LastVerdict = {
@@ -616,10 +631,12 @@ checked. Reads: `Todo.verified(sessionID)` returns `Map<contentKey, time>`, and 
 `GET /experimental/session/:id/todo/evidence` serves the todo dock (accuracy-ui §3).
 
 **4. Compaction.** `writeCheckpoint` passes `goal` and `verified` to `Checkpoint.build`. `Input`
-gains `lastVerdict` and `goalChangedAt`, which add, capped, to the goal line:
+gains `lastVerdict` and `goalChanges` (the `replace` and `end` entries of the history), which add,
+capped, to the goal line:
 
 ```
 Goal loop: <text>. Last verdict: FAIL 3m ago; unmet: <criterion>, <criterion> (+2).
+Goal changed via API: replaced 12m ago; ended 2m ago.
 ```
 
 It fails open like the rest of the checkpoint: a record that cannot be read is left out and logged.
@@ -628,27 +645,37 @@ It fails open like the rest of the checkpoint: a record that cannot be read is l
 
 - `session.test.ts` / `httpapi-session.test.ts`: `goal` is refused on create and update, kept on
   update, and dropped on fork. The goal endpoint writes `base` from `track()`; it returns
-  `base: null` when `track()` returns undefined. A second start fills `changes`.
+  `base: null` when `track()` returns undefined. A second start appends a `replace` change, an end
+  an `end` change, and no earlier entry changes.
 - `tool/verdict.test.ts`:
   - a recorded verdict writes `lastVerdict` and the met todos onto the parent;
   - a rejected submission writes nothing;
-  - a `verify.goal` that differs from the parent's `goal.id` writes nothing;
+  - a `verify.goal` that differs from the parent's `goal.id`, or names an ended goal, is refused
+    with the stale-goal error, and nothing is recorded;
   - an unmet todo deletes its row.
 - `checkpoint.test.ts` and `compaction.test.ts`: the goal line, the last verdict, the "changed" note,
   and verified marks from the table; a missing record leaves its line out.
 - The migration test that the existing tables use.
 
-**Accepted risk, for a ruling.** The worker can still call the goal endpoint itself: it can replace
-the goal or end it. That cannot be told apart from the app over the local API. It stays visible,
-because every change is kept and the checkpoint shows it. It cannot forge a verdict, a verified
-todo or a snapshot. Removing the risk needs a credential the app has and the worker's shell does
-not (the server password is read from the server's environment, which shells may inherit). That is
-outside Phase 3.
+**Accepted risk.** The worker can still call the goal endpoint itself: it can replace the goal or
+end it. That cannot be told apart from the app over the local API. It stays visible, because every
+change is kept and the checkpoint shows it. It cannot forge a verdict, a verified todo or a
+snapshot. Removing the risk needs a credential the app has and the worker's shell does not (the
+server password is read from the server's environment, which shells may inherit). That is outside
+Phase 3.
 
-**Needs a ruling:**
+**Rulings (2026-09-24).**
 
-1. The goal endpoint in place of a snapshot-hash endpoint.
-2. `verify.goal` added to the 11.5 contract.
-3. `lastVerdict` written by the tool, not the loop.
-4. The latest verification wins, and an unmet report deletes the row.
-5. The accepted risk above.
+1. The goal endpoint takes the snapshot on the server and stores it in `metadata.goal`, which clients
+   cannot set: accepted. Every goal change is appended to `history` with its time and type
+   (`set`, `replace`, `end`), never overwritten.
+2. `verify.goal = goal.id` in the 11.5 contract: accepted.
+3. The `verdict` tool writes `lastVerdict` onto the worker session while the goal id matches:
+   accepted. A verdict for a stale goal is refused with a clear error.
+4. `todo_evidence`: the latest verification wins, and a later "not met" clears the mark: accepted.
+5. The accepted risk, on condition that every goal change made through the endpoint is flagged
+   "changed via API" in the checkpoint and in the UI's goal history (`via: "api"` on each change),
+   so a person sees it.
+
+Implemented as three PRs, each red-first: the goal record and its endpoints; the verdict records
+and `todo_evidence`; the checkpoint.

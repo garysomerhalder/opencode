@@ -44,6 +44,12 @@ import type {
   ExperimentalResourceListResponses,
   ExperimentalSessionBackgroundErrors,
   ExperimentalSessionBackgroundResponses,
+  ExperimentalSessionGoalEndErrors,
+  ExperimentalSessionGoalEndResponses,
+  ExperimentalSessionGoalGetErrors,
+  ExperimentalSessionGoalGetResponses,
+  ExperimentalSessionGoalStartErrors,
+  ExperimentalSessionGoalStartResponses,
   ExperimentalSessionListErrors,
   ExperimentalSessionListResponses,
   ExperimentalShellTaskListErrors,
@@ -137,7 +143,7 @@ import type {
   PermissionReplyResponses,
   PermissionRespondErrors,
   PermissionRespondResponses,
-  PermissionRuleset,
+  PermissionRule,
   PermissionV2Reply,
   PermissionV2Source,
   PluginConfigureErrors,
@@ -820,6 +826,125 @@ export class Console extends HeyApiClient {
   }
 }
 
+export class Goal extends HeyApiClient {
+  /**
+   * End a session's goal
+   *
+   * End the session's active goal, keeping its record and appending the change to its history. Not found when no goal is active.
+   */
+  public end<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).delete<
+      ExperimentalSessionGoalEndResponses,
+      ExperimentalSessionGoalEndErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/session/{sessionID}/goal",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Get a session's goal
+   *
+   * The session's goal record with its full change history. Not found when it has never had one.
+   */
+  public get<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      ExperimentalSessionGoalGetResponses,
+      ExperimentalSessionGoalGetErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/session/{sessionID}/goal",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Set or replace a session's goal
+   *
+   * Set the goal a goal loop drives the session with, replacing the active one. The server takes the snapshot the goal starts from (base is null when it could not) and appends the change to the goal's history, flagged as made via the API.
+   */
+  public start<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+      text?: string
+      criteria?: Array<string>
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "text" },
+            { in: "body", key: "criteria" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      ExperimentalSessionGoalStartResponses,
+      ExperimentalSessionGoalStartErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/session/{sessionID}/goal",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
 export class Session extends HeyApiClient {
   /**
    * List sessions
@@ -901,6 +1026,11 @@ export class Session extends HeyApiClient {
       ...options,
       ...params,
     })
+  }
+
+  private _goal?: Goal
+  get goal(): Goal {
+    return (this._goal ??= new Goal({ client: this.client }))
   }
 }
 
@@ -3792,7 +3922,7 @@ export class Session2 extends HeyApiClient {
       metadata?: {
         [key: string]: unknown
       }
-      permission?: PermissionRuleset
+      permission?: Array<PermissionRule>
       workspaceID?: string
     },
     options?: Options<never, ThrowOnError>,
@@ -3935,7 +4065,7 @@ export class Session2 extends HeyApiClient {
       metadata?: {
         [key: string]: unknown
       }
-      permission?: PermissionRuleset
+      permission?: Array<PermissionRule>
       time?: {
         archived?: number
       }

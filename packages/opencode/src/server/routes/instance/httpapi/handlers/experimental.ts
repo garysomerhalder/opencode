@@ -7,6 +7,7 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { MCP } from "@/mcp"
 import { Project } from "@/project/project"
 import { Session } from "@/session/session"
+import { SessionGoal } from "@/session/goal"
 import type { SessionID } from "@/session/schema"
 import { ToolJsonSchema } from "@/tool/json-schema"
 import { ToolRegistry } from "@/tool/registry"
@@ -37,6 +38,7 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
     const background = yield* BackgroundJob.Service
     const tasks = yield* ShellTasks.Service
     const flags = yield* RuntimeFlags.Service
+    const goals = yield* SessionGoal.Service
 
     const capabilities = Effect.fn("ExperimentalHttpApi.capabilities")(function* () {
       return { backgroundSubagents: flags.experimentalBackgroundSubagents }
@@ -158,6 +160,30 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
       })
     })
 
+    // The goal record (docs/accuracy-e.md §11.8). A session that does not exist,
+    // and a goal that is not there, are both not found.
+    const notFound = Effect.mapError(() => new HttpApiError.NotFound({}))
+    const sessionGoalStart = Effect.fn("ExperimentalHttpApi.sessionGoalStart")(function* (ctx: {
+      params: { sessionID: SessionID }
+      payload: SessionGoal.Input
+    }) {
+      return yield* goals.start(ctx.params.sessionID, ctx.payload).pipe(notFound)
+    })
+    const sessionGoal = Effect.fn("ExperimentalHttpApi.sessionGoal")(function* (ctx: {
+      params: { sessionID: SessionID }
+    }) {
+      const goal = yield* goals.get(ctx.params.sessionID).pipe(notFound)
+      if (!goal) return yield* new HttpApiError.NotFound({})
+      return goal
+    })
+    const sessionGoalEnd = Effect.fn("ExperimentalHttpApi.sessionGoalEnd")(function* (ctx: {
+      params: { sessionID: SessionID }
+    }) {
+      const goal = yield* goals.end(ctx.params.sessionID).pipe(notFound)
+      if (!goal) return yield* new HttpApiError.NotFound({})
+      return goal
+    })
+
     const sessionBackground = Effect.fn("ExperimentalHttpApi.sessionBackground")(function* (ctx: {
       params: { sessionID: SessionID }
     }) {
@@ -214,6 +240,9 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
       .handle("worktreeReset", worktreeReset)
       .handle("session", session)
       .handle("sessionBackground", sessionBackground)
+      .handle("sessionGoalStart", sessionGoalStart)
+      .handle("sessionGoal", sessionGoal)
+      .handle("sessionGoalEnd", sessionGoalEnd)
       .handle("shellTasks", shellTasks)
       .handle("shellTasksStop", shellTasksStop)
       .handle("shellTaskStop", shellTaskStop)

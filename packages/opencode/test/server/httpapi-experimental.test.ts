@@ -237,6 +237,57 @@ describe("experimental HttpApi", () => {
     }),
   )
 
+  // Phase 3 of accuracy E (docs/accuracy-e.md §11.8): the goal endpoint.
+  it.instance(
+    "sets, replaces, reads and ends a session's goal, flagging every change as via the API",
+    () =>
+      Effect.gen(function* () {
+        const tmp = yield* TestInstance
+        const session = yield* createSession({ title: "worker" })
+        const goalPath = ExperimentalPaths.sessionGoal.replace(":sessionID", session.id)
+        const post = (body: unknown) =>
+          request(goalPath, tmp.directory, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(body),
+          })
+
+        expect((yield* request(goalPath, tmp.directory)).status).toBe(404)
+        expect((yield* request(goalPath, tmp.directory, { method: "DELETE" })).status).toBe(404)
+        expect((yield* post({ text: "" })).status).toBe(400)
+        expect((yield* post({ text: "x".repeat(4_001) })).status).toBe(400)
+        // the base is the server's snapshot, never one the client names
+        const forged = "0000000000000000000000000000000000000000"
+        const set = yield* post({ text: "cap the output", criteria: ["capped at 4 KB"], base: forged })
+        expect(set.status).toBe(200)
+        const started = yield* json<{ id: string; base: string | null; startedAt: number }>(set)
+        expect(started.base).toMatch(/^[0-9a-f]{40}$/)
+        expect(started.base).not.toBe(forged)
+        const replaced = yield* json<{ id: string }>(yield* post({ text: "cap it lower" }))
+
+        const read = yield* request(goalPath, tmp.directory)
+        expect(read.status).toBe(200)
+        const goal = yield* json<{ id: string; text: string; history: Array<Record<string, unknown>> }>(read)
+        expect(goal.id).toBe(replaced.id)
+        expect(goal.text).toBe("cap it lower")
+        expect(JSON.stringify(goal)).not.toContain(forged)
+        expect(goal.history.map((change) => [change.type, change.via])).toEqual([
+          ["set", "api"],
+          ["replace", "api"],
+        ])
+
+        const ended = yield* request(goalPath, tmp.directory, { method: "DELETE" })
+        expect(ended.status).toBe(200)
+        const after = yield* json<{ endedAt?: number; history: Array<Record<string, unknown>> }>(ended)
+        expect(after.endedAt).toBeNumber()
+        expect(after.history.at(-1)).toMatchObject({ type: "end", via: "api", goal: replaced.id })
+
+        const missing = ExperimentalPaths.sessionGoal.replace(":sessionID", "ses_missing")
+        expect((yield* request(missing, tmp.directory)).status).toBe(404)
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+  )
+
   it.instance("returns declared worktree errors", () =>
     Effect.gen(function* () {
       const tmp = yield* TestInstance

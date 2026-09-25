@@ -267,16 +267,26 @@ export const ClientRuleset = PermissionV1.Ruleset.check(
 )
 
 /**
- * Session metadata a client sends: anything but `verify`, which the goal loop
- * writes in-process on a verifier's session (docs/accuracy-e.md §11.5). The
- * worker being verified can call this API, so it must not rewrite what its
- * verdict is checked against.
+ * Metadata keys only the host writes, in-process: `verify` on a verifier's
+ * session (docs/accuracy-e.md §11.5) and `goal` on a worker's (§11.8, written by
+ * SessionGoal). The worker being verified can call this API, so it must not
+ * rewrite what its verdict is checked against. A client's metadata update keeps
+ * them, and a fork drops them: a fork is neither the verification nor the loop.
  */
+export const HOST_METADATA = ["verify", "goal"] as const
+
 export const ClientMetadata = Metadata.check(
-  Schema.makeFilter((metadata) =>
-    Object.hasOwn(metadata, "verify") ? "metadata.verify is written by the goal loop only" : undefined,
-  ),
+  Schema.makeFilter((metadata) => {
+    const key = HOST_METADATA.find((key) => Object.hasOwn(metadata, key))
+    return key ? `metadata.${key} is written by the host only` : undefined
+  }),
 )
+
+/** `metadata` with the host-written keys of `current` put back (see HOST_METADATA). */
+export function keepHostMetadata(metadata: Record<string, unknown>, current: Record<string, unknown> | undefined) {
+  const kept = Object.fromEntries(HOST_METADATA.flatMap((key) => (current?.[key] === undefined ? [] : [[key, current[key]]])))
+  return { ...metadata, ...kept }
+}
 
 export const CreateInput = Schema.optional(
   Schema.Struct({
@@ -742,10 +752,15 @@ const layer: Layer.Layer<
         path: sessionPath(ctx.worktree, ctx.directory),
         workspaceID: original.workspaceID,
         title,
-        // not the goal loop's verify: a fork is not the verification it came from,
-        // and its copied parts have new ids, so its checks would not match anyway
+        // not the host's verify or goal: a fork is not the verification or the goal
+        // loop it came from, and its copied parts have new ids, so its checks would
+        // not match anyway
         metadata: original.metadata
-          ? Object.fromEntries(Object.entries(structuredClone(original.metadata)).filter(([key]) => key !== "verify"))
+          ? Object.fromEntries(
+              Object.entries(structuredClone(original.metadata)).filter(
+                ([key]) => !(HOST_METADATA as readonly string[]).includes(key),
+              ),
+            )
           : undefined,
         // a fork keeps the session's rules: forking must not shed a deny
         permission: original.permission ? [...original.permission] : undefined,

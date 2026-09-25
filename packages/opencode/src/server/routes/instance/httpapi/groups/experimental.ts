@@ -3,6 +3,7 @@ import { MCP } from "@/mcp"
 
 import { Session } from "@/session/session"
 import { SessionID } from "@/session/schema"
+import { SessionGoal } from "@/session/goal"
 import { Worktree } from "@/worktree"
 import { NonNegativeInt } from "@opencode-ai/core/schema"
 import { Schema } from "effect"
@@ -114,6 +115,7 @@ export const ExperimentalPaths = {
   worktreeReset: "/experimental/worktree/reset",
   session: "/experimental/session",
   sessionBackground: "/experimental/session/:sessionID/background",
+  sessionGoal: "/experimental/session/:sessionID/goal",
   shellTasks: "/experimental/shell/task",
   shellTasksStop: "/experimental/shell/task/stop",
   shellTaskStop: "/experimental/shell/task/:taskID/stop",
@@ -262,6 +264,45 @@ export const ExperimentalApi = HttpApi.make("experimental")
             summary: "Background subagents",
             description:
               "Detach any synchronous subagents currently blocking the session and continue them in the background.",
+          }),
+        ),
+        HttpApiEndpoint.post("sessionGoalStart", ExperimentalPaths.sessionGoal, {
+          params: { sessionID: SessionID },
+          query: WorkspaceRoutingQuery,
+          payload: SessionGoal.Input,
+          success: described(SessionGoal.Started, "The goal, and the snapshot it starts from"),
+          error: HttpApiError.NotFound,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "experimental.session.goal.start",
+            summary: "Set or replace a session's goal",
+            description:
+              "Set the goal a goal loop drives the session with, replacing the active one. The server takes the snapshot the goal starts from (base is null when it could not) and appends the change to the goal's history, flagged as made via the API.",
+          }),
+        ),
+        HttpApiEndpoint.get("sessionGoal", ExperimentalPaths.sessionGoal, {
+          params: { sessionID: SessionID },
+          query: WorkspaceRoutingQuery,
+          success: described(SessionGoal.Record, "The session's goal record, active or ended"),
+          error: HttpApiError.NotFound,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "experimental.session.goal.get",
+            summary: "Get a session's goal",
+            description: "The session's goal record with its full change history. Not found when it has never had one.",
+          }),
+        ),
+        HttpApiEndpoint.delete("sessionGoalEnd", ExperimentalPaths.sessionGoal, {
+          params: { sessionID: SessionID },
+          query: WorkspaceRoutingQuery,
+          success: described(SessionGoal.Record, "The ended goal record"),
+          error: HttpApiError.NotFound,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "experimental.session.goal.end",
+            summary: "End a session's goal",
+            description:
+              "End the session's active goal, keeping its record and appending the change to its history. Not found when no goal is active.",
           }),
         ),
         HttpApiEndpoint.get("shellTasks", ExperimentalPaths.shellTasks, {

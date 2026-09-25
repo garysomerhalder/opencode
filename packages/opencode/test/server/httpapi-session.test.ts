@@ -877,6 +877,39 @@ describe("session HttpApi", () => {
     { git: true, config: { formatter: false, lsp: false } },
   )
 
+  // Phase 3 (docs/accuracy-e.md §11.8): metadata.goal holds the snapshot the goal
+  // started from and its history. The goal endpoint writes it; plain metadata
+  // writes may not, and keep it.
+  it.instance(
+    "refuses to write metadata.goal, and keeps it when other metadata changes",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const headers = { "x-opencode-directory": test.directory, "content-type": "application/json" }
+        const goal = { id: "goal_1", text: "cap the output", startedAt: 1, history: [] }
+        const created = yield* request(SessionPaths.create, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ title: "worker", metadata: { goal } }),
+        })
+        expect(created.status).toBe(400)
+        const session = yield* createSession({ title: "worker" })
+        const sessions = yield* Session.Service
+        yield* sessions.setMetadata({ sessionID: session.id, metadata: { goal } })
+        const update = (metadata: Record<string, unknown>) =>
+          request(pathFor(SessionPaths.update, { sessionID: session.id }), {
+            method: "PATCH",
+            headers,
+            body: JSON.stringify({ metadata }),
+          })
+        expect((yield* update({ goal: { ...goal, lastVerdict: { verdict: "PASS" } } })).status).toBe(400)
+        const other = yield* update({ note: "hello" })
+        expect(other.status).toBe(200)
+        expect((yield* json<Session.Info>(other)).metadata).toEqual({ note: "hello", goal })
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+  )
+
   // Security review of the verifier lock: the lock's divider is found by identity,
   // and its name is reserved, so no client can put a rule with that name on a session.
   it.instance(

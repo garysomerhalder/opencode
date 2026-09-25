@@ -746,6 +746,35 @@ const scenarios: Scenario[] = [
     .json(200, (body) => {
       check(body === false, "background route should be a no-op without running subagents")
     }),
+  http.protected
+    .post("/experimental/session/{sessionID}/goal", "experimental.session.goal.start")
+    .mutating()
+    .seeded((ctx) => ctx.session({ title: "Goal route owner" }))
+    .at((ctx) => ({
+      path: route("/experimental/session/{sessionID}/goal", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+      body: { text: "cap the output" },
+    }))
+    .json(200, (body) => {
+      check(typeof body === "object" && body !== null && "id" in body && "base" in body, "goal start returns id and base")
+    }),
+  http.protected
+    .get("/experimental/session/{sessionID}/goal", "experimental.session.goal.get")
+    .seeded((ctx) => ctx.session({ title: "Goal route reader" }))
+    .at((ctx) => ({
+      path: route("/experimental/session/{sessionID}/goal", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+    }))
+    .status(404),
+  http.protected
+    .delete("/experimental/session/{sessionID}/goal", "experimental.session.goal.end")
+    .mutating()
+    .seeded((ctx) => ctx.session({ title: "Goal route ender" }))
+    .at((ctx) => ({
+      path: route("/experimental/session/{sessionID}/goal", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+    }))
+    .status(404),
   http.protected.get("/experimental/resource", "experimental.resource.list").json(),
   http.protected
     .post("/sync/history", "sync.history.list")

@@ -8002,6 +8002,159 @@ export type ExperimentalSessionBackgroundResponses = {
 export type ExperimentalSessionBackgroundResponse =
   ExperimentalSessionBackgroundResponses[keyof ExperimentalSessionBackgroundResponses]
 
+export type ExperimentalSessionGoalEndData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/session/{sessionID}/goal"
+}
+
+export type ExperimentalSessionGoalEndErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type ExperimentalSessionGoalEndError = ExperimentalSessionGoalEndErrors[keyof ExperimentalSessionGoalEndErrors]
+
+export type ExperimentalSessionGoalEndResponses = {
+  /**
+   * The ended goal record
+   */
+  200: {
+    id: string
+    text: string
+    criteria?: Array<string>
+    base?: string
+    startedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    endedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    history: Array<{
+      type: "set" | "replace" | "end"
+      at: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      via: "api"
+      goal: string
+      text?: string
+    }>
+    lastVerdict?: {
+      verdict: "PASS" | "PARTIAL" | "FAIL"
+      at: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      verifierSessionID: string
+      unmet: Array<string>
+    }
+  }
+}
+
+export type ExperimentalSessionGoalEndResponse =
+  ExperimentalSessionGoalEndResponses[keyof ExperimentalSessionGoalEndResponses]
+
+export type ExperimentalSessionGoalGetData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/session/{sessionID}/goal"
+}
+
+export type ExperimentalSessionGoalGetErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type ExperimentalSessionGoalGetError = ExperimentalSessionGoalGetErrors[keyof ExperimentalSessionGoalGetErrors]
+
+export type ExperimentalSessionGoalGetResponses = {
+  /**
+   * The session's goal record, active or ended
+   */
+  200: {
+    id: string
+    text: string
+    criteria?: Array<string>
+    base?: string
+    startedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    endedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    history: Array<{
+      type: "set" | "replace" | "end"
+      at: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      via: "api"
+      goal: string
+      text?: string
+    }>
+    lastVerdict?: {
+      verdict: "PASS" | "PARTIAL" | "FAIL"
+      at: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      verifierSessionID: string
+      unmet: Array<string>
+    }
+  }
+}
+
+export type ExperimentalSessionGoalGetResponse =
+  ExperimentalSessionGoalGetResponses[keyof ExperimentalSessionGoalGetResponses]
+
+export type ExperimentalSessionGoalStartData = {
+  body?: {
+    text: string
+    criteria?: Array<string>
+  }
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/session/{sessionID}/goal"
+}
+
+export type ExperimentalSessionGoalStartErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type ExperimentalSessionGoalStartError =
+  ExperimentalSessionGoalStartErrors[keyof ExperimentalSessionGoalStartErrors]
+
+export type ExperimentalSessionGoalStartResponses = {
+  /**
+   * The goal, and the snapshot it starts from
+   */
+  200: {
+    id: string
+    base: string
+    startedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+}
+
+export type ExperimentalSessionGoalStartResponse =
+  ExperimentalSessionGoalStartResponses[keyof ExperimentalSessionGoalStartResponses]
+
 export type ExperimentalShellTaskListData = {
   body?: never
   path?: never
@@ -9956,7 +10109,7 @@ export type SessionCreateData = {
     metadata?: {
       [key: string]: unknown
     }
-    permission?: PermissionRuleset
+    permission?: Array<PermissionRule>
     workspaceID?: string
   }
   path?: never
@@ -10089,7 +10242,7 @@ export type SessionUpdateData = {
     metadata?: {
       [key: string]: unknown
     }
-    permission?: PermissionRuleset
+    permission?: Array<PermissionRule>
     time?: {
       archived?: number
     }

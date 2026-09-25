@@ -449,8 +449,15 @@ describe("tool.verdict: submissions", () => {
       const listed = yield* record(session.id, ShellID.ToolID, "call_tests", shell(0, "15 pass", "user"))
       yield* goal(session.id, { criteria: ["the output is capped"], checks: [listed] })
       const sessions = yield* Session.Service
+      yield* sessions.setMetadata({
+        sessionID: session.id,
+        metadata: { ...(yield* sessions.get(session.id)).metadata, goal: { id: "goal_1" }, note: "kept" },
+      })
       const forked = yield* sessions.fork({ sessionID: session.id })
       expect(forked.metadata?.verify).toBeUndefined()
+      // nor the worker's goal record (§11.8): a fork is a new session, not the loop's
+      expect(forked.metadata?.goal).toBeUndefined()
+      expect(forked.metadata?.note).toBe("kept")
       const cite = passWith([{ kind: "check", callID: "call_tests", exit: 0, excerpt: "15 pass" }])
       expect((yield* submit(forked.id, cite)).error).toContain("there is no check call_tests in this verification")
     }),
