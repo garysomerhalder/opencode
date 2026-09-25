@@ -1884,7 +1884,8 @@ describe("session.compaction.process", () => {
         expect(checkpoint?.text).toContain("Goal loop: Ship receipts. Last verdict: FAIL 0 min ago; unmet: receipts are capped.")
         expect(checkpoint?.text).toContain("Goal changes: (+3 earlier) set 2 min ago; replaced 1 min ago.")
         expect(checkpoint?.text).toContain("Goal base changed 1 time since the first goal was set")
-        expect(checkpoint?.text).toContain("[completed · verified 0 min ago] Wire the receipt envelope")
+        expect(checkpoint?.text).toContain("[completed] Wire the receipt envelope")
+        expect(checkpoint?.text).toContain("Verified by the independent check: items 1 (the latest 0 min ago).")
         expect(checkpoint?.text).toContain("[completed] Cap receipts")
       }).pipe(withCompaction({ llm: stub.llmLayer }))
     },

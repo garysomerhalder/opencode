@@ -667,6 +667,14 @@ Goal base changed 1 time since the first goal was set: the diff for this goal st
 
 An ended goal has no goal line, but its changes, the end included, are still listed.
 
+Verified todos are shown on a separate line the host builds after the list, for example
+`Verified by the independent check: items 2, 5 (the latest 3 min ago).`, never inside an item's
+status. A status is the agent's text: one of `pending`, `in_progress`, `completed` or `cancelled`
+is shown as it is, and anything else is quoted (`[status "…"]`), so it cannot pass for a
+verification (re-review of branch 3). Every line the checkpoint prints from such text is
+flattened: line breaks, NEL and the Unicode line and paragraph separators become a space, and
+other C0 and C1 control characters are dropped.
+
 It fails open like the rest of the checkpoint: a record that cannot be read is left out and logged.
 
 **Red-first tests.**

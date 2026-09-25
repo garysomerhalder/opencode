@@ -80,7 +80,7 @@ export interface Input {
   readonly goal?: string
   /** The last verdict on that goal (accuracy E §11.8): the criteria it did not find met. */
   readonly lastVerdict?: { readonly verdict: string; readonly at: number; readonly unmet: ReadonlyArray<string> }
-  /** Every change to the goal, oldest first; all are made through the API (§11.8, ruling 5). */
+  /** Every change to the goal the record lists, oldest first; each made by the host, with its token (§11.8). */
   readonly goalChanges?: ReadonlyArray<{ readonly type: "set" | "replace" | "end"; readonly at: number }>
   /** Older changes the record no longer lists (it keeps the latest 200). */
   readonly goalChangesElided?: number
@@ -88,6 +88,9 @@ export interface Input {
   readonly goalBaseChanges?: number
 }
 
+/** The todo statuses todowrite declares; any other status is quoted as the agent's text. */
+const STATUSES = new Set(["pending", "in_progress", "completed", "cancelled"])
+const STATUS_BYTES = 60
 const UNMET_SHOWN = 3
 const UNMET_BYTES = 120
 const CHANGES_SHOWN = 5
@@ -160,12 +163,15 @@ function render(
       input.todosWrittenAt === undefined
         ? ""
         : ` (last written ${ago(input.now - input.todosWrittenAt)}${input.stepsSince === undefined ? "" : `, ${input.stepsSince} steps ago`})`
-    record.push(`Todo list, from todowrite${when}. Statuses are as the agent declared them, unless marked verified:`)
+    record.push(
+      `Todo list, from todowrite${when}. Statuses are as the agent declared them; what an independent check verified is on its own line after the list:`,
+    )
     // items beyond the shown counts are hidden, the earliest-listed kept
     let completedLeft = shown.completed
     let openLeft = shown.open
     const hiddenCompleted = input.todos.filter((todo) => todo.status === "completed").length - shown.completed
     const hiddenOpen = input.todos.filter((todo) => todo.status !== "completed").length - shown.open
+    const verifiedShown: { item: number; at: number }[] = []
     input.todos.forEach((todo, index) => {
       if (todo.status === "completed") {
         if (completedLeft === 0) return
@@ -176,11 +182,19 @@ function render(
         openLeft--
       }
       const at = input.verified?.get(contentKey(todo.content))
-      const status = at === undefined ? todo.status : `${todo.status} · verified ${ago(input.now - at)}`
-      record.push(`  ${index + 1}. [${line(status)}] ${line(todo.content)}`)
+      if (at !== undefined) verifiedShown.push({ item: index + 1, at })
+      // The status is the agent's text: one of the todo statuses as it is, anything
+      // else quoted, so it cannot pass for something the host wrote (a verification)
+      const status = STATUSES.has(todo.status) ? todo.status : `status "${line(todo.status, STATUS_BYTES)}"`
+      record.push(`  ${index + 1}. [${status}] ${line(todo.content)}`)
     })
     if (hiddenOpen > 0) record.push(`  (+${hiddenOpen} more open todos not shown, over the size cap)`)
     if (hiddenCompleted > 0) record.push(`  (${hiddenCompleted} completed items not shown)`)
+    // what the independent check verified: the host's own line, never an item's status
+    if (verifiedShown.length > 0)
+      record.push(
+        `Verified by the independent check: items ${verifiedShown.map((item) => item.item).join(", ")} (the latest ${ago(input.now - Math.max(...verifiedShown.map((item) => item.at)))}).`,
+      )
   }
   record.push("")
 
@@ -341,8 +355,14 @@ function escape(text: string) {
 }
 
 /** One line of the record: newlines flattened, frame tags escaped, capped. */
+// Line breaks, NEL and the Unicode line and paragraph separators become one space;
+// every other C0 or C1 control character (and DEL) is dropped. Built from escapes in
+// strings so the source holds none of these characters itself.
+const BREAKS = new RegExp("\\s*[\\r\\n\\u0085\\u2028\\u2029]+\\s*", "g")
+const CONTROLS = new RegExp("[\\u0000-\\u001f\\u007f-\\u009f]", "g")
+
 function line(text: string, bytes = LINE_BYTES) {
-  const flat = text.replace(/\s*[\r\n]+\s*/g, " ").trim()
+  const flat = text.replace(BREAKS, " ").replace(CONTROLS, "").trim()
   return escape(Buffer.byteLength(flat, "utf-8") > bytes ? `${clip(flat, bytes)}…` : flat)
 }
 
