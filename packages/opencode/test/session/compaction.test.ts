@@ -1521,20 +1521,28 @@ describe("session.compaction.process", () => {
           })
           .pipe(Effect.forkChild)
 
-        yield* Deferred.await(ready).pipe(Effect.timeout("5 seconds"))
+        // getting to the retry is setup, not what is measured: give it room on a loaded machine
+        yield* Deferred.await(ready).pipe(Effect.timeout("30 seconds"))
+        // What this proves: the interrupt ends the retry backoff instead of waiting it
+        // out. The backoff is 10 s (retry-after-ms above), so the bound is a fraction of
+        // it rather than an absolute 250 ms: interrupt cleanup writes to the database,
+        // which on a loaded machine took 600-850 ms, while a wait for the backoff would
+        // take the full 10 s.
+        const backoff = 10_000
+        const bound = backoff / 5
         const start = Date.now()
         yield* Fiber.interrupt(fiber)
-        const exit = yield* Fiber.await(fiber).pipe(Effect.timeout("250 millis"))
+        const exit = yield* Fiber.await(fiber).pipe(Effect.timeout(`${bound} millis`))
 
         expect(Exit.isFailure(exit)).toBe(true)
         if (Exit.isFailure(exit)) {
           expect(Cause.hasInterrupts(exit.cause)).toBe(true)
-          expect(Date.now() - start).toBeLessThan(250)
+          expect(Date.now() - start).toBeLessThan(bound)
         }
       }).pipe(withCompaction({ llm: stub.llmLayer }))
     },
     { git: true },
-    { timeout: 10_000 },
+    { timeout: 60_000 },
   )
 
   itCompaction.instance(

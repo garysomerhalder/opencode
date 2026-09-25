@@ -200,9 +200,12 @@ export const VerdictTool = Tool.define<
           const diff = raw === undefined ? undefined : yield* readableDiff(ctx, raw)
           const declared: unknown = verify?.criteria
           const listed: unknown = verify?.checks
+          // The checks the loop ran: verify.checks when it lists them, otherwise every
+          // check the host ran in this session (Session.createVerifier writes verify at
+          // birth, before any check runs; §11.5)
           const runs = checks(
             history,
-            Array.isArray(listed) ? listed.filter((id) => typeof id === "string") : [],
+            Array.isArray(listed) ? listed.filter((id) => typeof id === "string") : Object.keys(hostRecord.checks),
             hostRecord,
           )
           const world: Verdict.World = {
@@ -386,8 +389,14 @@ function checks(parts: SessionV1.Part[], listed: string[], record: VerifyRecord.
     const exit = intact ? (host.exit ?? undefined) : undefined
     return [{ id: part.id, intact, check: { callID: part.callID, exit, output } }]
   })
+  // A check the host recorded whose part is gone from storage (deleted, or its message
+  // was): its outcome is unknown, so it blocks a PASS like one that did not finish.
+  const stored = new Set<string>(runs.map((run) => run.id))
+  const gone = Object.keys(record.checks)
+    .filter((id) => !stored.has(id))
+    .map((id) => ({ callID: `${id} (its part is gone from the session)`, exit: undefined, output: "" }))
   return {
     listed: runs.filter((run) => run.intact && listed.includes(run.id)).map((run) => run.check),
-    unlisted: runs.filter((run) => !run.intact || !listed.includes(run.id)).map((run) => run.check),
+    unlisted: [...runs.filter((run) => !run.intact || !listed.includes(run.id)).map((run) => run.check), ...gone],
   }
 }

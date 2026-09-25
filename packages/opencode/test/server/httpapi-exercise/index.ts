@@ -782,6 +782,30 @@ const scenarios: Scenario[] = [
       headers: ctx.headers(),
     }))
     .status(403),
+  http.protected
+    .get("/experimental/shell/task", "experimental.shellTask.list")
+    .seeded((ctx) => ctx.session({ title: "Shell task lister" }))
+    .at((ctx) => ({ path: `/experimental/shell/task?sessionID=${ctx.state.id}`, headers: ctx.headers() }))
+    .json(200, array),
+  http.protected
+    .post("/experimental/shell/task/stop", "experimental.shellTask.stopAll")
+    .mutating()
+    .seeded((ctx) => ctx.session({ title: "Shell task stopper" }))
+    .at((ctx) => ({ path: `/experimental/shell/task/stop?sessionID=${ctx.state.id}`, headers: ctx.headers() }))
+    // nothing is running, so nothing is stopped
+    .json(200, (body) => {
+      check(Array.isArray(body) && body.length === 0, "stopping a session's tasks with none running stops none")
+    }),
+  http.protected
+    .post("/experimental/shell/task/{taskID}/stop", "experimental.shellTask.stop")
+    .mutating()
+    .seeded((ctx) => ctx.session({ title: "Shell task owner" }))
+    .at((ctx) => ({
+      path: `${route("/experimental/shell/task/{taskID}/stop", { taskID: "shl_missing" })}?sessionID=${ctx.state.id}`,
+      headers: ctx.headers(),
+    }))
+    // a task that does not exist (or is another session's) is not found
+    .status(404),
   http.protected.get("/experimental/resource", "experimental.resource.list").json(),
   http.protected
     .post("/sync/history", "sync.history.list")

@@ -216,8 +216,10 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const update = Effect.fn("SessionHttpApi.update")(function* (ctx: {
       params: { sessionID: SessionID }
       payload: typeof UpdatePayload.Type
+      request: HttpServerRequest.HttpServerRequest
     }) {
-      const current = yield* requireSession(ctx.params.sessionID)
+      // every field: a rule could hide a file from the verifier or deny its verdict tool
+      const current = yield* writable(ctx.params.sessionID, ctx.request)
       if (ctx.payload.title !== undefined) {
         yield* session.setTitle({ sessionID: ctx.params.sessionID, title: ctx.payload.title })
       }
