@@ -78,7 +78,16 @@ export interface Input {
   readonly archives: ReadonlyArray<Archived>
   /** The goal a goal loop drives the session with, when one does. */
   readonly goal?: string
+  /** The last verdict on that goal (accuracy E §11.8): the criteria it did not find met. */
+  readonly lastVerdict?: { readonly verdict: string; readonly at: number; readonly unmet: ReadonlyArray<string> }
+  /** Every change to the goal, oldest first; all are made through the API (§11.8, ruling 5). */
+  readonly goalChanges?: ReadonlyArray<{ readonly type: "set" | "replace" | "end"; readonly at: number }>
 }
+
+const UNMET_SHOWN = 3
+const UNMET_BYTES = 120
+const CHANGES_SHOWN = 5
+const CHANGE_WORD = { set: "set", replace: "replaced", end: "ended" } as const
 
 /** The key evidence is matched on: the item's exact wording. A reworded item loses its mark. */
 export function contentKey(content: string) {
@@ -196,7 +205,31 @@ function render(
         : `Archived tool output: ${more} not shown (over the size cap); read or grep them by path from earlier receipts.`,
     )
   }
-  if (input.goal) record.push(`Goal loop: ${line(input.goal, GOAL_BYTES)}`)
+  if (input.goal) {
+    const last = input.lastVerdict
+    const unmet = last?.unmet ?? []
+    const listed = unmet
+      .slice(0, UNMET_SHOWN)
+      .map((item) => line(item, UNMET_BYTES))
+      .join(", ")
+    const verdict = last
+      ? ` Last verdict: ${line(last.verdict, 16)} ${ago(input.now - last.at)}${
+          unmet.length ? `; unmet: ${listed}${unmet.length > UNMET_SHOWN ? ` (+${unmet.length - UNMET_SHOWN})` : ""}` : ""
+        }.`
+      : ""
+    record.push(`Goal loop: ${line(input.goal, GOAL_BYTES)}.${verdict}`)
+  }
+  // A person must see every change made to the goal through the API (the worker
+  // can call it too), including an end: that is why an ended goal still shows.
+  const changes = input.goalChanges ?? []
+  if (changes.length > 0) {
+    const shown = changes
+      .slice(-CHANGES_SHOWN)
+      .map((change) => `${CHANGE_WORD[change.type]} ${ago(input.now - change.at)}`)
+      .join("; ")
+    const earlier = changes.length > CHANGES_SHOWN ? `(+${changes.length - CHANGES_SHOWN} earlier) ` : ""
+    record.push(`Goal changed via API: ${earlier}${shown}.`)
+  }
 
   return [
     `<checkpoint n="${input.n}" at="${new Date(input.now).toISOString()}">`,

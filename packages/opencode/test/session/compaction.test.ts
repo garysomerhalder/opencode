@@ -10,6 +10,7 @@ import * as Stream from "effect/Stream"
 import { Config } from "@/config/config"
 import { LLM } from "../../src/session/llm"
 import { SessionCompaction } from "../../src/session/compaction"
+import { Todo } from "../../src/session/todo"
 import { Token } from "@/util/token"
 import { Plugin } from "../../src/plugin"
 import { provideTmpdirInstance, TestInstance } from "../fixture/fixture"
@@ -227,6 +228,8 @@ function cfg(compaction?: ConfigV1.Info["compaction"]) {
 const defaultProvider = wide()
 const compactionTestNode = LayerNode.group([
   SessionCompaction.node,
+  // the compaction's own todo service, exposed so a test can write the records it reads
+  Todo.node,
   SessionNs.node,
   SessionProjector.node,
   Database.node,
@@ -1819,6 +1822,91 @@ describe("session.compaction.process", () => {
         expect(checkpoint?.text).toContain("the original task")
         expect(checkpoint?.text).toContain("the host record is right")
       }).pipe(withCompaction({ llm: stub.llmLayer, plugin: compactionPrompt("PLUGIN PROMPT") }))
+    },
+    { git: true },
+  )
+
+  // Accuracy E, Phase 3 (docs/accuracy-e.md §11.8): the checkpoint reads the
+  // host's goal record and the todo evidence table, not the model's account.
+  itCompaction.instance(
+    "the checkpoint carries the goal line, the last verdict, the API changes and the verified marks",
+    () => {
+      const stub = llm()
+      stub.push(reply("summary"))
+      return Effect.gen(function* () {
+        const ssn = yield* SessionNs.Service
+        const todo = yield* Todo.Service
+        const session = yield* ssn.create({})
+        const now = Date.now()
+        yield* ssn.setMetadata({
+          sessionID: session.id,
+          metadata: {
+            goal: {
+              id: "goal_1",
+              text: "Ship receipts",
+              startedAt: now - 60_000,
+              history: [{ type: "set", at: now - 60_000, via: "api", goal: "goal_1", text: "Ship receipts" }],
+              lastVerdict: { verdict: "FAIL", at: now, verifierSessionID: "ses_v", unmet: ["receipts are capped"] },
+            },
+          },
+        })
+        yield* todo.update({
+          sessionID: session.id,
+          todos: [
+            { content: "Wire the receipt envelope", status: "completed", priority: "high" },
+            { content: "Cap receipts", status: "completed", priority: "high" },
+          ],
+        })
+        yield* todo.verify({
+          sessionID: session.id,
+          verifierSessionID: session.id,
+          todos: [{ content: "Wire the receipt envelope", met: true, evidence: [{ kind: "file" }] }],
+        })
+        yield* createUserMessage(session.id, "the original task")
+        yield* createCompactionMarker(session.id)
+        const msgs = yield* ssn.messages({ sessionID: session.id })
+        yield* SessionCompaction.use.process({
+          parentID: msgs.at(-1)!.info.id,
+          messages: msgs,
+          sessionID: session.id,
+          auto: false,
+        })
+        const checkpoint = (yield* ssn.messages({ sessionID: session.id }))
+          .at(-1)
+          ?.parts.find((part): part is SessionV1.ReminderPart => part.type === "reminder" && part.kind === "checkpoint")
+        expect(checkpoint?.text).toContain("Goal loop: Ship receipts. Last verdict: FAIL 0 min ago; unmet: receipts are capped.")
+        expect(checkpoint?.text).toContain("Goal changed via API: set 1 min ago.")
+        expect(checkpoint?.text).toContain("[completed · verified 0 min ago] Wire the receipt envelope")
+        expect(checkpoint?.text).toContain("[completed] Cap receipts")
+      }).pipe(withCompaction({ llm: stub.llmLayer }))
+    },
+    { git: true },
+  )
+
+  itCompaction.instance(
+    "an unreadable goal record is left out, and the checkpoint is still written",
+    () => {
+      const stub = llm()
+      stub.push(reply("summary"))
+      return Effect.gen(function* () {
+        const ssn = yield* SessionNs.Service
+        const session = yield* ssn.create({})
+        yield* ssn.setMetadata({ sessionID: session.id, metadata: { goal: { text: 42 } } })
+        yield* createUserMessage(session.id, "the original task")
+        yield* createCompactionMarker(session.id)
+        const msgs = yield* ssn.messages({ sessionID: session.id })
+        yield* SessionCompaction.use.process({
+          parentID: msgs.at(-1)!.info.id,
+          messages: msgs,
+          sessionID: session.id,
+          auto: false,
+        })
+        const checkpoint = (yield* ssn.messages({ sessionID: session.id }))
+          .at(-1)
+          ?.parts.find((part): part is SessionV1.ReminderPart => part.type === "reminder" && part.kind === "checkpoint")
+        expect(checkpoint?.text).toContain("the original task")
+        expect(checkpoint?.text).not.toContain("Goal")
+      }).pipe(withCompaction({ llm: stub.llmLayer }))
     },
     { git: true },
   )

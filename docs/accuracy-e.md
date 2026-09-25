@@ -630,14 +630,17 @@ A worker that edits a todo's text gets a new key, so the mark does not carry ove
 checked. Reads: `Todo.verified(sessionID)` returns `Map<contentKey, time>`, and a read-only
 `GET /experimental/session/:id/todo/evidence` serves the todo dock (accuracy-ui §3).
 
-**4. Compaction.** `writeCheckpoint` passes `goal` and `verified` to `Checkpoint.build`. `Input`
-gains `lastVerdict` and `goalChanges` (the `replace` and `end` entries of the history), which add,
-capped, to the goal line:
+**4. Compaction.** `writeCheckpoint` passes `goal` (the active goal's text) and `verified` to
+`Checkpoint.build`. `Input` gains `lastVerdict` and `goalChanges` (every entry of the history,
+`set` included, since each was made through the API; ruling 5). They add, capped, to the goal
+line. The last 5 changes are shown, and earlier ones are counted:
 
 ```
-Goal loop: <text>. Last verdict: FAIL 3m ago; unmet: <criterion>, <criterion> (+2).
-Goal changed via API: replaced 12m ago; ended 2m ago.
+Goal loop: <text>. Last verdict: FAIL 3 min ago; unmet: <criterion>, <criterion>, <criterion> (+2).
+Goal changed via API: set 40 min ago; replaced 12 min ago.
 ```
+
+An ended goal has no goal line, but its changes, the end included, are still listed.
 
 It fails open like the rest of the checkpoint: a record that cannot be read is left out and logged.
 

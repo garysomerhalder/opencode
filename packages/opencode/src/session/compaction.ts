@@ -17,6 +17,7 @@ import { NotFoundError } from "@/storage/storage"
 import { Cause, Effect, Exit, Layer, Context } from "effect"
 import { Checkpoint } from "./checkpoint"
 import { Todo } from "./todo"
+import { SessionGoal } from "./goal"
 import { ShellTasks } from "@/tool/shell/tasks"
 import { Truncate } from "@/tool/truncate"
 import { Receipt } from "@/tool/receipt"
@@ -271,6 +272,27 @@ const layer = Layer.effect(
       const taskSince =
         previous?.metadata.taskSince ??
         (previous === undefined && completedCompactions(input.messages).length > 0 ? "compaction" : "session")
+      // Accuracy E (docs/accuracy-e.md §11.8): the goal record and the verified
+      // todos, both written in-process only. Each fails open on its own: one that
+      // cannot be read is left out, and the rest of the record still stands.
+      const optional = <A>(what: string, fx: Effect.Effect<A>, fallback: A) =>
+        fx.pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning(`checkpoint: ${what} not read`, { sessionID: input.sessionID, cause }).pipe(
+              Effect.as(fallback),
+            ),
+          ),
+        )
+      const goal = yield* optional(
+        "goal",
+        session.get(input.sessionID).pipe(
+          Effect.orDie,
+          Effect.map((info) => SessionGoal.read(info.metadata)),
+        ),
+        undefined,
+      )
+      const active = goal && goal.endedAt === undefined ? goal : undefined
+      const verified = yield* optional("todo evidence", todos.verified(input.sessionID), new Map<string, number>())
       const text = Checkpoint.build({
         n,
         now: Date.now(),
@@ -286,6 +308,10 @@ const layer = Layer.effect(
         })),
         files,
         archives: Checkpoint.archives(input.head),
+        verified,
+        goal: active?.text,
+        lastVerdict: active?.lastVerdict,
+        goalChanges: goal?.history.map((change) => ({ type: change.type, at: change.at })),
       })
       const note = HarnessNote.build({
         user: input.user,

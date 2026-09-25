@@ -92,6 +92,52 @@ describe("Checkpoint.build", () => {
     expect(text).toContain("Goal loop: Ship receipts")
   })
 
+  // accuracy E, Phase 3 (docs/accuracy-e.md §11.8, rulings 4 and 5)
+  test("the goal line carries the last verdict, and every goal change via the API is flagged", () => {
+    const text = Checkpoint.build(
+      base({
+        goal: "Ship receipts",
+        lastVerdict: {
+          verdict: "FAIL",
+          at: now - minutes(3),
+          unmet: ["receipts are capped", "the README documents --budget", "the CLI flag exists", "tests pass"],
+        },
+        goalChanges: [
+          { type: "set", at: now - minutes(40) },
+          { type: "replace", at: now - minutes(12) },
+        ],
+      }),
+    )
+    expect(text).toContain(
+      "Goal loop: Ship receipts. Last verdict: FAIL 3 min ago; unmet: receipts are capped, the README documents --budget, the CLI flag exists (+1).",
+    )
+    expect(text).toContain("Goal changed via API: set 40 min ago; replaced 12 min ago.")
+  })
+
+  test("an ended goal has no goal line, but its end is flagged", () => {
+    const text = Checkpoint.build(
+      base({
+        goalChanges: [
+          { type: "set", at: now - minutes(40) },
+          { type: "end", at: now - minutes(2) },
+        ],
+      }),
+    )
+    expect(text).not.toContain("Goal loop:")
+    expect(text).toContain("Goal changed via API: set 40 min ago; ended 2 min ago.")
+  })
+
+  test("a long goal history shows the latest changes and counts the rest", () => {
+    const text = Checkpoint.build(
+      base({
+        goal: "g",
+        goalChanges: Array.from({ length: 12 }, (_, i) => ({ type: "replace" as const, at: now - minutes(12 - i) })),
+      }),
+    )
+    expect(text).toContain("Goal changed via API: (+7 earlier) replaced 5 min ago; replaced 4 min ago;")
+    expect(Buffer.byteLength(text, "utf-8")).toBeLessThanOrEqual(Checkpoint.MAX_BYTES)
+  })
+
   test("empty sections are left out, and no todos says so", () => {
     const text = Checkpoint.build(base({ todos: [], todosWrittenAt: undefined, task: undefined }))
     expect(text).toContain("Todo list: none written in this session.")
