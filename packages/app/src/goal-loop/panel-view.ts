@@ -27,9 +27,13 @@ export type GoalPanelView =
 function describe(state: GoalLoopState): { label: string; tone: GoalPanelTone } {
   switch (state.status) {
     case "running":
+      if (state.phase === "verifying") return { label: "goalPanel.state.verifying", tone: "info" }
       return state.phase === "waiting"
         ? { label: "goalPanel.state.waiting", tone: "info" }
         : { label: "goalPanel.state.turn", tone: "info" }
+    // the worker said it was done, but no independent check found it so
+    case "unverified":
+      return { label: "goalPanel.state.unverified", tone: "error" }
     case "completed":
       return { label: "goalPanel.state.completed", tone: "success" }
     case "failed":

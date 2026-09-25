@@ -22,10 +22,24 @@ type SidecarMessage =
 // never pass it to a renderer (no IPC handler returns it, the preload does not
 // expose it), since page script there runs web content (preload/host-token.test.ts).
 let localHostToken: string | undefined
+let localServerOrigin: string | undefined
 
 /** The host token of the local server this process started, once it is ready. */
 export function hostToken() {
   return localHostToken
+}
+
+/**
+ * The host token for requests to `url`: only when that is the local server the token
+ * belongs to. A loop driving another server (remote, WSL) never sends it there.
+ */
+export function hostTokenFor(url: string) {
+  if (!localHostToken || !localServerOrigin) return undefined
+  try {
+    return new URL(url).origin === localServerOrigin ? localHostToken : undefined
+  } catch {
+    return undefined
+  }
 }
 
 export type SidecarListener = { stop: () => Promise<void> }
@@ -121,6 +135,7 @@ export async function spawnLocalServer(
       if (message.type === "ready") {
         if (done) return
         localHostToken = message.hostToken
+        localServerOrigin = new URL(`http://${hostname}:${port}`).origin
         done = true
         cleanup()
         resolve()

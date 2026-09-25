@@ -21,12 +21,15 @@ test("the preload exposes nothing that carries the host token", async () => {
   }
 })
 
-test("only the sidecar handshake and the server module in main touch the host token", async () => {
+test("only the sidecar handshake, the server module and the goal loop in main touch the host token", async () => {
   const touching: string[] = []
   for (const file of await sources(main)) {
     if (token.test(await Bun.file(join(main, file)).text())) touching.push(file)
   }
-  // server.ts receives and holds it; sidecar.ts sends it from the utility process.
+  // sidecar.ts sends it from the utility process; server.ts receives and holds it and
+  // gives it out only for the local server's origin (hostTokenFor); index.ts wires that
+  // into the goal loop; goal-loop.ts sends it with the loop's host requests (Phase 4).
   // ipc.ts (the renderer's handlers) must never appear here.
-  expect(touching.sort()).toEqual(["server.ts", "sidecar.ts"])
+  expect(touching.sort()).toEqual(["goal-loop.ts", "index.ts", "server.ts", "sidecar.ts"])
+  expect(touching).not.toContain("ipc.ts")
 })

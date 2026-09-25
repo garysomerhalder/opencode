@@ -18,6 +18,8 @@ export type {
   GoalTicket,
 }
 
+import { RequestError, verifyOnce } from "./goal-verify"
+
 export type GoalLoopServer = {
   url: string
   username: string | null
@@ -61,7 +63,17 @@ export type GoalLoopDeps = {
   maxBackoffMs?: number
   /** Context size (tokens of the last successful turn) above which the session is summarized before the next continue. */
   compactAtTokens?: number
+  /**
+   * The local server's host token (hostToken() in main/server.ts; accuracy E §11.8).
+   * A loop that verifies needs it; without it, the loop ends `unverified`.
+   */
+  hostToken?: (server: GoalLoopServer) => string | undefined
+  /** Wall-clock cap on one verifier turn. */
+  verifyTimeoutMs?: number
 }
+
+const DEFAULT_MAX_VERIFICATIONS = 3
+const DEFAULT_VERIFY_TIMEOUT_MS = 15 * 60 * 1000
 
 export const DEFAULT_COMPLETION_MARKER = "GOAL_COMPLETE"
 const DEFAULT_WAIT_TIMEOUT_MS = 15 * 60 * 1000
@@ -311,6 +323,7 @@ export function createGoalLoop(deps: GoalLoopDeps) {
   const retryBackoffMs = deps.retryBackoffMs ?? DEFAULT_RETRY_BACKOFF_MS
   const maxBackoffMs = deps.maxBackoffMs ?? DEFAULT_MAX_BACKOFF_MS
   const compactAtTokens = deps.compactAtTokens ?? DEFAULT_COMPACT_AT_TOKENS
+  const verifyTimeoutMs = deps.verifyTimeoutMs ?? DEFAULT_VERIFY_TIMEOUT_MS
 
   const progressEveryMs = deps.progressEveryMs ?? DEFAULT_PROGRESS_EVERY_MS
 
@@ -319,16 +332,22 @@ export function createGoalLoop(deps: GoalLoopDeps) {
   let stopped = false
   let directory = ""
 
-  async function request(server: GoalLoopServer, path: string, init?: RequestInit): Promise<unknown> {
+  async function request(
+    server: GoalLoopServer,
+    path: string,
+    init?: RequestInit & { hostToken?: string },
+  ): Promise<unknown> {
+    const { hostToken, ...rest } = init ?? {}
     // fetch only rejects when the request never got an HTTP answer (refused,
     // reset, DNS), which is what a restarting server looks like.
     const res = await fetchImpl(new URL(path, server.url), {
-      ...init,
+      ...rest,
       headers: {
         "content-type": "application/json",
         ...(directory ? { "x-opencode-directory": directory } : {}),
         ...authHeader(server),
-        ...(init?.headers ?? {}),
+        ...(hostToken ? { "x-opencode-host-token": hostToken } : {}),
+        ...(rest.headers ?? {}),
       },
     }).catch((error: unknown) => {
       throw new TransientError(
@@ -338,7 +357,8 @@ export function createGoalLoop(deps: GoalLoopDeps) {
     if (res.status >= 500 || res.status === 429) {
       throw new TransientError(`goal loop request failed: ${res.status} ${path} ${(await res.text()).slice(0, 300)}`)
     }
-    if (!res.ok) throw new Error(`goal loop request failed: ${res.status} ${path} ${(await res.text()).slice(0, 300)}`)
+    if (!res.ok)
+      throw new RequestError(res.status, `goal loop request failed: ${res.status} ${path} ${(await res.text()).slice(0, 300)}`)
     const text = await res.text()
     if (!text) return null
     return JSON.parse(text) as unknown
@@ -403,16 +423,20 @@ export function createGoalLoop(deps: GoalLoopDeps) {
     // schedules the turn. Plain POST message 500s when a turn must run.
     await request(server, `/session/${sessionID}/prompt_async?directory=${encodeURIComponent(directory)}`, {
       method: "POST",
-      body: JSON.stringify({
-        parts: [{ type: "text", text }],
-        // Nobody is at the keyboard for a goal-loop turn, even though the
-        // desktop client does expose a question tool. Tell the server, so the
-        // agent decides and reports instead of stopping to ask.
-        autonomous: true,
-        ...(input.agent ? { agent: input.agent } : {}),
-        ...(input.model ? { model: input.model } : {}),
-      }),
+      body: JSON.stringify(promptBody(text, input)),
     })
+  }
+
+  function promptBody(text: string, input: GoalLoopStartInput) {
+    return {
+      parts: [{ type: "text", text }],
+      // Nobody is at the keyboard for a goal-loop turn, even though the
+      // desktop client does expose a question tool. Tell the server, so the
+      // agent decides and reports instead of stopping to ask.
+      autonomous: true,
+      ...(input.agent ? { agent: input.agent } : {}),
+      ...(input.model ? { model: input.model } : {}),
+    }
   }
 
   function sleep(ms: number): Promise<void> {
@@ -550,6 +574,89 @@ export function createGoalLoop(deps: GoalLoopDeps) {
       return continuePromptText(next.goal, next.completionMarker, nextIteration, next.maxIterations)
     }
 
+    // What the last verdict asked for: the next verifier looks at it first.
+    let lastMissing: { criterion: string; need: string }[] = []
+
+    // One verification (§11.9) when the worker says it is done. Returns the worker's
+    // next prompt, or null when the loop ended. The feedback in it is built from the
+    // host's records only; a stale goal (or a failed verification) drops the attempt
+    // without counting it.
+    const verification = async (server: GoalLoopServer, input: GoalLoopStartInput): Promise<string | null> => {
+      const current = active
+      const verify = input.verify
+      if (!current || !verify) return null
+      const token = deps.hostToken?.(server)
+      if (!token) {
+        finish("unverified", "no host token: this loop cannot verify its goal")
+        return null
+      }
+      touch({ phase: "verifying" })
+      const outcome = await verifyOnce(
+        {
+          request: (path, init) =>
+            request(server, path, {
+              method: init.method,
+              ...(init.body !== undefined ? { body: init.body } : {}),
+              ...(init.host ? { hostToken: token } : {}),
+            }),
+          sleep,
+          now,
+          alive,
+        },
+        {
+          workerID: sessionID,
+          directory,
+          goal: current.goal,
+          checks: verify.checks,
+          missingBefore: lastMissing,
+          pollMs: pollIntervalMs,
+          timeoutMs: verifyTimeoutMs,
+          onVerifier: (id) => {
+            const running = active
+            if (running) setState({ ...running, verifierSessionID: id, updatedAt: now() })
+          },
+        },
+      ).catch((error: unknown) => {
+        if (error instanceof TransientError) throw error
+        return {
+          kind: "stale" as const,
+          reason: `the verification failed (${error instanceof Error ? error.message : String(error)}); the attempt was dropped`,
+        }
+      })
+      if (!alive()) return null
+      const running = active
+      if (!running) return null
+      const verdict =
+        "verdict" in outcome && outcome.verdict
+          ? { verdict: outcome.verdict.verdict, at: outcome.verdict.at, unmet: outcome.verdict.unmet }
+          : (running.lastVerdict ?? null)
+      setState({ ...running, verifierSessionID: null, lastVerdict: verdict, updatedAt: now() })
+      touch({ phase: "turn" })
+      if (outcome.kind === "pass") {
+        finish("completed", null)
+        return null
+      }
+      if (outcome.kind === "unverified") {
+        finish("unverified", outcome.reason)
+        return null
+      }
+      if (outcome.kind === "stale") {
+        note(outcome.reason)
+        return nextContinue()
+      }
+      const count = (running.verifications ?? 0) + 1
+      const max = verify.maxVerifications ?? DEFAULT_MAX_VERIFICATIONS
+      const counted = setState({ ...(active ?? running), verifications: count, updatedAt: now() })
+      emit({ loopID: counted.id, type: "iteration", state: counted })
+      if (count >= max) {
+        finish("unverified", `${count} verifications without a PASS`)
+        return null
+      }
+      lastMissing = outcome.verdict?.missing ?? []
+      const next = nextContinue()
+      return next === null ? null : `${outcome.feedback}\n\n${next}`
+    }
+
     while (alive()) {
       if (track.delay > 0) {
         await sleep(track.delay)
@@ -666,8 +773,16 @@ export function createGoalLoop(deps: GoalLoopDeps) {
         const current = active
         if (!current) return
         if (completionReached(turnText(messages), current.completionMarker)) {
-          finish("completed", null)
-          return
+          if (!input.verify) {
+            finish("completed", null)
+            return
+          }
+          // accuracy E §11.9: done only on an independent verifier's PASS
+          const next = await verification(server, input)
+          if (next === null) return
+          track.owed = next
+          await sendOwed(messages)
+          continue
         }
         if (latest?.aborted) {
           track.errors = 0
@@ -818,10 +933,24 @@ export function createGoalLoop(deps: GoalLoopDeps) {
       phase: "turn",
       checkedAt: null,
       promptedAt: null,
+      ...(input.verify ? { verifications: 0, verifierSessionID: null, lastVerdict: null } : {}),
     })
     deps.persistLast?.(input)
     emit({ loopID: state.id, type: "started", state })
-    await prompt(server, sessionID, firstPromptText(goal, marker), input)
+    const token = input.verify ? deps.hostToken?.(server) : undefined
+    if (input.verify && token) {
+      // §11.9: the goal starts in the same host step as the first prompt, so the task
+      // is recorded from it and no client can edit the first message before that
+      await request(server, `/experimental/session/${sessionID}/goal?directory=${encodeURIComponent(directory)}`, {
+        method: "POST",
+        hostToken: token,
+        body: JSON.stringify({
+          text: goal,
+          ...(input.verify.criteria?.length ? { criteria: input.verify.criteria } : {}),
+          prompt: promptBody(firstPromptText(goal, marker), input),
+        }),
+      })
+    } else await prompt(server, sessionID, firstPromptText(goal, marker), input)
     touch({ promptedAt: now() })
     void drive(state, server, input, baselineAssistantID)
     return state
@@ -847,7 +976,16 @@ export function createGoalLoop(deps: GoalLoopDeps) {
 
   function adoptOrphan(record: GoalLoopState | null | undefined): GoalLoopState | null {
     if (active || !record || record.status !== "running") return active
-    const next = setState({ ...record, status: "stopped", reason: "app restarted", updatedAt: now() })
+    // A verification in flight is dropped, never counted: its verifier session stays
+    // as it is, and a later loop verifies afresh (§11.9).
+    const verifying = record.phase === "verifying" || Boolean(record.verifierSessionID)
+    const next = setState({
+      ...record,
+      status: "stopped",
+      reason: verifying ? "app restarted; the verification in flight was dropped" : "app restarted",
+      ...(verifying ? { verifierSessionID: null } : {}),
+      updatedAt: now(),
+    })
     emit({ loopID: next.id, type: "stopped", state: next })
     active = null
     deps.persist?.(null)

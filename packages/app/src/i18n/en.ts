@@ -166,6 +166,8 @@ export const dict = {
   "goalPanel.state.failed": "Failed",
   "goalPanel.state.capped": "Capped",
   "goalPanel.state.stopped": "Stopped",
+  "goalPanel.state.verifying": "Running · verifying",
+  "goalPanel.state.unverified": "Not verified",
   "goalPanel.action.start": "Start goal loop",
   "goalPanel.action.stop": "Stop",
   "goalPanel.action.dismiss": "Dismiss",

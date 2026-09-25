@@ -26,7 +26,7 @@ import {
   isFirstLaunchOnboardingPending,
   isOldLayoutEligible,
 } from "./onboarding"
-import { getDefaultServerUrl, preferAppEnv, setDefaultServerUrl, spawnLocalServer } from "./server"
+import { getDefaultServerUrl, hostTokenFor, preferAppEnv, setDefaultServerUrl, spawnLocalServer } from "./server"
 import {
   createSidecarSupervisor,
   type SidecarConnection,
@@ -413,6 +413,8 @@ const main = Effect.gen(function* () {
     create: (hooks) =>
       createGoalLoop({
         getServer: () => Effect.runPromise(Deferred.await(serverReady)),
+        // only for the local server the token belongs to (accuracy E §11.8)
+        hostToken: (server) => hostTokenFor(server.url),
         warn: (message, detail) => writeLog("main", message, detail, "warn"),
         ...hooks,
       }),

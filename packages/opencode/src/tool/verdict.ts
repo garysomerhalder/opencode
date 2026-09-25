@@ -343,12 +343,20 @@ const UNMET_BYTES = 500
 /** The last verdict as the worker's goal record keeps it: the criteria not met, capped. */
 function lastVerdict(stored: Verdict.Verdict, verifierSessionID: string): SessionGoal.LastVerdict {
   const unmet = stored.criteria.filter((criterion) => criterion.status !== "met").map((criterion) => criterion.text)
-  const kept = unmet.slice(0, UNMET_MAX).map((text) => (text.length > UNMET_BYTES ? `${text.slice(0, UNMET_BYTES)}…` : text))
+  const cut = (text: string) => (text.length > UNMET_BYTES ? `${text.slice(0, UNMET_BYTES)}…` : text)
+  const kept = unmet.slice(0, UNMET_MAX).map(cut)
+  const count = (status: string) => stored.criteria.filter((criterion) => criterion.status === status).length
   return {
     verdict: stored.verdict,
     at: Date.now(),
     verifierSessionID,
     unmet: unmet.length > UNMET_MAX ? [...kept, `(+${unmet.length - UNMET_MAX} more)`] : kept,
+    // what would settle each criterion not met: the loop's feedback to the worker (§11.9)
+    missing: stored.missing
+      .slice(0, UNMET_MAX)
+      .map((item) => ({ criterion: cut(item.criterion), need: cut(item.need) })),
+    // per status, so the loop can tell "could not judge" (all unknown) from a FAIL
+    counts: { met: count("met"), unmet: count("unmet"), unknown: count("unknown") },
   }
 }
 

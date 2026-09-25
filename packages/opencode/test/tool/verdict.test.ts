@@ -691,9 +691,13 @@ describe("tool.verdict: the records on the worker session", () => {
         missing: [{ criterion: "C1", need: "a test that caps the output" }],
       })
       expect(result.error).toBe("")
+      // Phase 4: what the loop builds its feedback from, and how it tells "could not
+      // judge" (every criterion unknown) from a FAIL, all in the host's record
       expect((yield* (yield* SessionGoal.Service).get(worker))?.lastVerdict).toMatchObject({
         verdict: "FAIL",
         unmet: ["the output is capped"],
+        missing: [{ criterion: "C1", need: "a test that caps the output" }],
+        counts: { met: 0, unmet: 1, unknown: 0 },
       })
     }),
   )

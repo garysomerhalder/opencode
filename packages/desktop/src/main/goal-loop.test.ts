@@ -1388,3 +1388,252 @@ function longTool(fake: ReturnType<typeof fakeServer>, options: { output: "growi
   })
   return tool
 }
+
+// --- accuracy E Phase 4 (docs/accuracy-e.md §11.9): the loop's verify branch -------
+
+const HOST_TOKEN = "host-token"
+type VerdictPlan =
+  | { verdict: "PASS" | "FAIL" | "PARTIAL"; unmet?: string[]; missing?: { criterion: string; need: string }[]; counts?: { met: number; unmet: number; unknown: number } }
+  | { stale: true }
+
+/**
+ * The fake worker server plus the Phase 3/4 routes: the goal record, the verify route,
+ * and verifier sessions whose verdict the host records on the worker's goal. Every
+ * goal, verify and verifier-session write checks the host token.
+ */
+function verifyServer(
+  workerID: string,
+  plan: (index: number) => TurnPlan,
+  verdicts: (attempt: number) => VerdictPlan,
+  options: { checkExit?: (attempt: number) => number } = {},
+) {
+  const fake = fakeServer(workerID, plan)
+  const workerPrompts: string[] = []
+  const verifyCalls: { token: string | null }[] = []
+  let verifyRequests = 0
+  let goalCount = 0
+  const goal: { id: string; lastVerdict?: Record<string, unknown> } = { id: "goal_0" }
+  const children = new Map<
+    string,
+    { attempt: number; busy: number; messages: unknown[]; checks: Record<string, { exit: number }>; prompted: number }
+  >()
+  const forbidden = () => new Response("{}", { status: 403 })
+
+  const fetchImpl = (async (input: URL | RequestInfo, init?: RequestInit) => {
+    const url = new URL(String(input))
+    const method = (init?.method ?? "GET").toUpperCase()
+    const headers = (init?.headers ?? {}) as Record<string, string>
+    const host = headers["x-opencode-host-token"] === HOST_TOKEN
+    const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {}
+    if (url.pathname === `/session/${workerID}/prompt_async` && method === "POST")
+      workerPrompts.push(((body.parts as { text: string }[])[0]?.text as string) ?? "")
+    if (url.pathname === `/experimental/session/${workerID}/goal`) {
+      if (method === "GET")
+        return json({ id: goal.id, text: "g", startedAt: 0, origin: { goal: "goal_1" }, history: [], ...(goal.lastVerdict ? { lastVerdict: goal.lastVerdict } : {}) })
+      if (!host) return forbidden()
+      goal.id = `goal_${++goalCount}`
+      const prompt = body.prompt as { parts: { text: string }[] } | undefined
+      if (prompt) {
+        workerPrompts.push(prompt.parts[0]?.text ?? "")
+        await fake.fetchImpl(new URL(`/session/${workerID}/prompt_async`, url), { method: "POST", body: JSON.stringify(prompt) })
+      }
+      return json({ id: goal.id, base: null, startedAt: 0 })
+    }
+    if (url.pathname === `/experimental/session/${workerID}/verify` && method === "POST") {
+      verifyCalls.push({ token: headers["x-opencode-host-token"] ?? null })
+      if (!host) return forbidden()
+      const plan = verdicts(verifyRequests++)
+      if ("stale" in plan) {
+        // the goal was replaced while the loop was about to verify
+        goal.id = `goal_${++goalCount}`
+        return new Response("{}", { status: 409 })
+      }
+      const id = `ses_v${verifyRequests}`
+      children.set(id, { attempt: verifyRequests - 1, busy: 0, messages: [], checks: {}, prompted: 0 })
+      return json({ verifierSessionID: id, pin: { providerID: "pinned", modelID: "judge", configHash: "h" } })
+    }
+    const child = [...children.entries()].find(([id]) => url.pathname.startsWith(`/session/${id}`))
+    if (child) {
+      const [id, record] = child
+      if (url.pathname === `/session/${id}` && method === "GET")
+        return json({ id, metadata: { verifyRecord: { checks: record.checks, submissions: 0 } } })
+      if (url.pathname === `/session/${id}/message` && method === "GET") return json(record.messages)
+      if (!host) return forbidden()
+      if (url.pathname === `/session/${id}/shell`) {
+        const exit = options.checkExit?.(record.attempt) ?? 0
+        const partID = `prt_check_${Object.keys(record.checks).length + 1}`
+        record.checks[partID] = { exit }
+        return json({
+          info: { id: "msg_check", role: "assistant" },
+          parts: [
+            {
+              id: partID,
+              type: "tool",
+              tool: "bash",
+              callID: `call_${partID}`,
+              state: { status: "completed", input: { command: body.command }, output: exit ? "3 fail" : "15 pass", metadata: { exit } },
+            },
+          ],
+        })
+      }
+      if (url.pathname === `/session/${id}/prompt_async`) {
+        record.prompted += 1
+        record.busy = 1
+        return json({})
+      }
+    }
+    if (url.pathname === "/session/status") {
+      const base = (await (await fake.fetchImpl(input, init)).json()) as Record<string, unknown>
+      for (const [id, record] of children) {
+        if (record.busy > 0) {
+          record.busy -= 1
+          base[id] = { type: "busy" }
+          continue
+        }
+        if (record.prompted > 0 && record.messages.length === 0) {
+          // the verifier's turn ends: it writes prose, and the tool records its verdict
+          record.messages.push({
+            info: { id: "msg_v", role: "assistant" },
+            parts: [{ type: "text", text: "VERIFIER PROSE: looks fine to me" }],
+          })
+          const plan = verdicts(record.attempt)
+          if (!("stale" in plan))
+            goal.lastVerdict = {
+              verdict: plan.verdict,
+              at: 1,
+              verifierSessionID: id,
+              unmet: plan.unmet ?? [],
+              missing: plan.missing ?? [],
+              counts: plan.counts ?? { met: plan.verdict === "PASS" ? 1 : 0, unmet: plan.verdict === "PASS" ? 0 : 1, unknown: 0 },
+            }
+        }
+      }
+      return json(base)
+    }
+    return fake.fetchImpl(input, init)
+  }) as typeof fetch
+
+  return { fetchImpl, workerPrompts, verifyCalls, fake }
+}
+
+describe("goal loop: verify before completing (accuracy E Phase 4)", () => {
+  const verify = { checks: ["bun test"], criteria: ["the output is capped at 4 KB"] }
+  const loopFor = (fetchImpl: typeof fetch, events: GoalLoopEvent[], token: string | null = HOST_TOKEN) =>
+    createGoalLoop({
+      getServer: async () => server,
+      fetchImpl,
+      onEvent: (e) => events.push(e),
+      hostToken: () => token ?? undefined,
+      pollIntervalMs: 2,
+      startTimeoutMs: 200,
+    })
+  const done = (text = "done") => ({ reply: { text: `${text}\nGOAL_COMPLETE` } })
+  const ended = (events: GoalLoopEvent[]) => () =>
+    ["completed", "unverified", "failed", "capped", "stopped"].includes(events.at(-1)?.type ?? "")
+
+  test("a PASS completes the loop; the goal starts with the first prompt, with the host token", async () => {
+    const events: GoalLoopEvent[] = []
+    const env = verifyServer("ses_w1", () => done(), () => ({ verdict: "PASS" }))
+    await loopFor(env.fetchImpl, events).start({ directory: "/repo", goal: "cap the output", verify })
+    await waitFor(ended(events))
+    expect(events.at(-1)?.type).toBe("completed")
+    expect(env.verifyCalls).toEqual([{ token: HOST_TOKEN }])
+    expect(env.workerPrompts).toHaveLength(1)
+  })
+
+  test("a FAIL continues the worker with a prompt built only from the host's records", async () => {
+    const events: GoalLoopEvent[] = []
+    const env = verifyServer(
+      "ses_w2",
+      (index) => done(index === 0 ? "done" : "fixed"),
+      (attempt) =>
+        attempt === 0
+          ? { verdict: "FAIL", unmet: ["the output is capped at 4 KB"], missing: [{ criterion: "C1", need: "a test that caps the output" }] }
+          : { verdict: "PASS" },
+      { checkExit: (attempt) => (attempt === 0 ? 1 : 0) },
+    )
+    await loopFor(env.fetchImpl, events).start({ directory: "/repo", goal: "cap the output", verify })
+    await waitFor(ended(events))
+    expect(events.at(-1)?.type).toBe("completed")
+    expect(events.at(-1)?.state.verifications).toBe(1)
+    const feedback = env.workerPrompts[1] ?? ""
+    expect(feedback).toContain("the output is capped at 4 KB")
+    expect(feedback).toContain("a test that caps the output")
+    expect(feedback).toContain("bun test")
+    expect(feedback).toContain("exited 1")
+    expect(feedback).not.toContain("VERIFIER PROSE")
+  })
+
+  test("a PARTIAL where every criterion is unknown ends unverified at once, without using an attempt", async () => {
+    const events: GoalLoopEvent[] = []
+    const env = verifyServer("ses_w3", () => done(), () => ({ verdict: "PARTIAL", counts: { met: 0, unmet: 0, unknown: 2 } }))
+    await loopFor(env.fetchImpl, events).start({ directory: "/repo", goal: "cap the output", verify })
+    await waitFor(ended(events))
+    expect(events.at(-1)?.type).toBe("unverified")
+    expect(events.at(-1)?.state.reason).toBe("verifier could not judge")
+    expect(events.at(-1)?.state.verifications ?? 0).toBe(0)
+    expect(env.workerPrompts).toHaveLength(1)
+  })
+
+  test("after the maximum number of verifications without a PASS, the loop ends unverified", async () => {
+    const events: GoalLoopEvent[] = []
+    const env = verifyServer("ses_w4", () => done(), () => ({ verdict: "FAIL", unmet: ["capped"] }))
+    await loopFor(env.fetchImpl, events).start({
+      directory: "/repo",
+      goal: "cap the output",
+      verify: { ...verify, maxVerifications: 2 },
+    })
+    await waitFor(ended(events), 4000)
+    expect(events.at(-1)?.type).toBe("unverified")
+    expect(events.at(-1)?.state.verifications).toBe(2)
+    expect(events.at(-1)?.state.reason).toContain("2 verifications without a PASS")
+  })
+
+  test("a goal that went stale mid-verification drops the attempt without counting it", async () => {
+    const events: GoalLoopEvent[] = []
+    const env = verifyServer("ses_w5", () => done(), (attempt) => (attempt === 0 ? { stale: true } : { verdict: "PASS" }))
+    await loopFor(env.fetchImpl, events).start({ directory: "/repo", goal: "cap the output", verify })
+    await waitFor(ended(events), 4000)
+    expect(events.at(-1)?.type).toBe("completed")
+    expect(events.at(-1)?.state.verifications ?? 0).toBe(0)
+    expect(events.some((e) => (e.state.reason ?? "").includes("dropped"))).toBe(true)
+  })
+
+  test("a restart during a verification drops that attempt and never counts it", () => {
+    const events: GoalLoopEvent[] = []
+    const loop = loopFor(stubFetch([], []), events)
+    const record: GoalLoopState = {
+      id: "loop_1",
+      status: "running",
+      directory: "/repo",
+      goal: "cap the output",
+      ticket: null,
+      sessionID: "ses_w6",
+      serverURL: server.url,
+      iteration: 2,
+      maxIterations: null,
+      completionMarker: "GOAL_COMPLETE",
+      reason: null,
+      updatedAt: 1,
+      phase: "verifying",
+      verifications: 1,
+      verifierSessionID: "ses_v2",
+    }
+    expect(loop.adoptOrphan(record)).toBeNull()
+    const last = events.at(-1)
+    expect(last?.type).toBe("stopped")
+    expect(last?.state.reason).toContain("the verification in flight was dropped")
+    expect(last?.state.verifications).toBe(1)
+    expect(last?.state.verifierSessionID ?? null).toBeNull()
+  })
+
+  test("without the host token the loop ends unverified, never completed", async () => {
+    const events: GoalLoopEvent[] = []
+    const env = verifyServer("ses_w7", () => done(), () => ({ verdict: "PASS" }))
+    await loopFor(env.fetchImpl, events, null).start({ directory: "/repo", goal: "cap the output", verify })
+    await waitFor(ended(events))
+    expect(events.at(-1)?.type).toBe("unverified")
+    expect(events.at(-1)?.state.reason).toContain("no host token")
+    expect(env.verifyCalls).toHaveLength(0)
+  })
+})

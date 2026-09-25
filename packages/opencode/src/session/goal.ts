@@ -70,6 +70,10 @@ export const LastVerdict = Schema.Struct({
   at: Schema.Number,
   verifierSessionID: Schema.String,
   unmet: Schema.Array(Schema.String),
+  /** What would settle each criterion not met (capped): the loop's feedback to the worker. */
+  missing: Schema.optional(Schema.Array(Schema.Struct({ criterion: Schema.String, need: Schema.String }))),
+  /** Criteria per status: all unknown means the verifier could not judge. */
+  counts: Schema.optional(Schema.Struct({ met: Schema.Number, unmet: Schema.Number, unknown: Schema.Number })),
 })
 export type LastVerdict = Schema.Schema.Type<typeof LastVerdict>
 

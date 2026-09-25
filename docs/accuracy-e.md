@@ -923,5 +923,12 @@ Added tests for the rulings:
    - `POST /experimental/session/:id/goal` takes an optional `prompt`. The goal starts first and
      records the prompt as the task, then the prompt is sent.
 2. **The desktop loop's verify branch:** checks, prompt, verdict, and continue.
+   - `desktop/src/main/goal-verify.ts` runs one verification against the server routes.
+   - `goal-loop.ts` calls it at the completion marker when the input has `verify`.
+   - `goal.lastVerdict` gains `missing` and per-status `counts`, so the feedback and the
+     all-unknown check come from host records only.
+   - The token is given out only for the local server's origin (`hostTokenFor`), never sent to
+     another server.
+   - A restart drops a verification in flight and does not count it.
 3. **Settings and trusted check commands,** with the approval of proposed commands.
 4. **UI:** verdicts and the goal history.
