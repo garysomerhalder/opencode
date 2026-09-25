@@ -816,18 +816,25 @@ says only how the loop drives them.
 loop without the token (a remote server, the CLI) cannot verify: it says so, and stops at
 `unverified` instead of `completed`.
 
+**Starting the loop.** The goal is set in the same host step as the worker session's first prompt:
+one host route (host token) starts the goal and sends the first prompt together. Otherwise the
+first message could be edited between the prompt and the goal start, and `goal.task` would record
+the edited text (Phase 3, B3-1).
+
 **One verification, step by step.** It starts when the worker's turn ends with the completion
 marker (or the loop's own done check), and no background task is running (bounded by
 `goal_verifier_task_wait_ms`; after that the running tasks are listed in the prompt).
 
 1. **Create, sealed from birth.** A new route, `POST /experimental/session/:id/verify` (host
-   token), reads the worker's active goal on the server. It calls `Session.createVerifier` with
-   `verify = { goal: goal.id, base: goal.base, criteria: goal.criteria }` and returns
-   `{ verifierSessionID }`. The base and criteria never go through the client. No goal, or an
-   ended one: 409.
-2. **Run the checks.** For each configured check command, `POST /session/:child/shell` with the
-   token; the host records each (`verifyRecord`). The commands come from the loop's settings
-   (`goal_verifier_checks`, per project). A negative check is written to succeed with exit 0.
+   token), reads the worker's active goal on the server. It resolves the verifier's model
+   (`VerifierPin.resolve`), calls `Session.createVerifier` with
+   `verify = { goal: goal.id, base: goal.base, criteria: goal.criteria }` and that pin, and
+   returns `{ verifierSessionID }`. The base, criteria and model never go through the client. No
+   goal, or an ended one: 409. The prompt in step 3 names the pinned model, and the verdict tool
+   refuses on any change (§11.8).
+2. **Run the checks.** For each check command, `POST /session/:child/shell` with the token; the
+   host records each (`verifyRecord`). A negative check is written to succeed with exit 0. The
+   commands come from trusted config only (ruling 1).
 3. **Prompt the verifier.** `POST /session/:child/prompt_async` with the token and the verifier
    agent. The prompt holds:
    - the goal text and its criteria;
@@ -877,11 +884,22 @@ the worker could not have forged them.
   - no verification while background tasks run.
 - Restart: an in-flight verification resumes or is dropped, and never counts twice.
 
-**Open questions.**
+**Rulings (2026-09-25; the note is approved).**
 
-1. Check commands: per project in settings, or proposed by the worker and approved by the user
-   once?
-2. The verifier's model and budget: a separate `goal_verifier_model`, as section 2 says, and a
-   cap on its steps?
-3. Should a PARTIAL with only `unknown` criteria (nothing checkable) end the loop `unverified` at
-   once, rather than spend an attempt?
+1. **Check commands come from trusted config only:** user-level or managed, never project config
+   (the harness's trust levels). The worker may propose commands. Each proposal needs a one-time
+   user approval in the UI, stored host-side and keyed by project plus the command's hash; an
+   approved command then runs like a configured one.
+2. **The verifier has its own model profile.** It is cross-vendor by default when one is
+   configured (Decision 4) and pinned at `createVerifier` (§11.8). It has a step cap (default 40)
+   and a wall-clock cap. A verifier that hits either cap ends the attempt as unverified.
+3. **A PARTIAL where every criterion is `unknown`** ends the loop `unverified` at once, with the
+   reason "verifier could not judge", without using up an attempt.
+
+Added tests for the rulings:
+
+- a check command from project config is not run;
+- a proposed command runs only after approval, and an approval of one command hash does not cover
+  another;
+- the step and time caps end the attempt;
+- an all-unknown PARTIAL ends `unverified` with that reason.
