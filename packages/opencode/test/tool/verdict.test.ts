@@ -47,7 +47,40 @@ const nodes = [
   Todo.node,
   Provider.node,
 ]
-const it = testEffect(LayerNode.compile(LayerNode.group(nodes)))
+
+// Every verification is pinned to the verifier's model (fail closed), so every test
+// runs with a provider it can resolve: this mock, whose config a test can change, as
+// a worker with a config write could, to see the pinned verifier refuse.
+let providerOptions: Record<string, unknown> = { baseURL: "http://127.0.0.1:9/v1" }
+const pinnedProvider = [
+  Provider.node,
+  Layer.mock(Provider.Service, {
+    defaultModel: () => Effect.succeed({ providerID: ProviderV2.ID.make("pinned"), modelID: ModelV2.ID.make("judge") }),
+    getProvider: () =>
+      Effect.sync(
+        () =>
+          ({
+            id: ProviderV2.ID.make("pinned"),
+            name: "Pinned",
+            source: "config",
+            env: [],
+            options: providerOptions,
+            models: {},
+          }) as unknown as Provider.Info,
+      ),
+    getModel: () =>
+      Effect.succeed({
+        id: ModelV2.ID.make("judge"),
+        providerID: ProviderV2.ID.make("pinned"),
+        api: { id: "judge", url: "http://127.0.0.1:9/v1", npm: "@ai-sdk/openai-compatible" },
+      } as unknown as Provider.Model),
+  }),
+] as const
+const it = testEffect(LayerNode.compile(LayerNode.group(nodes), [pinnedProvider]))
+const withPinnedProvider = it
+
+/** The pin the host gives every verification (Session.createVerifier). */
+const pin = () => VerifierPin.resolve.pipe(Effect.map((value) => value!))
 
 const SECRET = "sk-live-4f9a2c"
 
@@ -80,42 +113,10 @@ const DIFF = [
 ].join("\n")
 const withDiff = testEffect(
   LayerNode.compile(LayerNode.group(nodes), [
+    pinnedProvider,
     [
       Snapshot.node,
       Layer.mock(Snapshot.Service, { diff: (base) => Effect.succeed(base === "gone" ? undefined : DIFF) }),
-    ],
-  ]),
-)
-
-// Final check of branch 2 (HIGH): a provider whose config the test can change, as a
-// worker with a config write could, to see the pinned verifier refuse.
-let providerOptions: Record<string, unknown> = { baseURL: "http://127.0.0.1:9/v1" }
-const withPinnedProvider = testEffect(
-  LayerNode.compile(LayerNode.group(nodes), [
-    [
-      Provider.node,
-      Layer.mock(Provider.Service, {
-        defaultModel: () =>
-          Effect.succeed({ providerID: ProviderV2.ID.make("pinned"), modelID: ModelV2.ID.make("judge") }),
-        getProvider: () =>
-          Effect.sync(
-            () =>
-              ({
-                id: ProviderV2.ID.make("pinned"),
-                name: "Pinned",
-                source: "config",
-                env: [],
-                options: providerOptions,
-                models: {},
-              }) as unknown as Provider.Info,
-          ),
-        getModel: () =>
-          Effect.succeed({
-            id: ModelV2.ID.make("judge"),
-            providerID: ProviderV2.ID.make("pinned"),
-            api: { id: "judge", url: "http://127.0.0.1:9/v1", npm: "@ai-sdk/openai-compatible" },
-          } as unknown as Provider.Model),
-      }),
     ],
   ]),
 )
@@ -145,6 +146,7 @@ const setup = Effect.fn("VerdictTest.setup")(function* () {
   })
   const sessions = yield* Session.Service
   const session = yield* sessions.create({ title: "verify" })
+  yield* sessions.setMetadata({ sessionID: session.id, metadata: { verify: { pin: yield* pin() } } })
   return { directory, session }
 })
 
@@ -152,15 +154,15 @@ const setup = Effect.fn("VerdictTest.setup")(function* () {
 const another = Effect.fn("VerdictTest.another")(function* (verify?: Record<string, unknown>) {
   const sessions = yield* Session.Service
   const session = yield* sessions.create({ title: "verify" })
-  if (verify) yield* sessions.setMetadata({ sessionID: session.id, metadata: { verify } })
+  yield* sessions.setMetadata({ sessionID: session.id, metadata: { verify: { pin: yield* pin(), ...verify } } })
   return session.id
 })
 
-/** Records the goal as the loop does (docs/accuracy-e.md §11.5), keeping the host's check records. */
+/** Records the goal as the loop does (docs/accuracy-e.md §11.5), keeping the host's check records and the pin. */
 const goal = Effect.fn("VerdictTest.goal")(function* (sessionID: Session.Info["id"], verify: Record<string, unknown>) {
   const sessions = yield* Session.Service
   const metadata = (yield* sessions.get(sessionID)).metadata
-  yield* sessions.setMetadata({ sessionID, metadata: { ...metadata, verify } })
+  yield* sessions.setMetadata({ sessionID, metadata: { ...metadata, verify: { pin: yield* pin(), ...verify } } })
 })
 
 /** Stores a tool part in the session, in a message of its own, and returns the part's id. */
@@ -366,6 +368,21 @@ describe("tool.verdict: checks are the host's records, bound to the loop", () =>
       )
       expect(cited.error).toContain("did not finish")
       expect(cited.error).not.toContain("Verdict recorded")
+    }),
+  )
+
+  // final check, fail closed: a verification with no pinned model records nothing
+  it.instance("a verification with no pinned verifier model is refused", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const sessions = yield* Session.Service
+      for (const verify of [undefined, { criteria: ["the output is capped"] }]) {
+        const session = yield* sessions.create({ title: "verify" })
+        if (verify) yield* sessions.setMetadata({ sessionID: session.id, metadata: { verify } })
+        expect((yield* submit(session.id, passWith([capped]))).error).toContain(
+          "verification has no pinned verifier model",
+        )
+      }
     }),
   )
 
@@ -610,7 +627,8 @@ describe("tool.verdict: submissions", () => {
       expect(forked.metadata?.goal).toBeUndefined()
       expect(forked.metadata?.note).toBe("kept")
       const cite = passWith([{ kind: "check", callID: "call_tests", exit: 0, excerpt: "15 pass" }])
-      expect((yield* submit(forked.id, cite)).error).toContain("there is no check call_tests in this verification")
+      // with no verify (nor its pin), the fork is no verification at all: nothing is recorded
+      expect((yield* submit(forked.id, cite)).error).toContain("verification has no pinned verifier model")
     }),
   )
 })
@@ -628,7 +646,7 @@ const loop = Effect.fn("VerdictTest.loop")(function* () {
       const child = yield* sessions.create({ title: "verify", parentID: worker.id })
       yield* sessions.setMetadata({
         sessionID: child.id,
-        metadata: { verify: { goal: started.id, criteria: ["the output is capped"] } },
+        metadata: { verify: { goal: started.id, criteria: ["the output is capped"], pin: yield* pin() } },
       })
       return child.id
     })
