@@ -147,9 +147,26 @@ export const VerdictTool = Tool.define<
           const step = current(ctx.sessionID, ctx.messageID)
           if (step.recorded || earlier.some((part) => part.state.status === "completed"))
             throw new Error("A verdict is already recorded for this verification. Stop here.")
+          // The loop records the goal on the session it verifies in (phase 4,
+          // docs/accuracy-e.md §11.5): the diff's base snapshot, the criteria the
+          // user declared, and the part ids of the checks it ran.
+          const verifying = yield* sessions.get(ctx.sessionID).pipe(Effect.orDie)
+          const verify = verifying.metadata?.verify
+          // The worker's goal this verification is for (§11.8). A verdict for a goal
+          // the worker no longer has is refused before anything is checked.
+          const target = typeof verify?.goal === "string" ? verify.goal : undefined
+          const worker = verifying.parentID
+          if (target !== undefined && !(yield* activeGoal(worker, target))) throw new Error(SessionGoal.stale(target))
+          // A stale-goal refusal is not a submission: otherwise the worker could use
+          // up the verifier's submissions by replacing the goal. Only that exact error
+          // for this verification's goal is skipped, so text a model gets echoed into
+          // another error cannot pass for one.
+          const staleError = target === undefined ? undefined : SessionGoal.stale(target)
+          const refusedAsStale = (error: string) =>
+            staleError !== undefined && (error === staleError || error === `Error: ${staleError}`)
           const inStorage = new Set(earlier.map((part) => part.callID))
           const submission =
-            earlier.filter((part) => part.state.status === "error").length +
+            earlier.filter((part) => part.state.status === "error" && !refusedAsStale(part.state.error)).length +
             [...step.rejected].filter((callID) => !inStorage.has(callID)).length +
             1
           const final = submission >= MAX_SUBMISSIONS
@@ -169,16 +186,6 @@ export const VerdictTool = Tool.define<
               target === undefined ? undefined : yield* fs.readFileString(target).pipe(Effect.orElseSucceed(() => undefined)),
             )
           }
-          // The loop records the goal on the session it verifies in (phase 4,
-          // docs/accuracy-e.md §11.5): the diff's base snapshot, the criteria the
-          // user declared, and the part ids of the checks it ran.
-          const verifying = yield* sessions.get(ctx.sessionID).pipe(Effect.orDie)
-          const verify = verifying.metadata?.verify
-          // The worker's goal this verification is for (§11.8). A verdict for a goal
-          // the worker no longer has is refused before anything is checked.
-          const target = typeof verify?.goal === "string" ? verify.goal : undefined
-          const worker = verifying.parentID
-          if (target !== undefined && !(yield* activeGoal(worker, target))) throw new Error(SessionGoal.stale(target))
           const base = verify?.base
           // undefined: no base recorded (Snapshot.track() could not write one) or git
           // cannot diff against it. Citations are then unavailable, not "not in the diff".
