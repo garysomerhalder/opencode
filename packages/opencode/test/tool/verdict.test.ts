@@ -24,6 +24,7 @@ import { Snapshot } from "../../src/snapshot"
 import { SessionGoal } from "../../src/session/goal"
 import { Todo } from "../../src/session/todo"
 import { contentKey } from "../../src/session/checkpoint"
+import { VerifyRecord } from "../../src/session/verify-record"
 import { ShellID } from "../../src/tool/shell/id"
 import type * as Tool from "../../src/tool/tool"
 import { VerdictTool } from "../../src/tool/verdict"
@@ -119,10 +120,11 @@ const another = Effect.fn("VerdictTest.another")(function* (verify?: Record<stri
   return session.id
 })
 
-/** Records the goal as the loop does (docs/accuracy-e.md §11.5). */
+/** Records the goal as the loop does (docs/accuracy-e.md §11.5), keeping the host's check records. */
 const goal = Effect.fn("VerdictTest.goal")(function* (sessionID: Session.Info["id"], verify: Record<string, unknown>) {
   const sessions = yield* Session.Service
-  yield* sessions.setMetadata({ sessionID, metadata: { verify } })
+  const metadata = (yield* sessions.get(sessionID)).metadata
+  yield* sessions.setMetadata({ sessionID, metadata: { ...metadata, verify } })
 })
 
 /** Stores a tool part in the session, in a message of its own, and returns the part's id. */
@@ -149,6 +151,19 @@ const record = Effect.fn("VerdictTest.record")(function* (
   })
   const id = PartID.ascending()
   yield* sessions.updatePart({ id, messageID: message.id, sessionID, type: "tool", tool, callID, state })
+  // A finished check the host ran (the loop, with its token) is recorded host-side as
+  // the shell route records it: its exit, and its output's hash and length.
+  if (tool === ShellID.ToolID && state.status === "completed" && state.metadata?.ranBy === "user")
+    yield* VerifyRecord.update(sessions, sessionID, (current) => ({
+      ...current,
+      checks: {
+        ...current.checks,
+        [id]: {
+          exit: typeof state.metadata?.exit === "number" ? state.metadata.exit : null,
+          ...VerifyRecord.digest(state.output),
+        },
+      },
+    }))
   return id
 })
 
@@ -284,6 +299,68 @@ describe("tool.verdict: checks are the host's records, bound to the loop", () =>
       const listed = yield* record(session.id, ShellID.ToolID, "call_tests", shell(1, "3 fail", "user"))
       yield* goal(session.id, { checks: [listed] })
       expect((yield* submit(session.id, passWith([capped]))).error).toContain("PASS, but check call_tests exited 1")
+    }),
+  )
+
+  // Re-review of Phase 3, branch 2 (CRITICAL): a check's result is the host's record
+  // of it, not the part's metadata, which storage writes could change.
+  it.instance("a check's part rewritten after it ran is not evidence, and its recorded exit stands", () =>
+    Effect.gen(function* () {
+      const { session } = yield* setup()
+      const sessions = yield* Session.Service
+      const failed = yield* record(session.id, ShellID.ToolID, "call_tests", shell(1, "3 fail", "user"))
+      const passed = yield* record(session.id, ShellID.ToolID, "call_lint", shell(0, "no problems", "user"))
+      yield* goal(session.id, { checks: [failed, passed] })
+      // rewrite both parts in storage: the failed run to exit 0, the passing one's output
+      for (const [id, output] of [
+        [failed, "15 pass"],
+        [passed, "no problems at all, and 99 pass"],
+      ] as const) {
+        const part = (yield* sessions.messages({ sessionID: session.id }))
+          .flatMap((message) => message.parts)
+          .find((item) => item.id === id)!
+        yield* sessions.updatePart({
+          ...part,
+          state: { ...shell(0, output, "user"), time: { start: 1, end: 2 } },
+        } as SessionV1.Part)
+      }
+      const cited = yield* submit(
+        session.id,
+        passWith([{ kind: "check", callID: "call_lint", exit: 0, excerpt: "99 pass" }]),
+      )
+      expect(cited.error).toContain("did not finish")
+      expect(cited.error).not.toContain("Verdict recorded")
+    }),
+  )
+
+  it.instance("deleting the parts of rejected submissions does not give the verifier more", () =>
+    Effect.gen(function* () {
+      const { session } = yield* setup()
+      const sessions = yield* Session.Service
+      const wrong = passWith([{ ...capped, quote: "LIMIT = 9999" }])
+      expect((yield* submit(session.id, wrong)).error).toContain("(2 of 3 submissions left)")
+      expect((yield* submit(session.id, wrong)).error).toContain("(1 of 3 submissions left)")
+      // erase them from storage, as a worker with storage access could
+      for (const message of yield* sessions.messages({ sessionID: session.id }))
+        for (const part of message.parts)
+          if (part.type === "tool" && part.tool === "verdict")
+            yield* sessions.removePart({ sessionID: session.id, messageID: message.info.id, partID: part.id })
+      // still the third, final submission: its bad citations are dropped and the PASS
+      // they supported is recorded as PARTIAL (before, it would be a first submission)
+      expect((yield* submit(session.id, wrong)).output).toContain("Recorded as PARTIAL")
+    }),
+  )
+
+  it.instance("deleting a recorded verdict's part does not allow a second one", () =>
+    Effect.gen(function* () {
+      const { session } = yield* setup()
+      const sessions = yield* Session.Service
+      expect((yield* submit(session.id, passWith([capped]))).error).toBe("")
+      for (const message of yield* sessions.messages({ sessionID: session.id }))
+        for (const part of message.parts)
+          if (part.type === "tool" && part.tool === "verdict")
+            yield* sessions.removePart({ sessionID: session.id, messageID: message.info.id, partID: part.id })
+      expect((yield* submit(session.id, passWith([capped]))).error).toContain("A verdict is already recorded")
     }),
   )
 
@@ -425,15 +502,16 @@ describe("tool.verdict: submissions", () => {
     }),
   )
 
-  // re-review 5: what the tool remembers in this process is the step's, not the
-  // session's forever: after a revert removes the recorded verdict from storage,
-  // a later step can submit again
-  it.instance("a reverted session can submit again", () =>
+  // re-review 5 had a revert re-open a verification. The Phase 3 re-review made a
+  // recorded verdict final in the host's record: removing its part from storage (a
+  // revert, a deleted part) does not allow another one. A verifier session is sealed,
+  // so only the host could revert it; to verify again, the host starts a new one.
+  it.instance("a verdict stays recorded when its part leaves storage", () =>
     Effect.gen(function* () {
       const { session } = yield* setup()
       expect((yield* submit(session.id, passWith([capped]))).error).toBe("")
       // (the verdict's part never reached storage, as after a revert)
-      expect((yield* submit(session.id, passWith([capped]))).error).toBe("")
+      expect((yield* submit(session.id, passWith([capped]))).error).toContain("A verdict is already recorded")
     }),
   )
 

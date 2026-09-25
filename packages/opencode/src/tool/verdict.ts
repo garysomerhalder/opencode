@@ -18,6 +18,7 @@ import { Session } from "@/session/session"
 import { SessionGoal } from "@/session/goal"
 import type { SessionID } from "@/session/schema"
 import { Todo } from "@/session/todo"
+import { VerifyRecord } from "@/session/verify-record"
 import { CanonicalPath } from "@/util/canonical-path"
 import { Snapshot } from "@/snapshot"
 import { Verdict } from "@/session/verdict"
@@ -145,13 +146,17 @@ export const VerdictTool = Tool.define<
             (part): part is SessionV1.ToolPart => part.type === "tool" && part.tool === ID && part.callID !== ctx.callID,
           )
           const step = current(ctx.sessionID, ctx.messageID)
-          if (step.recorded || earlier.some((part) => part.state.status === "completed"))
-            throw new Error("A verdict is already recorded for this verification. Stop here.")
           // The loop records the goal on the session it verifies in (phase 4,
           // docs/accuracy-e.md §11.5): the diff's base snapshot, the criteria the
           // user declared, and the part ids of the checks it ran.
           const verifying = yield* sessions.get(ctx.sessionID).pipe(Effect.orDie)
           const verify = verifying.metadata?.verify
+          // The host's record of this session (§11.8): the checks it ran, the submissions
+          // counted and whether a verdict was recorded. Storage can be rewritten or have
+          // parts deleted; this cannot, so it decides.
+          const hostRecord = VerifyRecord.read(verifying.metadata) ?? VerifyRecord.EMPTY
+          if (step.recorded || hostRecord.recorded || earlier.some((part) => part.state.status === "completed"))
+            throw new Error("A verdict is already recorded for this verification. Stop here.")
           // The worker's goal this verification is for (§11.8). A verdict for a goal
           // the worker no longer has is refused before anything is checked.
           const target = typeof verify?.goal === "string" ? verify.goal : undefined
@@ -165,10 +170,12 @@ export const VerdictTool = Tool.define<
           const refusedAsStale = (error: string) =>
             staleError !== undefined && (error === staleError || error === `Error: ${staleError}`)
           const inStorage = new Set(earlier.map((part) => part.callID))
-          const submission =
+          const fromStorage =
             earlier.filter((part) => part.state.status === "error" && !refusedAsStale(part.state.error)).length +
-            [...step.rejected].filter((callID) => !inStorage.has(callID)).length +
-            1
+            [...step.rejected].filter((callID) => !inStorage.has(callID)).length
+          // the host's count wins over storage, where the parts of rejected submissions
+          // could have been deleted; storage covers submissions before the record existed
+          const submission = Math.max(fromStorage, hostRecord.submissions) + 1
           const final = submission >= MAX_SUBMISSIONS
 
           const instance = yield* InstanceState.context
@@ -193,7 +200,11 @@ export const VerdictTool = Tool.define<
           const diff = raw === undefined ? undefined : yield* readableDiff(ctx, raw)
           const declared: unknown = verify?.criteria
           const listed: unknown = verify?.checks
-          const runs = checks(history, Array.isArray(listed) ? listed.filter((id) => typeof id === "string") : [])
+          const runs = checks(
+            history,
+            Array.isArray(listed) ? listed.filter((id) => typeof id === "string") : [],
+            hostRecord,
+          )
           const world: Verdict.World = {
             file: (file) => files.get(file),
             checks: runs.listed,
@@ -205,6 +216,7 @@ export const VerdictTool = Tool.define<
           const result = Verdict.validate(cited, world, { final })
           if (!result.verdict) step.rejected.add(ctx.callID ?? `call_${submission}`)
           if (!result.verdict) {
+            yield* VerifyRecord.update(sessions, ctx.sessionID, (record) => ({ ...record, submissions: submission }))
             const reasons = result.errors.map((error) => `- ${error}`).join("\n")
             if (final)
               throw new Error(
@@ -239,6 +251,11 @@ export const VerdictTool = Tool.define<
               .pipe(Effect.catchTag("NotFoundError", () => Effect.succeed(false)))
             if (!written) throw new Error(SessionGoal.stale(target))
           }
+          yield* VerifyRecord.update(sessions, ctx.sessionID, (record) => ({
+            ...record,
+            submissions: submission,
+            recorded: true,
+          }))
           step.recorded = true
           const dropped = result.errors.length > 0 ? ` Citations that did not check out were dropped.` : ""
           return {
@@ -354,17 +371,23 @@ const citable = Effect.fnUntraced(function* (ctx: Tool.Context, file: string) {
  * a PASS. A part that did not complete (running, or orphaned by a crash, or an
  * error) has no exit code, which blocks a PASS.
  */
-function checks(parts: SessionV1.Part[], listed: string[]) {
+function checks(parts: SessionV1.Part[], listed: string[], record: VerifyRecord.Record) {
   const runs = parts.flatMap((part) => {
     if (part.type !== "tool" || part.tool !== ShellID.ToolID) return []
     const metadata = "metadata" in part.state ? part.state.metadata : undefined
     if (metadata?.ranBy !== "user") return []
-    const exit = part.state.status === "completed" ? metadata?.exit : undefined
     const output = part.state.status === "completed" ? part.state.output : ""
-    return [{ id: part.id, check: { callID: part.callID, exit: typeof exit === "number" ? exit : undefined, output } }]
+    // The exit is the host's record of the run (§11.8), never the part's metadata:
+    // a listed check counts only while its output is what the host recorded. A run
+    // with no record, or whose part changed after it ran, reads as not finished:
+    // it cannot be cited, and it blocks a PASS.
+    const host = record.checks[part.id]
+    const intact = part.state.status === "completed" && host !== undefined && VerifyRecord.matches(host, output)
+    const exit = intact ? (host.exit ?? undefined) : undefined
+    return [{ id: part.id, intact, check: { callID: part.callID, exit, output } }]
   })
   return {
-    listed: runs.filter((run) => listed.includes(run.id)).map((run) => run.check),
-    unlisted: runs.filter((run) => !listed.includes(run.id)).map((run) => run.check),
+    listed: runs.filter((run) => run.intact && listed.includes(run.id)).map((run) => run.check),
+    unlisted: runs.filter((run) => !run.intact || !listed.includes(run.id)).map((run) => run.check),
   }
 }

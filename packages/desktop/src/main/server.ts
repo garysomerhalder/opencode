@@ -18,7 +18,9 @@ type SidecarMessage =
 // The local server's host token (accuracy E §11.8): the goal routes take it. It
 // arrives with the sidecar's "ready" message, over the utility process's private
 // channel, and is kept in this process's memory only: never logged, stored or
-// put in an environment the agents' shells inherit.
+// put in an environment the agents' shells inherit. It stays in the main process:
+// never pass it to a renderer (no IPC handler returns it, the preload does not
+// expose it), since page script there runs web content (preload/host-token.test.ts).
 let localHostToken: string | undefined
 
 /** The host token of the local server this process started, once it is ready. */

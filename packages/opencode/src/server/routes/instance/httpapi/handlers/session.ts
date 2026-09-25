@@ -7,6 +7,8 @@ import { Permission } from "@/permission"
 import { SessionShare } from "@/share/session"
 import { Session } from "@/session/session"
 import { SessionMetadataLock } from "@/session/metadata-lock"
+import { HostToken } from "@/server/host-token"
+import { VerifyRecord } from "@/session/verify-record"
 import { SessionCompaction } from "@/session/compaction"
 import { MessageV2 } from "@/session/message-v2"
 import { SessionPrompt } from "@/session/prompt"
@@ -81,6 +83,29 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
 
     const requireSession = Effect.fn("SessionHttpApi.requireSession")(function* (sessionID: SessionID) {
       return yield* SessionError.mapStorageNotFound(session.get(sessionID))
+    })
+
+    /** A session holding host records (a goal loop's goal, or a verification). */
+    const hostOwned = (info: Session.Info) =>
+      info.metadata?.goal !== undefined || info.metadata?.verify !== undefined || sealed(info)
+
+    /**
+     * A verifier session (accuracy E §11.8): one with a verification, or checks the
+     * host ran. What its verdict is checked against is in its storage, so every
+     * route that writes or steers it takes the host token.
+     */
+    const sealed = (info: Session.Info) =>
+      info.metadata?.verify !== undefined || info.metadata?.verifyRecord !== undefined
+    const isHost = (request: HttpServerRequest.HttpServerRequest) =>
+      HostToken.verify(request.headers[HostToken.HEADER])
+    /** The session, when this request may write or steer it; 403 for a sealed one without the token. */
+    const writable = Effect.fn("SessionHttpApi.writable")(function* (
+      sessionID: SessionID,
+      request: HttpServerRequest.HttpServerRequest,
+    ) {
+      const info = yield* requireSession(sessionID)
+      if (sealed(info) && !isHost(request)) return yield* new HttpApiError.Forbidden({})
+      return info
     })
 
     const get = Effect.fn("SessionHttpApi.get")(function* (ctx: { params: { sessionID: SessionID } }) {
@@ -176,7 +201,14 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       return yield* create({ payload })
     })
 
-    const remove = Effect.fn("SessionHttpApi.remove")(function* (ctx: { params: { sessionID: SessionID } }) {
+    const remove = Effect.fn("SessionHttpApi.remove")(function* (ctx: {
+      params: { sessionID: SessionID }
+      request: HttpServerRequest.HttpServerRequest
+    }) {
+      // Deleting a session deletes the host's records with it (its goal, or the
+      // verification it is): only the host may, with its token (accuracy E §11.8).
+      const current = yield* requireSession(ctx.params.sessionID)
+      if (hostOwned(current) && !isHost(ctx.request)) return yield* new HttpApiError.Forbidden({})
       yield* SessionError.mapStorageNotFound(session.remove(ctx.params.sessionID))
       return true
     })
@@ -310,8 +342,9 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const prompt = Effect.fn("SessionHttpApi.prompt")(function* (ctx: {
       params: { sessionID: SessionID }
       payload: typeof PromptPayload.Type
+      request: HttpServerRequest.HttpServerRequest
     }) {
-      yield* requireSession(ctx.params.sessionID)
+      yield* writable(ctx.params.sessionID, ctx.request)
       const message = yield* promptSvc
         .prompt({
           ...ctx.payload,
@@ -326,8 +359,9 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const promptAsync = Effect.fn("SessionHttpApi.promptAsync")(function* (ctx: {
       params: { sessionID: SessionID }
       payload: typeof PromptPayload.Type
+      request: HttpServerRequest.HttpServerRequest
     }) {
-      yield* requireSession(ctx.params.sessionID)
+      yield* writable(ctx.params.sessionID, ctx.request)
       yield* promptSvc.prompt({ ...ctx.payload, sessionID: ctx.params.sessionID }).pipe(
         Effect.catchCause((cause) =>
           Effect.gen(function* () {
@@ -346,8 +380,9 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const command = Effect.fn("SessionHttpApi.command")(function* (ctx: {
       params: { sessionID: SessionID }
       payload: typeof CommandPayload.Type
+      request: HttpServerRequest.HttpServerRequest
     }) {
-      yield* requireSession(ctx.params.sessionID)
+      yield* writable(ctx.params.sessionID, ctx.request)
       return yield* promptSvc
         .command({ ...ctx.payload, sessionID: ctx.params.sessionID })
         .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
@@ -356,21 +391,42 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const shell = Effect.fn("SessionHttpApi.shell")(function* (ctx: {
       params: { sessionID: SessionID }
       payload: typeof ShellPayload.Type
+      request: HttpServerRequest.HttpServerRequest
     }) {
-      yield* requireSession(ctx.params.sessionID)
-      return yield* SessionError.mapBusy(promptSvc.shell({ ...ctx.payload, sessionID: ctx.params.sessionID }))
+      yield* writable(ctx.params.sessionID, ctx.request)
+      // A command the host runs (a goal loop's check, with its token) is recorded
+      // host-side: the session is sealed before it runs, and its exit and its output's
+      // hash are kept where no storage write reaches them (session/verify-record.ts).
+      const host = isHost(ctx.request)
+      if (host) yield* VerifyRecord.update(session, ctx.params.sessionID, (current) => current)
+      const result = yield* SessionError.mapBusy(promptSvc.shell({ ...ctx.payload, sessionID: ctx.params.sessionID }))
+      if (!host) return result
+      for (const part of result.parts) {
+        if (part.type !== "tool" || part.state.status !== "completed") continue
+        const exit = part.state.metadata?.exit
+        const output = part.state.output
+        yield* VerifyRecord.update(session, ctx.params.sessionID, (current) => ({
+          ...current,
+          checks: { ...current.checks, [part.id]: { exit: typeof exit === "number" ? exit : null, ...VerifyRecord.digest(output) } },
+        }))
+      }
+      return result
     })
 
     const revert = Effect.fn("SessionHttpApi.revert")(function* (ctx: {
       params: { sessionID: SessionID }
       payload: typeof RevertPayload.Type
+      request: HttpServerRequest.HttpServerRequest
     }) {
-      yield* requireSession(ctx.params.sessionID)
+      yield* writable(ctx.params.sessionID, ctx.request)
       return yield* SessionError.mapBusy(revertSvc.revert({ sessionID: ctx.params.sessionID, ...ctx.payload }))
     })
 
-    const unrevert = Effect.fn("SessionHttpApi.unrevert")(function* (ctx: { params: { sessionID: SessionID } }) {
-      yield* requireSession(ctx.params.sessionID)
+    const unrevert = Effect.fn("SessionHttpApi.unrevert")(function* (ctx: {
+      params: { sessionID: SessionID }
+      request: HttpServerRequest.HttpServerRequest
+    }) {
+      yield* writable(ctx.params.sessionID, ctx.request)
       return yield* SessionError.mapBusy(revertSvc.unrevert({ sessionID: ctx.params.sessionID }))
     })
 
@@ -394,8 +450,9 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
 
     const deleteMessage = Effect.fn("SessionHttpApi.deleteMessage")(function* (ctx: {
       params: { sessionID: SessionID; messageID: MessageID }
+      request: HttpServerRequest.HttpServerRequest
     }) {
-      yield* requireSession(ctx.params.sessionID)
+      yield* writable(ctx.params.sessionID, ctx.request)
       yield* SessionError.mapBusy(runState.assertNotBusy(ctx.params.sessionID))
       yield* session.removeMessage(ctx.params)
       return true
@@ -403,8 +460,9 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
 
     const deletePart = Effect.fn("SessionHttpApi.deletePart")(function* (ctx: {
       params: { sessionID: SessionID; messageID: MessageID; partID: PartID }
+      request: HttpServerRequest.HttpServerRequest
     }) {
-      yield* requireSession(ctx.params.sessionID)
+      yield* writable(ctx.params.sessionID, ctx.request)
       yield* session.removePart(ctx.params)
       return true
     })
@@ -412,13 +470,17 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const updatePart = Effect.fn("SessionHttpApi.updatePart")(function* (ctx: {
       params: { sessionID: SessionID; messageID: MessageID; partID: PartID }
       payload: typeof SessionV1.Part.Type
+      request: HttpServerRequest.HttpServerRequest
     }) {
-      yield* requireSession(ctx.params.sessionID)
+      yield* writable(ctx.params.sessionID, ctx.request)
       const payload = ctx.payload as SessionV1.Part
       if (
         payload.id !== ctx.params.partID ||
         payload.messageID !== ctx.params.messageID ||
-        payload.sessionID !== ctx.params.sessionID
+        payload.sessionID !== ctx.params.sessionID ||
+        // a tool part is the record of a tool call the host made: no client writes one
+        // (it could turn a failed check into a passing one), on any session
+        payload.type === "tool"
       ) {
         return yield* new HttpApiError.BadRequest({})
       }
