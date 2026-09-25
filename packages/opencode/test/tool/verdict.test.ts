@@ -333,6 +333,22 @@ describe("tool.verdict: checks are the host's records, bound to the loop", () =>
     }),
   )
 
+  // final re-review, B2-3: a check the host recorded whose part is gone from storage
+  it.instance("a recorded check whose part was deleted blocks a PASS", () =>
+    Effect.gen(function* () {
+      const { session } = yield* setup()
+      const sessions = yield* Session.Service
+      const listed = yield* record(session.id, ShellID.ToolID, "call_tests", shell(1, "3 fail", "user"))
+      yield* goal(session.id, { checks: [listed] })
+      for (const message of yield* sessions.messages({ sessionID: session.id }))
+        for (const part of message.parts)
+          if (part.id === listed)
+            yield* sessions.removePart({ sessionID: session.id, messageID: message.info.id, partID: part.id })
+      const result = yield* submit(session.id, passWith([capped]))
+      expect(result.error).toContain("is gone from the session")
+    }),
+  )
+
   it.instance("deleting the parts of rejected submissions does not give the verifier more", () =>
     Effect.gen(function* () {
       const { session } = yield* setup()

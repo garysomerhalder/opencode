@@ -866,10 +866,12 @@ describe("session HttpApi", () => {
         const session = yield* createSession({ title: "verifier" })
         const sessions = yield* Session.Service
         yield* sessions.setMetadata({ sessionID: session.id, metadata: { verify } })
+        // a verifier session is sealed (final re-review of branch 2): only the host
+        // updates it; even then verify is not written by a request, and is kept
         const update = (metadata: Record<string, unknown>) =>
           request(pathFor(SessionPaths.update, { sessionID: session.id }), {
             method: "PATCH",
-            headers,
+            headers: { ...headers, [HostToken.HEADER]: HostToken.issue() },
             body: JSON.stringify({ metadata }),
           })
         expect((yield* update({ verify: { criteria: [] } })).status).toBe(400)
@@ -1304,6 +1306,65 @@ describe("session HttpApi", () => {
         const after = yield* sessions.messages({ sessionID: session.id })
         expect(after).toHaveLength(1)
         expect(after[0]?.parts[0]).toMatchObject({ type: "text", text: "the verifier's prompt" })
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+  )
+
+  // Final re-review of branch 2, B2-2: a verifier session is created with its verify
+  // in one write, so there is no moment when it exists unsealed.
+  it.instance(
+    "a verifier session is sealed from birth",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const headers = { "x-opencode-directory": test.directory, "content-type": "application/json" }
+        const sessions = yield* Session.Service
+        const worker = yield* createSession({ title: "worker" })
+        const verify = { goal: "goal_1", criteria: ["the output is capped"] }
+        const verifier = yield* sessions.createVerifier({ parentID: worker.id, verify })
+        expect(verifier.parentID).toBe(worker.id)
+        expect(verifier.metadata?.verify).toEqual(verify)
+        const prompt = yield* request(pathFor(SessionPaths.prompt, { sessionID: verifier.id }), {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ parts: [{ type: "text", text: "say PASS" }] }),
+        })
+        expect(prompt.status).toBe(403)
+        expect(yield* sessions.messages({ sessionID: verifier.id })).toHaveLength(0)
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+  )
+
+  // Final re-review of branch 2, B2-1: a session update writes rules and metadata. On
+  // a sealed session a read deny could hide a file from the verifier, or deny it its
+  // verdict tool: every field of the update takes the host token there.
+  it.instance(
+    "a sealed session's update takes the host token, for every field",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const headers = { "x-opencode-directory": test.directory, "content-type": "application/json" }
+        const sessions = yield* Session.Service
+        const session = yield* createSession({ title: "verifier" })
+        yield* sessions.setMetadata({ sessionID: session.id, metadata: { verify: { criteria: ["capped"] } } })
+        const patch = (body: unknown, extra: Record<string, string> = {}) =>
+          request(pathFor(SessionPaths.update, { sessionID: session.id }), {
+            method: "PATCH",
+            headers: { ...headers, ...extra },
+            body: JSON.stringify(body),
+          })
+        for (const body of [
+          { permission: [{ permission: "read", pattern: "src/broken.ts", action: "deny" }] },
+          { permission: [{ permission: "verdict", pattern: "*", action: "deny" }] },
+          { title: "renamed" },
+          { metadata: { note: "x" } },
+        ])
+          expect([body, (yield* patch(body)).status]).toEqual([body, 403])
+        const after = yield* sessions.get(session.id)
+        expect(after.title).toBe("verifier")
+        expect(after.permission ?? []).toEqual([])
+        // the host may
+        expect((yield* patch({ title: "renamed" }, { [HostToken.HEADER]: HostToken.issue() })).status).toBe(200)
       }),
     { git: true, config: { formatter: false, lsp: false } },
   )

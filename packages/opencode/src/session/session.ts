@@ -460,6 +460,17 @@ export interface Interface {
     permission?: PermissionV1.Ruleset
     workspaceID?: WorkspaceV2.ID
   }) => Effect.Effect<Info>
+  /**
+   * Creates a goal loop's verifier session with its `verify` in the same write
+   * (docs/accuracy-e.md §11.5, §11.8): sealed from birth, so there is no moment a
+   * client could write or steer it unsealed. The only way to make one: never create
+   * a session and set `verify` afterwards.
+   */
+  readonly createVerifier: (input: {
+    parentID: SessionID
+    verify: Record<string, unknown>
+    title?: string
+  }) => Effect.Effect<Info>
   readonly fork: (input: { sessionID: SessionID; messageID?: MessageID }) => Effect.Effect<Info, NotFound>
   readonly touch: (sessionID: SessionID) => Effect.Effect<void>
   readonly get: (id: SessionID) => Effect.Effect<Info, NotFound>
@@ -970,10 +981,24 @@ const layer: Layer.Layer<
       return Option.none<SessionV1.WithParts>()
     })
 
+    const createVerifier = Effect.fn("Session.createVerifier")(function* (input: {
+      parentID: SessionID
+      verify: Record<string, unknown>
+      title?: string
+    }) {
+      return yield* create({
+        parentID: input.parentID,
+        title: input.title ?? "Verify",
+        agent: Permission.VERIFIER,
+        metadata: { verify: structuredClone(input.verify) },
+      })
+    })
+
     return Service.of({
       list,
       listGlobal,
       create,
+      createVerifier,
       fork,
       touch,
       get,

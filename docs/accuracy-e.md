@@ -478,10 +478,21 @@ type VerifierSessionMetadata = {
 
 **Written in-process only (ruled 2026-09-24).** The worker being verified has bash and can call
 the local HTTP API, so the API refuses any `metadata.verify` on session create and update (400),
-and an update of other metadata keeps the existing `verify`. Phase 4 therefore writes it inside
-the server (`Session.setMetadata`), for example from a server-side "start verification" step, not
-with `PATCH /session/:child`. Write the complete object once, after the checks and before the
-verifier's prompt. Example of the stored value:
+and an update of other metadata keeps the existing `verify`.
+
+**Phase 4 MUST create the verifier session with `verify` in its metadata, in-process, in one step
+(final re-review of Phase 3).** Use `Session.createVerifier({ parentID, verify })`: it creates
+the session with `verify` in the same write, so the session is sealed from birth (§11.8). Never
+create a session and set `verify` afterwards: in between, it exists unsealed, and a client could
+steer it or write parts into it. Then:
+
+- Run the checks with `POST /session/:child/shell` and the host token. The host records each one
+  in `metadata.verifyRecord`.
+- `verify.checks` may be left out: the tool then lists every check the host recorded in the
+  session.
+- Prompt the verifier last.
+
+Example of the stored value:
 
 ```json
 {
@@ -697,6 +708,12 @@ in the verifier session's message storage, which clients could write without a t
   final: to verify again, the host starts a new verifier session. This replaces re-review 5 of
   Phase 2, where a revert re-opened a verification.
 - **No client writes a tool part**, on any session (`PATCH …/part/:id` with `type: "tool"` is 400).
+- **The session update is sealed too (final re-review, B2-1).** On a sealed session, the update
+  (`PATCH /session/:id`) takes the host token for every field. A rule could otherwise hide a file
+  from the verifier (`read` deny) or deny it the `verdict` tool.
+- **Sealed from birth (B2-2).** Phase 4 creates verifier sessions with `Session.createVerifier`
+  only (§11.5).
+- **A recorded check whose part is gone (B2-3)** blocks a PASS like one that did not finish.
 
 **Threat model: what the API checks do not stop.** Everything above is enforced at the API layer
 of a server that runs as the same OS user as the worker's shell. That worker can still:
