@@ -806,7 +806,7 @@ wrote unless the worker went around the API.
 Implemented as three PRs, each red-first: the goal record and its endpoints; the verdict records
 and `todo_evidence`; the checkpoint.
 
-### 11.9 Phase 4 (the loop): design note (2026-09-25, for review)
+### 11.9 Phase 4 (the loop): design note (2026-09-25, approved with the rulings at the end)
 
 Phase 4 makes the goal loop verify before it stops. It builds on the Phase 3 records and the
 §11.5 contract. Sections 2 (the loop's branch, FAIL/PARTIAL, bounds) and 6 still hold; this note
