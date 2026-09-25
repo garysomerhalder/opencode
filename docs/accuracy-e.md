@@ -769,6 +769,13 @@ in the verifier session's message storage, which clients could write without a t
 - **Reads are not gated, by design.** The worker can read the verifier's transcript through the
   API, as any client can read any session. So the verifier must never be told a secret: its prompt
   holds the goal, criteria, check ids and the todo list, nothing the worker may not see.
+- **Approvals of proposed check commands (Phase 4 PR 3)** are stored as HMAC-SHA256(key,
+  directory ‖ command). The key is generated once and sealed with Electron `safeStorage` (DPAPI,
+  Keychain, libsecret), never in plain text; without OS-backed encryption, nothing is approved.
+  - A worker that writes the app's store knows the directory and the command, but not the key,
+    so a hand-written entry is never honored.
+  - This raises the bar only: a same-user process can call DPAPI (or the keychain) too. The real
+    boundary is still the worker sandbox.
 - **Assumption: config and plugins on disk.** A worker with bash can still write config and
   plugins to disk: `opencode.json` and `.opencode/` in the worktree, and the global config
   directories. The API checks above do not stop that. The pin catches a change made after the

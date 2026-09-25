@@ -7,7 +7,7 @@ import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { getCACertificates, setDefaultCACertificates } from "node:tls"
 import type { Event } from "electron"
-import { app, BrowserWindow, shell } from "electron"
+import { app, BrowserWindow, safeStorage, shell } from "electron"
 
 import { Deferred, Effect, Fiber } from "effect"
 import contextMenu from "electron-context-menu"
@@ -50,7 +50,7 @@ import { registerDevWindowsIdentity, startMenuPrograms } from "./windows-identit
 import { createWslServersController } from "./wsl/servers"
 import { createGoalLoop } from "./goal-loop"
 import { createGoalLoops } from "./goal-loops"
-import { isCheckApproved } from "./goal-check-approvals"
+import { isCheckApproved, loadApprovalKey } from "./goal-check-approvals"
 import { readLast, saveLast, saveState, takeOrphans, type KeyValueStore } from "./goal-loop-store"
 import { getStore } from "./store"
 import { GOAL_LOOP_STORE } from "./store-keys"
@@ -410,14 +410,18 @@ const main = Effect.gen(function* () {
     relaunch,
   }
   const goalLoopStore = getStore(GOAL_LOOP_STORE) as unknown as KeyValueStore
+  // the key for approvals of proposed check commands, sealed with safeStorage
+  const approvalKey = loadApprovalKey(goalLoopStore, safeStorage)
   const goalLoops = createGoalLoops({
     create: (hooks) =>
       createGoalLoop({
         getServer: () => Effect.runPromise(Deferred.await(serverReady)),
         // only for the local server the token belongs to (accuracy E §11.8)
         hostToken: (server) => hostTokenFor(server.url),
-        // proposed check commands run only once the user approved them (accuracy E §11.9)
-        checkApproved: (directory, command) => isCheckApproved(goalLoopStore, directory, command),
+        // proposed check commands run only once the user approved them (accuracy E §11.9);
+        // no OS-backed key, no approvals
+        checkApproved: (directory, command) =>
+          approvalKey ? isCheckApproved(goalLoopStore, approvalKey, directory, command) : false,
         warn: (message, detail) => writeLog("main", message, detail, "warn"),
         ...hooks,
       }),
