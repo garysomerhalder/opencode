@@ -6,6 +6,7 @@ import { Command } from "@/command"
 import { Permission } from "@/permission"
 import { SessionShare } from "@/share/session"
 import { Session } from "@/session/session"
+import { SessionMetadataLock } from "@/session/metadata-lock"
 import { SessionCompaction } from "@/session/compaction"
 import { MessageV2 } from "@/session/message-v2"
 import { SessionPrompt } from "@/session/prompt"
@@ -190,11 +191,20 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       }
       if (ctx.payload.metadata !== undefined) {
         // metadata replaces the whole object: keep the host's verify and goal, which
-        // a client may not write (Session.ClientMetadata) and so may not erase either
-        yield* session.setMetadata({
-          sessionID: ctx.params.sessionID,
-          metadata: Session.keepHostMetadata(ctx.payload.metadata, current.metadata),
-        })
+        // a client may not write (Session.ClientMetadata) and so may not erase either.
+        // Read and written under the session's metadata lock, which the host's own
+        // writers hold too, so a goal change cannot land between the read and the write.
+        const metadata = ctx.payload.metadata
+        yield* SessionMetadataLock.withLock(
+          ctx.params.sessionID,
+          Effect.gen(function* () {
+            const latest = yield* requireSession(ctx.params.sessionID)
+            yield* session.setMetadata({
+              sessionID: ctx.params.sessionID,
+              metadata: Session.keepHostMetadata(metadata, latest.metadata),
+            })
+          }),
+        )
       }
       if (ctx.payload.permission !== undefined) {
         yield* session.setPermission({

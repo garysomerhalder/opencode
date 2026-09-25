@@ -5,6 +5,7 @@ import { HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { eq } from "drizzle-orm"
 import { GlobalBus, type GlobalEvent } from "@/bus/global"
 import { ExperimentalPaths } from "../../src/server/routes/instance/httpapi/groups/experimental"
+import { HostToken } from "../../src/server/host-token"
 import { Session } from "@/session/session"
 import { SessionTable } from "@opencode-ai/core/session/sql"
 import { Database } from "@opencode-ai/core/database/database"
@@ -239,21 +240,28 @@ describe("experimental HttpApi", () => {
 
   // Phase 3 of accuracy E (docs/accuracy-e.md §11.8): the goal endpoint.
   it.instance(
-    "sets, replaces, reads and ends a session's goal, flagging every change as via the API",
+    "sets, replaces, reads and ends a session's goal, only with the host token",
     () =>
       Effect.gen(function* () {
         const tmp = yield* TestInstance
         const session = yield* createSession({ title: "worker" })
         const goalPath = ExperimentalPaths.sessionGoal.replace(":sessionID", session.id)
-        const post = (body: unknown) =>
+        const host = { [HostToken.HEADER]: HostToken.issue() }
+        const post = (body: unknown, headers: Record<string, string> = host) =>
           request(goalPath, tmp.directory, {
             method: "POST",
-            headers: { "content-type": "application/json" },
+            headers: { "content-type": "application/json", ...headers },
             body: JSON.stringify(body),
           })
 
+        // the goal is the host's to write: without its token (the worker has only the
+        // server password), or with a wrong one, a write is refused
+        expect((yield* post({ text: "goal" }, {})).status).toBe(403)
+        expect((yield* post({ text: "goal" }, { [HostToken.HEADER]: "not-the-token" })).status).toBe(403)
+        expect((yield* request(goalPath, tmp.directory, { method: "DELETE" })).status).toBe(403)
+
         expect((yield* request(goalPath, tmp.directory)).status).toBe(404)
-        expect((yield* request(goalPath, tmp.directory, { method: "DELETE" })).status).toBe(404)
+        expect((yield* request(goalPath, tmp.directory, { method: "DELETE", headers: host })).status).toBe(404)
         expect((yield* post({ text: "" })).status).toBe(400)
         expect((yield* post({ text: "x".repeat(4_001) })).status).toBe(400)
         // the base is the server's snapshot, never one the client names
@@ -272,15 +280,15 @@ describe("experimental HttpApi", () => {
         expect(goal.text).toBe("cap it lower")
         expect(JSON.stringify(goal)).not.toContain(forged)
         expect(goal.history.map((change) => [change.type, change.via])).toEqual([
-          ["set", "api"],
-          ["replace", "api"],
+          ["set", "host"],
+          ["replace", "host"],
         ])
 
-        const ended = yield* request(goalPath, tmp.directory, { method: "DELETE" })
+        const ended = yield* request(goalPath, tmp.directory, { method: "DELETE", headers: host })
         expect(ended.status).toBe(200)
         const after = yield* json<{ endedAt?: number; history: Array<Record<string, unknown>> }>(ended)
         expect(after.endedAt).toBeNumber()
-        expect(after.history.at(-1)).toMatchObject({ type: "end", via: "api", goal: replaced.id })
+        expect(after.history.at(-1)).toMatchObject({ type: "end", via: "host", goal: replaced.id })
 
         const missing = ExperimentalPaths.sessionGoal.replace(":sessionID", "ses_missing")
         expect((yield* request(missing, tmp.directory)).status).toBe(404)
@@ -292,6 +300,12 @@ describe("experimental HttpApi", () => {
         expect(yield* json(evidence)).toEqual([])
         const missingEvidence = ExperimentalPaths.sessionTodoEvidence.replace(":sessionID", "ses_missing")
         expect((yield* request(missingEvidence, tmp.directory)).status).toBe(404)
+
+        // at most 10 changes a minute per session (3 made above), then 429
+        for (let i = 0; i < 7; i++) expect((yield* post({ text: `goal ${i}` })).status).toBe(200)
+        const limited = yield* post({ text: "one too many" })
+        expect(limited.status).toBe(429)
+        expect(yield* json(limited)).toMatchObject({ _tag: "GoalRateLimited" })
       }),
     { git: true, config: { formatter: false, lsp: false } },
   )
