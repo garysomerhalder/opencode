@@ -312,6 +312,8 @@ const layer = Layer.effect(
         goal: active?.text,
         lastVerdict: active?.lastVerdict,
         goalChanges: goal?.history.map((change) => ({ type: change.type, at: change.at })),
+        goalChangesElided: goal?.elided,
+        goalBaseChanges: goal?.baseChanges,
       })
       const note = HarnessNote.build({
         user: input.user,

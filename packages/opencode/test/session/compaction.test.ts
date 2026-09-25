@@ -1842,10 +1842,17 @@ describe("session.compaction.process", () => {
           sessionID: session.id,
           metadata: {
             goal: {
-              id: "goal_1",
+              id: "goal_2",
               text: "Ship receipts",
+              base: "b2",
               startedAt: now - 60_000,
-              history: [{ type: "set", at: now - 60_000, via: "api", goal: "goal_1", text: "Ship receipts" }],
+              origin: { goal: "goal_1", base: "b1" },
+              baseChanges: 1,
+              history: [
+                { type: "set", at: now - 120_000, via: "host", goal: "goal_1", base: "b1" },
+                { type: "replace", at: now - 60_000, via: "host", goal: "goal_2", base: "b2" },
+              ],
+              elided: 3,
               lastVerdict: { verdict: "FAIL", at: now, verifierSessionID: "ses_v", unmet: ["receipts are capped"] },
             },
           },
@@ -1875,7 +1882,8 @@ describe("session.compaction.process", () => {
           .at(-1)
           ?.parts.find((part): part is SessionV1.ReminderPart => part.type === "reminder" && part.kind === "checkpoint")
         expect(checkpoint?.text).toContain("Goal loop: Ship receipts. Last verdict: FAIL 0 min ago; unmet: receipts are capped.")
-        expect(checkpoint?.text).toContain("Goal changed via API: set 1 min ago.")
+        expect(checkpoint?.text).toContain("Goal changes: (+3 earlier) set 2 min ago; replaced 1 min ago.")
+        expect(checkpoint?.text).toContain("Goal base changed 1 time since the first goal was set")
         expect(checkpoint?.text).toContain("[completed · verified 0 min ago] Wire the receipt envelope")
         expect(checkpoint?.text).toContain("[completed] Cap receipts")
       }).pipe(withCompaction({ llm: stub.llmLayer }))

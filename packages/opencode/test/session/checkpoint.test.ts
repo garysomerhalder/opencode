@@ -92,8 +92,8 @@ describe("Checkpoint.build", () => {
     expect(text).toContain("Goal loop: Ship receipts")
   })
 
-  // accuracy E, Phase 3 (docs/accuracy-e.md §11.8, rulings 4 and 5)
-  test("the goal line carries the last verdict, and every goal change via the API is flagged", () => {
+  // accuracy E, Phase 3 (docs/accuracy-e.md §11.8, rulings 4 and 5, security review 3 and 4)
+  test("the goal line carries the last verdict, and every goal change is listed", () => {
     const text = Checkpoint.build(
       base({
         goal: "Ship receipts",
@@ -111,7 +111,25 @@ describe("Checkpoint.build", () => {
     expect(text).toContain(
       "Goal loop: Ship receipts. Last verdict: FAIL 3 min ago; unmet: receipts are capped, the README documents --budget, the CLI flag exists (+1).",
     )
-    expect(text).toContain("Goal changed via API: set 40 min ago; replaced 12 min ago.")
+    expect(text).toContain("Goal changes: set 40 min ago; replaced 12 min ago.")
+    expect(text).not.toContain("Goal base changed")
+  })
+
+  test("a goal set on another base than the first goal is flagged", () => {
+    const text = Checkpoint.build(
+      base({
+        goal: "Ship receipts",
+        goalChanges: [
+          { type: "set", at: now - minutes(40) },
+          { type: "replace", at: now - minutes(12) },
+          { type: "replace", at: now - minutes(5) },
+        ],
+        goalBaseChanges: 2,
+      }),
+    )
+    expect(text).toContain(
+      "Goal base changed 2 times since the first goal was set: the diff for this goal starts later than the first goal's.",
+    )
   })
 
   test("an ended goal has no goal line, but its end is flagged", () => {
@@ -124,17 +142,18 @@ describe("Checkpoint.build", () => {
       }),
     )
     expect(text).not.toContain("Goal loop:")
-    expect(text).toContain("Goal changed via API: set 40 min ago; ended 2 min ago.")
+    expect(text).toContain("Goal changes: set 40 min ago; ended 2 min ago.")
   })
 
-  test("a long goal history shows the latest changes and counts the rest", () => {
+  test("a long goal history shows the latest changes and counts the rest, elided ones too", () => {
     const text = Checkpoint.build(
       base({
         goal: "g",
         goalChanges: Array.from({ length: 12 }, (_, i) => ({ type: "replace" as const, at: now - minutes(12 - i) })),
+        goalChangesElided: 30,
       }),
     )
-    expect(text).toContain("Goal changed via API: (+7 earlier) replaced 5 min ago; replaced 4 min ago;")
+    expect(text).toContain("Goal changes: (+37 earlier) replaced 5 min ago; replaced 4 min ago;")
     expect(Buffer.byteLength(text, "utf-8")).toBeLessThanOrEqual(Checkpoint.MAX_BYTES)
   })
 

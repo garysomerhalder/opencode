@@ -649,13 +649,20 @@ checked. Reads: `Todo.verified(sessionID)` returns `Map<contentKey, time>`, and 
 `GET /experimental/session/:id/todo/evidence` serves the todo dock (accuracy-ui §3).
 
 **4. Compaction.** `writeCheckpoint` passes `goal` (the active goal's text) and `verified` to
-`Checkpoint.build`. `Input` gains `lastVerdict` and `goalChanges` (every entry of the history,
-`set` included, since each was made through the API; ruling 5). They add, capped, to the goal
-line. The last 5 changes are shown, and earlier ones are counted:
+`Checkpoint.build`. `Input` gains:
+
+- `lastVerdict`;
+- `goalChanges`: every entry of the history, `set` included (ruling 5);
+- `goalChangesElided`: the history's `elided` count;
+- `goalBaseChanges`: the goal's `baseChanges`.
+
+They add, capped, to the goal line. The last 5 changes are shown, and earlier ones (elided ones
+included) are counted. A goal set on a base other than the first goal's is flagged:
 
 ```
 Goal loop: <text>. Last verdict: FAIL 3 min ago; unmet: <criterion>, <criterion>, <criterion> (+2).
-Goal changed via API: set 40 min ago; replaced 12 min ago.
+Goal changes: (+3 earlier) set 40 min ago; replaced 12 min ago.
+Goal base changed 1 time since the first goal was set: the diff for this goal starts later than the first goal's.
 ```
 
 An ended goal has no goal line, but its changes, the end included, are still listed.

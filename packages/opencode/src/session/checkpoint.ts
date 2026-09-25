@@ -82,6 +82,10 @@ export interface Input {
   readonly lastVerdict?: { readonly verdict: string; readonly at: number; readonly unmet: ReadonlyArray<string> }
   /** Every change to the goal, oldest first; all are made through the API (§11.8, ruling 5). */
   readonly goalChanges?: ReadonlyArray<{ readonly type: "set" | "replace" | "end"; readonly at: number }>
+  /** Older changes the record no longer lists (it keeps the latest 200). */
+  readonly goalChangesElided?: number
+  /** Goals set on another base than the first goal's: its diff starts later. */
+  readonly goalBaseChanges?: number
 }
 
 const UNMET_SHOWN = 3
@@ -219,17 +223,24 @@ function render(
       : ""
     record.push(`Goal loop: ${line(input.goal, GOAL_BYTES)}.${verdict}`)
   }
-  // A person must see every change made to the goal through the API (the worker
-  // can call it too), including an end: that is why an ended goal still shows.
+  // A person must see every change made to the goal, including an end: that is why
+  // an ended goal still shows. Changes the record no longer lists are counted.
   const changes = input.goalChanges ?? []
   if (changes.length > 0) {
     const shown = changes
       .slice(-CHANGES_SHOWN)
       .map((change) => `${CHANGE_WORD[change.type]} ${ago(input.now - change.at)}`)
       .join("; ")
-    const earlier = changes.length > CHANGES_SHOWN ? `(+${changes.length - CHANGES_SHOWN} earlier) ` : ""
-    record.push(`Goal changed via API: ${earlier}${shown}.`)
+    const hidden = Math.max(0, changes.length - CHANGES_SHOWN) + Math.max(0, input.goalChangesElided ?? 0)
+    record.push(`Goal changes: ${hidden > 0 ? `(+${hidden} earlier) ` : ""}${shown}.`)
   }
+  // A goal set on a later snapshot than the first goal's diffs from there: work done
+  // before it is not in its diff. Say so, so a reset of the base does not go unseen.
+  const bases = input.goalBaseChanges ?? 0
+  if (bases > 0)
+    record.push(
+      `Goal base changed ${bases} ${bases === 1 ? "time" : "times"} since the first goal was set: the diff for this goal starts later than the first goal's.`,
+    )
 
   return [
     `<checkpoint n="${input.n}" at="${new Date(input.now).toISOString()}">`,
