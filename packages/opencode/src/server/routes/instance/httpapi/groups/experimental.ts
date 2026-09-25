@@ -136,6 +136,7 @@ export const ExperimentalPaths = {
   sessionBackground: "/experimental/session/:sessionID/background",
   sessionGoal: "/experimental/session/:sessionID/goal",
   sessionVerify: "/experimental/session/:sessionID/verify",
+  goalChecks: "/experimental/goal/checks",
   sessionTodoEvidence: "/experimental/session/:sessionID/todo/evidence",
   shellTasks: "/experimental/shell/task",
   shellTasksStop: "/experimental/shell/task/stop",
@@ -285,6 +286,17 @@ export const ExperimentalApi = HttpApi.make("experimental")
             summary: "Background subagents",
             description:
               "Detach any synchronous subagents currently blocking the session and continue them in the background.",
+          }),
+        ),
+        HttpApiEndpoint.get("goalChecks", ExperimentalPaths.goalChecks, {
+          query: WorkspaceRoutingQuery,
+          success: described(Schema.Struct({ checks: Schema.Array(Schema.String) }), "The trusted check commands"),
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "experimental.goal.checks",
+            summary: "Trusted goal checks",
+            description:
+              "The check commands a goal loop's verifier runs, from user-level and managed config only (goal_verifier.checks); project config is never read for them.",
           }),
         ),
         HttpApiEndpoint.post("sessionVerify", ExperimentalPaths.sessionVerify, {

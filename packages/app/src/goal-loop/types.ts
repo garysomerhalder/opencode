@@ -19,14 +19,18 @@ export type GoalLoopStartInput = {
   model?: GoalLoopModel
   /**
    * Verify before stopping (accuracy E Phase 4, docs/accuracy-e.md §11.9): the loop ends
-   * `completed` only on an independent verifier's PASS. `checks` are commands from
-   * trusted config only; `criteria` are the user's acceptance criteria.
+   * `completed` only on an independent verifier's PASS. The check commands come from
+   * trusted config (user-level or managed) on the server, never from here.
    */
   verify?: GoalLoopVerify
 }
 
 export type GoalLoopVerify = {
-  checks: string[]
+  /**
+   * Commands proposed as further checks (by the worker, or pre-filled). One runs only
+   * once the user approved it for the project, host-side; otherwise it is skipped.
+   */
+  proposals?: string[]
   criteria?: string[]
   /** Verifications without a PASS before the loop ends `unverified`; default 3. */
   maxVerifications?: number

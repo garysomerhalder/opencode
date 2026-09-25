@@ -72,6 +72,11 @@ export type GoalLoopDeps = {
   verifyTimeoutMs?: number
   /** Deadline for each verification check; one that does not finish is a failed check. */
   checkTimeoutMs?: number
+  /**
+   * Whether the user approved a proposed check command for the project (host-side,
+   * goal-check-approvals.ts). Without it, no proposal runs.
+   */
+  checkApproved?: (directory: string, command: string) => boolean
 }
 
 const DEFAULT_MAX_VERIFICATIONS = 3
@@ -329,8 +334,10 @@ function validateVerify(verify: GoalLoopStartInput["verify"]) {
     value.length <= max &&
     value.every((item) => typeof item === "string" && item.trim().length > 0 && item.length <= chars)
   if (!verify || typeof verify !== "object") throw new Error("verify must be an object")
-  if (!strings(verify.checks, CHECKS_MAX, CHECK_CHARS))
-    throw new Error(`verify.checks must be at most ${CHECKS_MAX} non-empty commands of at most ${CHECK_CHARS} characters`)
+  if (verify.proposals !== undefined && !strings(verify.proposals, CHECKS_MAX, CHECK_CHARS))
+    throw new Error(
+      `verify.proposals must be at most ${CHECKS_MAX} non-empty commands of at most ${CHECK_CHARS} characters`,
+    )
   if (verify.criteria !== undefined && !strings(verify.criteria, CRITERIA_MAX, CRITERION_CHARS))
     throw new Error(`verify.criteria must be at most ${CRITERIA_MAX} non-empty criteria of at most ${CRITERION_CHARS} characters`)
   const max = verify.maxVerifications
@@ -630,33 +637,54 @@ export function createGoalLoop(deps: GoalLoopDeps) {
         return null
       }
       touch({ phase: "verifying" })
-      const outcome = await verifyOnce(
-        {
-          request: (path, init) =>
-            request(server, path, {
-              method: init.method,
-              ...(init.body !== undefined ? { body: init.body } : {}),
-              ...(init.host ? { host: true } : {}),
-            }),
-          sleep,
-          now,
-          alive,
-        },
-        {
-          workerID: sessionID,
-          directory,
-          goal: current.goal,
-          checks: verify.checks,
-          missingBefore: lastMissing,
-          pollMs: pollIntervalMs,
-          timeoutMs: verifyTimeoutMs,
-          checkTimeoutMs,
-          onVerifier: (id) => {
-            const running = active
-            if (running) setState({ ...running, verifierSessionID: id, updatedAt: now() })
-          },
-        },
-      ).catch((error: unknown) => ({
+      // The check commands (§11.9, ruling 1): the trusted ones from user-level and managed
+      // config on the server, plus proposals the user approved for this project. A
+      // proposal without approval (the worker's, or one pre-filled from the last input)
+      // is not run.
+      const resolveChecks = async () => {
+        const trusted = (await request(server, `/experimental/goal/checks?directory=${encodeURIComponent(directory)}`, {
+          method: "GET",
+        })) as { checks?: unknown } | null
+        const checks = Array.isArray(trusted?.checks)
+          ? trusted.checks.filter((item): item is string => typeof item === "string")
+          : []
+        const proposals = (verify.proposals ?? []).filter((command) => !checks.includes(command))
+        const approved = proposals.filter((command) => deps.checkApproved?.(directory, command) === true)
+        const waiting = proposals.length - approved.length
+        if (waiting > 0) note(`${waiting} proposed check${waiting === 1 ? " awaits" : "s await"} approval`)
+        return [...checks, ...approved]
+      }
+      const outcome = await resolveChecks()
+        .then((checks) =>
+          verifyOnce(
+            {
+              request: (path, init) =>
+                request(server, path, {
+                  method: init.method,
+                  ...(init.body !== undefined ? { body: init.body } : {}),
+                  ...(init.host ? { host: true } : {}),
+                }),
+              sleep,
+              now,
+              alive,
+            },
+            {
+              workerID: sessionID,
+              directory,
+              goal: current.goal,
+              checks,
+              missingBefore: lastMissing,
+              pollMs: pollIntervalMs,
+              timeoutMs: verifyTimeoutMs,
+              checkTimeoutMs,
+              onVerifier: (id) => {
+                const running = active
+                if (running) setState({ ...running, verifierSessionID: id, updatedAt: now() })
+              },
+            },
+          ),
+        )
+        .catch((error: unknown) => ({
         // Only a 409 from the verify route (the goal moved on) is uncounted, and that
         // comes back as "stale". Any error is a counted failed attempt, so errors cannot
         // be used to escape the limit (PR 2 review, 1).

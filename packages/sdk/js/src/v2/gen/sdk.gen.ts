@@ -38,6 +38,8 @@ import type {
   ExperimentalConsoleSwitchOrgResponses,
   ExperimentalControlPlaneMoveSessionErrors,
   ExperimentalControlPlaneMoveSessionResponses,
+  ExperimentalGoalChecksErrors,
+  ExperimentalGoalChecksResponses,
   ExperimentalProjectCopyGenerateNameErrors,
   ExperimentalProjectCopyGenerateNameResponses,
   ExperimentalResourceListErrors,
@@ -1144,6 +1146,42 @@ export class Session extends HeyApiClient {
   }
 }
 
+export class Goal2 extends HeyApiClient {
+  /**
+   * Trusted goal checks
+   *
+   * The check commands a goal loop's verifier runs, from user-level and managed config only (goal_verifier.checks); project config is never read for them.
+   */
+  public checks<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      ExperimentalGoalChecksResponses,
+      ExperimentalGoalChecksErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/goal/checks",
+      ...options,
+      ...params,
+    })
+  }
+}
+
 export class ShellTask extends HeyApiClient {
   /**
    * List background shell tasks
@@ -1629,6 +1667,11 @@ export class Experimental extends HeyApiClient {
   private _session?: Session
   get session(): Session {
     return (this._session ??= new Session({ client: this.client }))
+  }
+
+  private _goal?: Goal2
+  get goal(): Goal2 {
+    return (this._goal ??= new Goal2({ client: this.client }))
   }
 
   private _shellTask?: ShellTask

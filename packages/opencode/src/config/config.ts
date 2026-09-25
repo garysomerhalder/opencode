@@ -126,6 +126,8 @@ type State = {
 export interface Interface {
   readonly get: () => Effect.Effect<Info>
   readonly getGlobal: () => Effect.Effect<Info>
+  /** Goal loop check commands from user-level and managed config only (never project). */
+  readonly trustedChecks: () => Effect.Effect<string[]>
   readonly getConsoleState: () => Effect.Effect<ConsoleState>
   readonly update: (config: Info) => Effect.Effect<void>
   readonly updateGlobal: (config: Info) => Effect.Effect<{ info: Info; changed: boolean }>
@@ -305,6 +307,25 @@ const layer = Layer.effect(
 
     const getGlobal = Effect.fn("Config.getGlobal")(function* () {
       return yield* cachedGlobal
+    })
+
+    // A goal loop's check commands (accuracy E §11.9, ruling 1): from user-level and
+    // managed config only. Project config is left out: the worker can write it.
+    const trustedChecks = Effect.fn("Config.trustedChecks")(function* () {
+      const lists: ReadonlyArray<string>[] = [(yield* getGlobal()).goal_verifier?.checks ?? []]
+      const managedDir = ConfigManaged.managedConfigDir()
+      if (existsSync(managedDir))
+        for (const file of ["opencode.json", "opencode.jsonc"]) {
+          const source = path.join(managedDir, file)
+          if (existsSync(source)) lists.push((yield* loadFile(source)).goal_verifier?.checks ?? [])
+        }
+      const managed = yield* Effect.promise(() => ConfigManaged.readManagedPreferences())
+      if (managed)
+        lists.push(
+          (yield* loadConfig(managed.text, { dir: path.dirname(managed.source), source: managed.source }))
+            .goal_verifier?.checks ?? [],
+        )
+      return [...new Set(lists.flat().filter((command) => command.trim() !== ""))]
     })
 
     const ensureGitignore = Effect.fn("Config.ensureGitignore")(function* (dir: string) {
@@ -689,6 +710,7 @@ const layer = Layer.effect(
     return Service.of({
       get,
       getGlobal,
+      trustedChecks,
       getConsoleState,
       update,
       updateGlobal,

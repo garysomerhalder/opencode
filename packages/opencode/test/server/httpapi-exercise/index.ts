@@ -758,6 +758,11 @@ const scenarios: Scenario[] = [
     // goal writes take the host token, which the server password does not give
     .status(403),
   http.protected
+    .get("/experimental/goal/checks", "experimental.goal.checks")
+    .json(200, (body) => {
+      check(typeof body === "object" && body !== null && "checks" in body, "goal checks returns the trusted checks")
+    }),
+  http.protected
     .post("/experimental/session/{sessionID}/verify", "experimental.session.verify")
     .mutating()
     .seeded((ctx) => ctx.session({ title: "Verify route owner" }))

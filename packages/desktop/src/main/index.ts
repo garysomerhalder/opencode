@@ -50,6 +50,7 @@ import { registerDevWindowsIdentity, startMenuPrograms } from "./windows-identit
 import { createWslServersController } from "./wsl/servers"
 import { createGoalLoop } from "./goal-loop"
 import { createGoalLoops } from "./goal-loops"
+import { isCheckApproved } from "./goal-check-approvals"
 import { readLast, saveLast, saveState, takeOrphans, type KeyValueStore } from "./goal-loop-store"
 import { getStore } from "./store"
 import { GOAL_LOOP_STORE } from "./store-keys"
@@ -415,6 +416,8 @@ const main = Effect.gen(function* () {
         getServer: () => Effect.runPromise(Deferred.await(serverReady)),
         // only for the local server the token belongs to (accuracy E §11.8)
         hostToken: (server) => hostTokenFor(server.url),
+        // proposed check commands run only once the user approved them (accuracy E §11.9)
+        checkApproved: (directory, command) => isCheckApproved(goalLoopStore, directory, command),
         warn: (message, detail) => writeLog("main", message, detail, "warn"),
         ...hooks,
       }),

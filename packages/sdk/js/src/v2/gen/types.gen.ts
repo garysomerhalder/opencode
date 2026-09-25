@@ -2067,6 +2067,9 @@ export type Config = {
     reserved?: number
     threshold?: number
   }
+  goal_verifier?: {
+    checks?: Array<string>
+  }
   experimental?: {
     disable_paste_summary?: boolean
     batch_tool?: boolean
@@ -8024,6 +8027,36 @@ export type ExperimentalSessionBackgroundResponses = {
 export type ExperimentalSessionBackgroundResponse =
   ExperimentalSessionBackgroundResponses[keyof ExperimentalSessionBackgroundResponses]
 
+export type ExperimentalGoalChecksData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/goal/checks"
+}
+
+export type ExperimentalGoalChecksErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type ExperimentalGoalChecksError = ExperimentalGoalChecksErrors[keyof ExperimentalGoalChecksErrors]
+
+export type ExperimentalGoalChecksResponses = {
+  /**
+   * The trusted check commands
+   */
+  200: {
+    checks: Array<string>
+  }
+}
+
+export type ExperimentalGoalChecksResponse = ExperimentalGoalChecksResponses[keyof ExperimentalGoalChecksResponses]
+
 export type ExperimentalSessionVerifyData = {
   body?: {
     [key: string]: unknown
@@ -8145,6 +8178,15 @@ export type ExperimentalSessionGoalEndResponses = {
       at: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
       verifierSessionID: string
       unmet: Array<string>
+      missing?: Array<{
+        criterion: string
+        need: string
+      }>
+      counts?: {
+        met: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        unmet: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        unknown: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      }
     }
     task?: {
       text: string
@@ -8212,6 +8254,15 @@ export type ExperimentalSessionGoalGetResponses = {
       at: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
       verifierSessionID: string
       unmet: Array<string>
+      missing?: Array<{
+        criterion: string
+        need: string
+      }>
+      counts?: {
+        met: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        unmet: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        unknown: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      }
     }
     task?: {
       text: string

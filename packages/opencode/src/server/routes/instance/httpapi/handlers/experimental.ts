@@ -186,6 +186,11 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
     // does not have (it has at most the server password). Reads do not.
     const requireHost = (request: HttpServerRequest.HttpServerRequest) =>
       HostToken.verify(request.headers[HostToken.HEADER]) ? Effect.void : Effect.fail(new HttpApiError.Forbidden({}))
+    // Trusted check commands (§11.9, ruling 1): user-level and managed config only.
+    const goalChecks = Effect.fn("ExperimentalHttpApi.goalChecks")(function* () {
+      return { checks: yield* config.trustedChecks() }
+    })
+
     // A verifier session is no worker: no goal on it, and no verifier of it (409).
     const requireWorker = Effect.fn("ExperimentalHttpApi.requireWorker")(function* (sessionID: SessionID) {
       const info = yield* sessions.get(sessionID).pipe(notFound)
@@ -329,6 +334,7 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
       .handle("sessionBackground", sessionBackground)
       .handle("sessionGoalStart", sessionGoalStart)
       .handle("sessionVerify", sessionVerify)
+      .handle("goalChecks", goalChecks)
       .handle("sessionGoal", sessionGoal)
       .handle("sessionGoalEnd", sessionGoalEnd)
       .handle("sessionTodoEvidence", sessionTodoEvidence)

@@ -945,4 +945,13 @@ Added tests for the rulings:
      in the project. A same-user shell can still write it, and it pre-fills the start form. PR 3
      stops taking check commands from the renderer at all.
 3. **Settings and trusted check commands,** with the approval of proposed commands.
+   - Check commands come from `goal_verifier.checks` in user-level or managed config only,
+     served by `GET /experimental/goal/checks` (`Config.trustedChecks`); project config is never
+     read for them.
+   - The loop's input carries `verify.proposals`, never commands. A proposal runs only once the
+     user has approved it: the approval is stored host-side (`goal-check-approvals.ts`, in the
+     app's store) as a hash of the project's resolved directory plus the command.
+   - So a command planted in the pre-filled last input is not run without approval. Unapproved
+     proposals are listed as awaiting approval.
+   - The approval prompt itself is UI (PR 4).
 4. **UI:** verdicts and the goal history.

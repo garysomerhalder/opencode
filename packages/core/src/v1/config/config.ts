@@ -170,6 +170,14 @@ export const Info = Schema.Struct({
       }),
     }),
   ),
+  goal_verifier: Schema.optional(
+    Schema.Struct({
+      checks: Schema.optional(Schema.Array(Schema.String)).annotate({
+        description:
+          "Commands a goal loop's verifier runs as checks (each must exit 0 to pass). Read only from user-level and managed config, never from project config: a project's config is the worker's to write.",
+      }),
+    }),
+  ).annotate({ description: "The goal loop's independent verifier (accuracy E)." }),
   experimental: Schema.optional(
     Schema.Struct({
       disable_paste_summary: Schema.optional(Schema.Boolean),
