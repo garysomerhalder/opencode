@@ -306,7 +306,7 @@ export const ExperimentalApi = HttpApi.make("experimental")
           query: WorkspaceRoutingQuery,
           payload: GoalStartPayload,
           success: described(SessionGoal.Started, "The goal, and the snapshot it starts from"),
-          error: [HttpApiError.NotFound, HttpApiError.Forbidden, SessionGoal.RateLimited],
+          error: [HttpApiError.NotFound, HttpApiError.Forbidden, HttpApiError.Conflict, SessionGoal.RateLimited],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "experimental.session.goal.start",

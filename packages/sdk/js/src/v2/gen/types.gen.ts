@@ -8269,6 +8269,10 @@ export type ExperimentalSessionGoalStartErrors = {
    */
   404: NotFoundError
   /**
+   * Conflict
+   */
+  409: EffectHttpApiErrorConflict
+  /**
    * GoalRateLimited
    */
   429: GoalRateLimited
@@ -10765,6 +10769,10 @@ export type SessionForkErrors = {
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
   /**
+   * Forbidden
+   */
+  403: EffectHttpApiErrorForbidden
+  /**
    * NotFoundError
    */
   404: NotFoundError
@@ -10798,6 +10806,10 @@ export type SessionAbortErrors = {
    * BadRequest | InvalidRequestError
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * Forbidden
+   */
+  403: EffectHttpApiErrorForbidden
 }
 
 export type SessionAbortError = SessionAbortErrors[keyof SessionAbortErrors]
@@ -10833,6 +10845,10 @@ export type SessionInitErrors = {
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
   /**
+   * Forbidden
+   */
+  403: EffectHttpApiErrorForbidden
+  /**
    * NotFoundError
    */
   404: NotFoundError
@@ -10866,6 +10882,10 @@ export type SessionUnshareErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * Forbidden
+   */
+  403: EffectHttpApiErrorForbidden
   /**
    * NotFoundError
    */
@@ -10904,6 +10924,10 @@ export type SessionShareErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * Forbidden
+   */
+  403: EffectHttpApiErrorForbidden
   /**
    * NotFoundError
    */
@@ -10946,6 +10970,10 @@ export type SessionSummarizeErrors = {
    * BadRequest | InvalidRequestError
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * Forbidden
+   */
+  403: EffectHttpApiErrorForbidden
   /**
    * NotFoundError
    */
@@ -11233,6 +11261,10 @@ export type PermissionRespondErrors = {
    * BadRequest | InvalidRequestError
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * Forbidden
+   */
+  403: EffectHttpApiErrorForbidden
   /**
    * NotFoundError | PermissionNotFoundError
    */

@@ -186,12 +186,19 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
     // does not have (it has at most the server password). Reads do not.
     const requireHost = (request: HttpServerRequest.HttpServerRequest) =>
       HostToken.verify(request.headers[HostToken.HEADER]) ? Effect.void : Effect.fail(new HttpApiError.Forbidden({}))
+    // A verifier session is no worker: no goal on it, and no verifier of it (409).
+    const requireWorker = Effect.fn("ExperimentalHttpApi.requireWorker")(function* (sessionID: SessionID) {
+      const info = yield* sessions.get(sessionID).pipe(notFound)
+      if (info.metadata?.verify !== undefined) return yield* new HttpApiError.Conflict({})
+    })
+
     const sessionGoalStart = Effect.fn("ExperimentalHttpApi.sessionGoalStart")(function* (ctx: {
       params: { sessionID: SessionID }
       payload: GoalStartPayload
       request: HttpServerRequest.HttpServerRequest
     }) {
       yield* requireHost(ctx.request)
+      yield* requireWorker(ctx.params.sessionID)
       const { prompt, ...input } = ctx.payload
       // With a first prompt (§11.9): the goal is started first, recording the prompt as
       // the task, so the session holds a goal (and refuses client edits of its user
@@ -221,6 +228,7 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
       request: HttpServerRequest.HttpServerRequest
     }) {
       yield* requireHost(ctx.request)
+      yield* requireWorker(ctx.params.sessionID)
       const goal = yield* goals.get(ctx.params.sessionID).pipe(notFound)
       if (!goal || goal.endedAt !== undefined) return yield* new HttpApiError.Conflict({})
       const pin = yield* VerifierPin.resolve.pipe(

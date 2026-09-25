@@ -268,6 +268,8 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       params: { sessionID: SessionID }
       request: HttpServerRequest.HttpServerRequest
     }) {
+      // a verifier session's content is the host's record: only the host forks it
+      yield* writable(ctx.params.sessionID, ctx.request)
       const body = yield* Effect.orDie(ctx.request.text)
       if (body.trim().length === 0) return yield* fork({ params: ctx.params })
 
@@ -278,7 +280,18 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       return yield* fork({ params: ctx.params, payload })
     })
 
-    const abort = Effect.fn("SessionHttpApi.abort")(function* (ctx: { params: { sessionID: SessionID } }) {
+    // Every route below writes or steers the session: on a sealed one (a verifier) it
+    // takes the host token (accuracy E §11.8). A test enumerates the session group's
+    // write routes from their definitions, so a new one cannot miss this.
+    const abort = Effect.fn("SessionHttpApi.abort")(function* (ctx: {
+      params: { sessionID: SessionID }
+      request: HttpServerRequest.HttpServerRequest
+    }) {
+      // aborting a session that does not exist stays a no-op success; one that exists
+      // and is sealed takes the host token
+      const info = yield* session.get(ctx.params.sessionID).pipe(Effect.option)
+      if (Option.isSome(info) && sealed(info.value) && !isHost(ctx.request))
+        return yield* new HttpApiError.Forbidden({})
       yield* promptSvc.cancel(ctx.params.sessionID)
       return true
     })
@@ -286,8 +299,9 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const init = Effect.fn("SessionHttpApi.init")(function* (ctx: {
       params: { sessionID: SessionID }
       payload: typeof InitPayload.Type
+      request: HttpServerRequest.HttpServerRequest
     }) {
-      yield* requireSession(ctx.params.sessionID)
+      yield* writable(ctx.params.sessionID, ctx.request)
       yield* promptSvc
         .command({
           sessionID: ctx.params.sessionID,
@@ -305,14 +319,20 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     // (matches the legacy route behavior which routed any failure through
     // ErrorMiddleware → NamedError.Unknown 500) instead of blanket-mapping
     // every failure to a 400 BadRequest.
-    const share = Effect.fn("SessionHttpApi.share")(function* (ctx: { params: { sessionID: SessionID } }) {
-      yield* requireSession(ctx.params.sessionID)
+    const share = Effect.fn("SessionHttpApi.share")(function* (ctx: {
+      params: { sessionID: SessionID }
+      request: HttpServerRequest.HttpServerRequest
+    }) {
+      yield* writable(ctx.params.sessionID, ctx.request)
       yield* shareSvc.share(ctx.params.sessionID).pipe(Effect.mapError(() => new HttpApiError.InternalServerError({})))
       return yield* requireSession(ctx.params.sessionID)
     })
 
-    const unshare = Effect.fn("SessionHttpApi.unshare")(function* (ctx: { params: { sessionID: SessionID } }) {
-      yield* requireSession(ctx.params.sessionID)
+    const unshare = Effect.fn("SessionHttpApi.unshare")(function* (ctx: {
+      params: { sessionID: SessionID }
+      request: HttpServerRequest.HttpServerRequest
+    }) {
+      yield* writable(ctx.params.sessionID, ctx.request)
       yield* shareSvc
         .unshare(ctx.params.sessionID)
         .pipe(Effect.mapError(() => new HttpApiError.InternalServerError({})))
@@ -322,8 +342,9 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const summarize = Effect.fn("SessionHttpApi.summarize")(function* (ctx: {
       params: { sessionID: SessionID }
       payload: typeof SummarizePayload.Type
+      request: HttpServerRequest.HttpServerRequest
     }) {
-      yield* revertSvc.cleanup(yield* requireSession(ctx.params.sessionID))
+      yield* revertSvc.cleanup(yield* writable(ctx.params.sessionID, ctx.request))
       const messages = yield* SessionError.mapStorageNotFound(session.messages({ sessionID: ctx.params.sessionID }))
       const defaultAgent = yield* agentSvc.defaultAgent()
       const currentAgent = messages.findLast((message) => message.info.role === "user")?.info.agent ?? defaultAgent
@@ -435,8 +456,9 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const permissionRespond = Effect.fn("SessionHttpApi.permissionRespond")(function* (ctx: {
       params: { sessionID: SessionID; permissionID: PermissionV1.ID }
       payload: typeof PermissionResponsePayload.Type
+      request: HttpServerRequest.HttpServerRequest
     }) {
-      yield* requireSession(ctx.params.sessionID)
+      yield* writable(ctx.params.sessionID, ctx.request)
       yield* permissionSvc.reply({ requestID: ctx.params.permissionID, reply: ctx.payload.response }).pipe(
         Effect.catchTag("Permission.NotFoundError", (error) =>
           Effect.fail(

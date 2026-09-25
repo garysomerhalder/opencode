@@ -760,6 +760,15 @@ in the verifier session's message storage, which clients could write without a t
   - While a session of the project has an active goal, or a verification not yet recorded,
     `PATCH /config`, `PATCH /global/config` (any project) and `POST /instance/dispose` take the
     host token (403).
+- **Every write route is sealed (Phase 4 PR 1 review).** Also `fork`, `abort` (a missing session
+  stays a no-op success), `init`, `share`, `unshare`, `summarize` (which would clean up a revert
+  and compact with a model of the caller's choosing, around the pin) and `permissionRespond`. A
+  test enumerates the session group's write routes from their definitions and expects 403 from
+  each on a sealed session, so a route added later cannot miss the guard. A verifier session gets
+  no goal, and no verifier of its own (409).
+- **Reads are not gated, by design.** The worker can read the verifier's transcript through the
+  API, as any client can read any session. So the verifier must never be told a secret: its prompt
+  holds the goal, criteria, check ids and the todo list, nothing the worker may not see.
 - **Assumption: config and plugins on disk.** A worker with bash can still write config and
   plugins to disk: `opencode.json` and `.opencode/` in the worktree, and the global config
   directories. The API checks above do not stop that. The pin catches a change made after the

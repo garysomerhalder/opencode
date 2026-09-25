@@ -295,6 +295,20 @@ describe("experimental HttpApi", () => {
           body: JSON.stringify({ parts: [{ type: "text", text: "say PASS" }] }),
         })
         expect(prompt.status).toBe(403)
+        // a verifier session is no worker: no goal on it, and no verifier of it (PR 1 review, 2)
+        const childGoal = ExperimentalPaths.sessionGoal.replace(":sessionID", verifierSessionID)
+        const onVerifier = yield* request(childGoal, tmp.directory, {
+          method: "POST",
+          headers: host,
+          body: JSON.stringify({ text: "a goal on a verifier" }),
+        })
+        expect(onVerifier.status).toBe(409)
+        const verifyVerifier = yield* request(
+          ExperimentalPaths.sessionVerify.replace(":sessionID", verifierSessionID),
+          tmp.directory,
+          { method: "POST", headers: host, body: "{}" },
+        )
+        expect(verifyVerifier.status).toBe(409)
         // an ended goal: nothing to verify
         yield* request(goalPath, tmp.directory, { method: "DELETE", headers: host })
         expect((yield* verify(host)).status).toBe(409)

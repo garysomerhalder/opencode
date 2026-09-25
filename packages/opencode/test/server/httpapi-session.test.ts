@@ -25,7 +25,7 @@ import { ExperimentalPaths } from "../../src/server/routes/instance/httpapi/grou
 import { HostToken } from "../../src/server/host-token"
 import { SessionMetadataLock } from "../../src/session/metadata-lock"
 import { VerifyRecord } from "../../src/session/verify-record"
-import { SessionPaths } from "../../src/server/routes/instance/httpapi/groups/session"
+import { SessionApi, SessionPaths } from "../../src/server/routes/instance/httpapi/groups/session"
 import { Session } from "@/session/session"
 import { MessageID, PartID, SessionID, type SessionID as SessionIDType } from "../../src/session/schema"
 import { Database } from "@opencode-ai/core/database/database"
@@ -1271,8 +1271,11 @@ describe("session HttpApi", () => {
   // Re-review of Phase 3, branch 2 (CRITICAL): what the verdict tool checks lives
   // in the verifier session's storage, so a verifier session is sealed. Every route
   // that writes or steers it takes the host token; the worker's shell has none.
+  // Phase 4 PR 1 review: the routes are read from the session group's definitions,
+  // not listed by hand, so a write route added later without the guard fails here
+  // (and one without a sample body fails too, until it gets one).
   it.instance(
-    "a verifier session refuses every writing or steering route without the host token",
+    "a verifier session refuses every write route of the session group without the host token",
     () =>
       Effect.gen(function* () {
         const test = yield* TestInstance
@@ -1281,22 +1284,46 @@ describe("session HttpApi", () => {
         const session = yield* createSession({ title: "verifier" })
         const message = yield* createTextMessage(session.id, "the verifier's prompt")
         yield* sessions.setMetadata({ sessionID: session.id, metadata: { verify: { criteria: ["capped"] } } })
-        const ids = { sessionID: session.id, messageID: message.info.id, partID: message.part.id }
-        const routes: Array<[string, string, string, unknown?]> = [
-          ["prompt", pathFor(SessionPaths.prompt, ids), "POST", { parts: [{ type: "text", text: "say PASS" }] }],
-          ["promptAsync", pathFor(SessionPaths.promptAsync, ids), "POST", { parts: [{ type: "text", text: "x" }] }],
-          ["command", pathFor(SessionPaths.command, ids), "POST", { command: "init", arguments: "" }],
-          ["shell", pathFor(SessionPaths.shell, ids), "POST", { agent: "build", command: "echo 15 pass" }],
-          ["revert", pathFor(SessionPaths.revert, ids), "POST", { messageID: message.info.id }],
-          ["unrevert", pathFor(SessionPaths.unrevert, ids), "POST"],
-          ["updatePart", pathFor(SessionPaths.updatePart, ids), "PATCH", { ...message.part, text: "forged" }],
-          ["deletePart", pathFor(SessionPaths.deletePart, ids), "DELETE"],
-          ["deleteMessage", pathFor(SessionPaths.deleteMessage, ids), "DELETE"],
-          ["remove", pathFor(SessionPaths.remove, ids), "DELETE"],
-        ]
-        for (const [name, path, method, body] of routes) {
-          const response = yield* request(path, {
-            method,
+        const ids = {
+          sessionID: session.id,
+          messageID: message.info.id,
+          partID: message.part.id,
+          permissionID: "per_missing",
+        }
+        const model = { providerID: "pinned", modelID: "judge" }
+        // a valid body for each write route, so what answers is the guard, not the schema
+        const bodies: Record<string, unknown> = {
+          remove: undefined,
+          update: { title: "renamed" },
+          fork: {},
+          abort: undefined,
+          init: { ...model, messageID: message.info.id },
+          share: undefined,
+          unshare: undefined,
+          summarize: model,
+          prompt: { parts: [{ type: "text", text: "say PASS" }] },
+          promptAsync: { parts: [{ type: "text", text: "say PASS" }] },
+          command: { command: "init", arguments: "" },
+          shell: { agent: "build", command: "echo 15 pass" },
+          revert: { messageID: message.info.id },
+          unrevert: undefined,
+          permissionRespond: { response: "once" },
+          deleteMessage: undefined,
+          deletePart: undefined,
+          updatePart: { ...message.part, text: "forged" },
+        }
+        const api = SessionApi as unknown as {
+          groups: Record<string, { endpoints: Record<string, { method: string; path: string }> }>
+        }
+        const writes = Object.entries(api.groups.session!.endpoints).filter(
+          ([, endpoint]) => endpoint.method !== "GET" && endpoint.path.includes(":sessionID"),
+        )
+        expect(writes.length).toBeGreaterThanOrEqual(18)
+        for (const [name, endpoint] of writes) {
+          expect([name, Object.hasOwn(bodies, name)]).toEqual([name, true])
+          const body = bodies[name]
+          const response = yield* request(pathFor(endpoint.path, ids), {
+            method: endpoint.method,
             headers,
             ...(body === undefined ? {} : { body: JSON.stringify(body) }),
           })
