@@ -70,10 +70,22 @@ export type GoalLoopDeps = {
   hostToken?: (server: GoalLoopServer) => string | undefined
   /** Wall-clock cap on one verifier turn. */
   verifyTimeoutMs?: number
+  /** Deadline for each verification check; one that does not finish is a failed check. */
+  checkTimeoutMs?: number
 }
 
 const DEFAULT_MAX_VERIFICATIONS = 3
 const DEFAULT_VERIFY_TIMEOUT_MS = 15 * 60 * 1000
+const DEFAULT_CHECK_TIMEOUT_MS = 10 * 60 * 1000
+/** Uncounted (stale-goal) drops in a row before the loop ends unverified. */
+const MAX_DROPS = 2
+// Bounds on what start accepts for verification (the renderer supplies it until PR 3
+// moves check commands to trusted config).
+const CHECKS_MAX = 20
+const CHECK_CHARS = 2_000
+const CRITERIA_MAX = 50
+const CRITERION_CHARS = 4_000
+const VERIFICATIONS_MAX = 10
 
 export const DEFAULT_COMPLETION_MARKER = "GOAL_COMPLETE"
 const DEFAULT_WAIT_TIMEOUT_MS = 15 * 60 * 1000
@@ -307,6 +319,25 @@ function progressOf(messages: SessionMessage[]) {
   }
 }
 
+/**
+ * Bounds what start takes for verification: it comes from the renderer over IPC until
+ * PR 3 moves check commands to trusted config (PR 2 review, 4).
+ */
+function validateVerify(verify: GoalLoopStartInput["verify"]) {
+  const strings = (value: unknown, max: number, chars: number) =>
+    Array.isArray(value) &&
+    value.length <= max &&
+    value.every((item) => typeof item === "string" && item.trim().length > 0 && item.length <= chars)
+  if (!verify || typeof verify !== "object") throw new Error("verify must be an object")
+  if (!strings(verify.checks, CHECKS_MAX, CHECK_CHARS))
+    throw new Error(`verify.checks must be at most ${CHECKS_MAX} non-empty commands of at most ${CHECK_CHARS} characters`)
+  if (verify.criteria !== undefined && !strings(verify.criteria, CRITERIA_MAX, CRITERION_CHARS))
+    throw new Error(`verify.criteria must be at most ${CRITERIA_MAX} non-empty criteria of at most ${CRITERION_CHARS} characters`)
+  const max = verify.maxVerifications
+  if (max !== undefined && (!Number.isInteger(max) || max < 1 || max > VERIFICATIONS_MAX))
+    throw new Error(`verify.maxVerifications must be an integer from 1 to ${VERIFICATIONS_MAX}`)
+}
+
 export function createGoalLoop(deps: GoalLoopDeps) {
   const fetchImpl = deps.fetchImpl ?? fetch
   const now = deps.now ?? Date.now
@@ -324,6 +355,7 @@ export function createGoalLoop(deps: GoalLoopDeps) {
   const maxBackoffMs = deps.maxBackoffMs ?? DEFAULT_MAX_BACKOFF_MS
   const compactAtTokens = deps.compactAtTokens ?? DEFAULT_COMPACT_AT_TOKENS
   const verifyTimeoutMs = deps.verifyTimeoutMs ?? DEFAULT_VERIFY_TIMEOUT_MS
+  const checkTimeoutMs = deps.checkTimeoutMs ?? DEFAULT_CHECK_TIMEOUT_MS
 
   const progressEveryMs = deps.progressEveryMs ?? DEFAULT_PROGRESS_EVERY_MS
 
@@ -335,13 +367,18 @@ export function createGoalLoop(deps: GoalLoopDeps) {
   async function request(
     server: GoalLoopServer,
     path: string,
-    init?: RequestInit & { hostToken?: string },
+    init?: RequestInit & { host?: boolean },
   ): Promise<unknown> {
-    const { hostToken, ...rest } = init ?? {}
+    const { host, ...rest } = init ?? {}
+    const target = new URL(path, server.url)
+    // The host token is chosen for the URL this request actually goes to, and such a
+    // request never follows a redirect (PR 2 review, 5): it cannot be carried elsewhere.
+    const hostToken = host ? deps.hostToken?.({ ...server, url: target.href }) : undefined
     // fetch only rejects when the request never got an HTTP answer (refused,
     // reset, DNS), which is what a restarting server looks like.
-    const res = await fetchImpl(new URL(path, server.url), {
+    const res = await fetchImpl(target, {
       ...rest,
+      ...(hostToken ? { redirect: "error" as const } : {}),
       headers: {
         "content-type": "application/json",
         ...(directory ? { "x-opencode-directory": directory } : {}),
@@ -574,8 +611,10 @@ export function createGoalLoop(deps: GoalLoopDeps) {
       return continuePromptText(next.goal, next.completionMarker, nextIteration, next.maxIterations)
     }
 
-    // What the last verdict asked for: the next verifier looks at it first.
+    // What the last verdict asked for: the next verifier gets it as untrusted notes.
     let lastMissing: { criterion: string; need: string }[] = []
+    // Verifications dropped uncounted in a row (a stale goal); capped at MAX_DROPS.
+    let drops = 0
 
     // One verification (§11.9) when the worker says it is done. Returns the worker's
     // next prompt, or null when the loop ended. The feedback in it is built from the
@@ -597,7 +636,7 @@ export function createGoalLoop(deps: GoalLoopDeps) {
             request(server, path, {
               method: init.method,
               ...(init.body !== undefined ? { body: init.body } : {}),
-              ...(init.host ? { hostToken: token } : {}),
+              ...(init.host ? { host: true } : {}),
             }),
           sleep,
           now,
@@ -611,18 +650,20 @@ export function createGoalLoop(deps: GoalLoopDeps) {
           missingBefore: lastMissing,
           pollMs: pollIntervalMs,
           timeoutMs: verifyTimeoutMs,
+          checkTimeoutMs,
           onVerifier: (id) => {
             const running = active
             if (running) setState({ ...running, verifierSessionID: id, updatedAt: now() })
           },
         },
-      ).catch((error: unknown) => {
-        if (error instanceof TransientError) throw error
-        return {
-          kind: "stale" as const,
-          reason: `the verification failed (${error instanceof Error ? error.message : String(error)}); the attempt was dropped`,
-        }
-      })
+      ).catch((error: unknown) => ({
+        // Only a 409 from the verify route (the goal moved on) is uncounted, and that
+        // comes back as "stale". Any error is a counted failed attempt, so errors cannot
+        // be used to escape the limit (PR 2 review, 1).
+        kind: "fail" as const,
+        verdict: null,
+        feedback: `An independent verification could not complete (${error instanceof Error ? error.message : String(error)}).`,
+      }))
       if (!alive()) return null
       const running = active
       if (!running) return null
@@ -641,9 +682,16 @@ export function createGoalLoop(deps: GoalLoopDeps) {
         return null
       }
       if (outcome.kind === "stale") {
+        // uncounted, but capped: a goal that keeps moving cannot keep the loop unverified-free
+        drops += 1
+        if (drops >= MAX_DROPS) {
+          finish("unverified", `${drops} verifications dropped in a row: ${outcome.reason}`)
+          return null
+        }
         note(outcome.reason)
         return nextContinue()
       }
+      drops = 0
       const count = (running.verifications ?? 0) + 1
       const max = verify.maxVerifications ?? DEFAULT_MAX_VERIFICATIONS
       const counted = setState({ ...(active ?? running), verifications: count, updatedAt: now() })
@@ -892,6 +940,7 @@ export function createGoalLoop(deps: GoalLoopDeps) {
     }
     const goal = input.goal.trim()
     if (!goal) throw new Error("goal must not be empty")
+    if (input.verify !== undefined) validateVerify(input.verify)
     const maxIterations = input.maxIterations ?? null
     if (maxIterations !== null && (!Number.isInteger(maxIterations) || maxIterations < 1)) {
       throw new Error("maxIterations must be a positive integer")
@@ -943,7 +992,7 @@ export function createGoalLoop(deps: GoalLoopDeps) {
       // is recorded from it and no client can edit the first message before that
       await request(server, `/experimental/session/${sessionID}/goal?directory=${encodeURIComponent(directory)}`, {
         method: "POST",
-        hostToken: token,
+        host: true,
         body: JSON.stringify({
           text: goal,
           ...(input.verify.criteria?.length ? { criteria: input.verify.criteria } : {}),

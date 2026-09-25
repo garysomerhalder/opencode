@@ -50,12 +50,22 @@ describe("goal panel view", () => {
       [{ status: "failed" }, "goalPanel.state.failed", "error"],
       [{ status: "capped" }, "goalPanel.state.capped", "neutral"],
       [{ status: "stopped" }, "goalPanel.state.stopped", "neutral"],
+      [{ status: "running", phase: "verifying" }, "goalPanel.state.verifying", "info"],
+      [{ status: "unverified" }, "goalPanel.state.unverified", "error"],
     ]
     for (const [patch, label, tone] of cases) {
       const view = goalPanelView({ states: [state("ses_a", patch)], sessionID: "ses_a", now: 10_000 })
       if (view.kind !== "loop") throw new Error("expected a loop")
       expect([view.label, view.tone]).toEqual([label, tone])
     }
+  })
+
+  // accuracy E Phase 4 (PR 2 review): a goal the verifier did not accept is never shown as done
+  test("an unverified loop never renders as success", () => {
+    const view = goalPanelView({ states: [state("ses_a", { status: "unverified" })], sessionID: "ses_a", now: 10_000 })
+    if (view.kind !== "loop") throw new Error("expected a loop")
+    expect(view.tone).not.toBe("success")
+    expect(view.label).not.toBe("goalPanel.state.completed")
   })
 
   test("running exposes the last check, the last nudge and the iteration", () => {

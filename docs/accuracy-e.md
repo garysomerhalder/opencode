@@ -930,5 +930,19 @@ Added tests for the rulings:
    - The token is given out only for the local server's origin (`hostTokenFor`), never sent to
      another server.
    - A restart drops a verification in flight and does not count it.
+   - **PR 2 review.**
+     - Only a 409 from the verify route (the goal moved on) is uncounted, and at most 2 in a
+       row; after that the loop ends `unverified`. Any other error is a counted failed attempt.
+     - Every check has a deadline (default 10 min); one that does not finish is a failed check.
+     - After the nudge, the loop waits for a new answer.
+     - The last verdict's `missing` reaches the next verifier flattened, capped and marked as
+       untrusted notes.
+     - Main bounds the check list (20 commands of at most 2,000 characters).
+     - Token requests are made with `redirect: "error"`, and the token is chosen for the final
+       request URL.
+     - The goal panel never shows `unverified` as success.
+   - **The persisted last input** is in the Electron app's own store (`userData/goal-loop`), not
+     in the project. A same-user shell can still write it, and it pre-fills the start form. PR 3
+     stops taking check commands from the renderer at all.
 3. **Settings and trusted check commands,** with the approval of proposed commands.
 4. **UI:** verdicts and the goal history.
