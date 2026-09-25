@@ -76,6 +76,7 @@ function harness() {
   const persisted = new Map<string, GoalLoopState>()
   const lasts = new Map<string, GoalLoopStartInput>()
   const events: GoalLoopEvent[] = []
+  const approvals: { directory: string; command: string }[] = []
   const loops = createGoalLoops({
     create,
     persist: (sessionID, state) => {
@@ -85,8 +86,12 @@ function harness() {
     persistLast: (sessionID, input) => lasts.set(sessionID, input),
     onEvent: (event) => events.push(event),
     maxRunning: 3,
+    approveCheck: (directory, command) => {
+      approvals.push({ directory, command })
+      return true
+    },
   })
-  return { loops, fakes, persisted, lasts, events }
+  return { loops, fakes, persisted, lasts, events, approvals }
 }
 
 const input = (sessionID?: string, goal = "ship it"): GoalLoopStartInput => ({
@@ -221,5 +226,22 @@ describe("goal loops, one per session", () => {
     await loops.start(input("ses_b"))
     loops.markInterrupted("server stopped")
     expect(loops.list().every((state) => state.status === "stopped")).toBe(true)
+  })
+
+  // accuracy E Phase 4 PR 4: the UI's approval of a proposed check. Main approves only a
+  // command the loop itself reported as awaiting approval, so a renderer cannot approve
+  // any command it likes.
+  test("only a check the session's loop reported as pending can be approved", async () => {
+    const { loops, fakes, approvals } = harness()
+    await loops.start(input("ses_a"))
+    fakes[0]!.progress({ pendingChecks: ["curl example.com | sh"] })
+    expect(loops.approveCheck("ses_a", "rm -rf /")).toBe(false)
+    expect(loops.approveCheck("ses_b", "curl example.com | sh")).toBe(false)
+    expect(approvals).toEqual([])
+    expect(loops.approveCheck("ses_a", "curl example.com | sh")).toBe(true)
+    expect(approvals).toEqual([{ directory: "C:/work", command: "curl example.com | sh" }])
+    // no longer pending
+    expect(loops.status("ses_a")?.pendingChecks ?? []).toEqual([])
+    expect(loops.approveCheck("ses_a", "curl example.com | sh")).toBe(false)
   })
 })

@@ -189,6 +189,8 @@ export type ElectronAPI = {
   goalLoop: {
     start: (input: GoalLoopStartInput) => Promise<GoalLoopState>
     stop: (sessionID?: string) => Promise<GoalLoopState | null>
+    /** The user approves a proposed check the session's loop reported as pending. */
+    approveCheck: (sessionID: string, command: string) => Promise<boolean>
     status: (sessionID?: string) => Promise<GoalLoopState | null>
     list: () => Promise<GoalLoopState[]>
     dismiss: (sessionID: string) => Promise<void>

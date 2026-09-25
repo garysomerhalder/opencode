@@ -962,3 +962,11 @@ Added tests for the rulings:
      proposals are listed as awaiting approval.
    - The approval prompt itself is UI (PR 4).
 4. **UI:** verdicts and the goal history.
+   - The goal panel shows the last verdict: PASS as success, PARTIAL as a warning and FAIL as an
+     error, with the unmet criteria, when it came, and the count of verifications without a
+     PASS. An `unverified` loop is never shown as success.
+   - It lists proposed checks awaiting approval, each with an Approve button.
+   - Main approves only a command its loop reported as pending (`pendingChecks`), through
+     `goal-loop-approve-check`. A renderer can answer the host's prompt, not approve an
+     arbitrary command.
+   - Without an OS-backed key, the approval fails and says so.

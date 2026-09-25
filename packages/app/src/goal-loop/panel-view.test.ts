@@ -60,6 +60,50 @@ describe("goal panel view", () => {
     }
   })
 
+  // accuracy E Phase 4 PR 4: the verdict and the checks awaiting approval
+  test("the last verdict is shown with its tone, and the unmet criteria", () => {
+    const pass = goalPanelView({
+      states: [state("ses_a", { status: "completed", verifications: 1, lastVerdict: { verdict: "PASS", at: 9_000, unmet: [] } })],
+      sessionID: "ses_a",
+      now: 10_000,
+    })
+    if (pass.kind !== "loop") throw new Error("expected a loop")
+    expect(pass.verdict).toEqual({ label: "goalPanel.verdict.pass", tone: "success", unmet: [], ago: 1_000 })
+    expect(pass.verifications).toBe(1)
+
+    const fail = goalPanelView({
+      states: [
+        state("ses_a", { status: "unverified", lastVerdict: { verdict: "FAIL", at: 5_000, unmet: ["capped at 4 KB"] } }),
+      ],
+      sessionID: "ses_a",
+      now: 10_000,
+    })
+    if (fail.kind !== "loop") throw new Error("expected a loop")
+    expect(fail.verdict).toEqual({ label: "goalPanel.verdict.fail", tone: "error", unmet: ["capped at 4 KB"], ago: 5_000 })
+
+    const partial = goalPanelView({
+      states: [state("ses_a", { lastVerdict: { verdict: "PARTIAL", at: 10_000, unmet: [] } })],
+      sessionID: "ses_a",
+      now: 10_000,
+    })
+    if (partial.kind !== "loop") throw new Error("expected a loop")
+    expect(partial.verdict?.tone).toBe("warning")
+
+    const none = goalPanelView({ states: [state("ses_a")], sessionID: "ses_a", now: 10_000 })
+    if (none.kind !== "loop") throw new Error("expected a loop")
+    expect(none.verdict).toBeNull()
+  })
+
+  test("checks awaiting approval are listed for the approval prompt", () => {
+    const view = goalPanelView({
+      states: [state("ses_a", { pendingChecks: ["bun run lint"] })],
+      sessionID: "ses_a",
+      now: 10_000,
+    })
+    if (view.kind !== "loop") throw new Error("expected a loop")
+    expect(view.pendingChecks).toEqual(["bun run lint"])
+  })
+
   // accuracy E Phase 4 (PR 2 review): a goal the verifier did not accept is never shown as done
   test("an unverified loop never renders as success", () => {
     const view = goalPanelView({ states: [state("ses_a", { status: "unverified" })], sessionID: "ses_a", now: 10_000 })

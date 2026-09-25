@@ -132,6 +132,7 @@ const api: ElectronAPI = {
   goalLoop: {
     start: (input) => ipcRenderer.invoke("goal-loop-start", input),
     stop: (sessionID) => ipcRenderer.invoke("goal-loop-stop", sessionID),
+    approveCheck: (sessionID, command) => ipcRenderer.invoke("goal-loop-approve-check", sessionID, command),
     status: (sessionID) => ipcRenderer.invoke("goal-loop-status", sessionID),
     list: () => ipcRenderer.invoke("goal-loop-list"),
     dismiss: (sessionID) => ipcRenderer.invoke("goal-loop-dismiss", sessionID),

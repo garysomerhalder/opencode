@@ -19,6 +19,8 @@ export type GoalLoopsDeps = {
   persistLast?: (sessionID: string, input: GoalLoopStartInput) => void
   onEvent?: (event: GoalLoopEvent) => void
   maxRunning?: number
+  /** Records the user's approval of a proposed check command (goal-check-approvals.ts); false when it cannot. */
+  approveCheck?: (directory: string, command: string) => boolean
 }
 
 export function createGoalLoops(deps: GoalLoopsDeps) {
@@ -128,7 +130,20 @@ export function createGoalLoops(deps: GoalLoopsDeps) {
     }
   }
 
-  return { start, stop, status, list, dismiss, adoptOrphans, markInterrupted }
+  // The user approves a proposed check command (accuracy E §11.9, PR 4). Only a command
+  // the session's loop itself reported as pending: a renderer cannot approve any command
+  // it likes, only answer the host's own prompt.
+  function approveCheck(sessionID: string, command: string): boolean {
+    const state = states.get(sessionID)
+    if (!state || !deps.approveCheck || !(state.pendingChecks ?? []).includes(command)) return false
+    if (!deps.approveCheck(state.directory, command)) return false
+    const next = { ...state, pendingChecks: (state.pendingChecks ?? []).filter((item) => item !== command) }
+    states.set(sessionID, next)
+    deps.onEvent?.({ loopID: next.id, type: "progress", state: next })
+    return true
+  }
+
+  return { start, stop, status, list, dismiss, adoptOrphans, markInterrupted, approveCheck }
 }
 
 export type GoalLoops = ReturnType<typeof createGoalLoops>

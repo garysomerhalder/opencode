@@ -50,7 +50,7 @@ import { registerDevWindowsIdentity, startMenuPrograms } from "./windows-identit
 import { createWslServersController } from "./wsl/servers"
 import { createGoalLoop } from "./goal-loop"
 import { createGoalLoops } from "./goal-loops"
-import { isCheckApproved, loadApprovalKey } from "./goal-check-approvals"
+import { approveCheck, isCheckApproved, loadApprovalKey } from "./goal-check-approvals"
 import { readLast, saveLast, saveState, takeOrphans, type KeyValueStore } from "./goal-loop-store"
 import { getStore } from "./store"
 import { GOAL_LOOP_STORE } from "./store-keys"
@@ -426,6 +426,12 @@ const main = Effect.gen(function* () {
         ...hooks,
       }),
     persist: (sessionID, state) => saveState(goalLoopStore, sessionID, state),
+    // the user's approval, keyed and sealed (goal-check-approvals.ts); no key, no approval
+    approveCheck: (directory, command) => {
+      if (!approvalKey) return false
+      approveCheck(goalLoopStore, approvalKey, directory, command)
+      return true
+    },
     persistLast: (sessionID, input) => saveLast(goalLoopStore, sessionID, input),
     onEvent: (event) => {
       sendToAllWindows("goal-loop-event", event)

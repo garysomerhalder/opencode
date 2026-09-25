@@ -22,7 +22,19 @@ export type GoalPanelView =
       /** Milliseconds since the loop last prompted the session, or null when unknown. */
       promptedAgo: number | null
       reason: string | null
+      /** The independent verifier's last verdict (accuracy E), or null before any. */
+      verdict: { label: string; tone: GoalPanelTone; unmet: string[]; ago: number } | null
+      /** Verifications that ended without a PASS. */
+      verifications: number
+      /** Proposed check commands awaiting the user's approval. */
+      pendingChecks: string[]
     }
+
+const VERDICTS = {
+  PASS: { label: "goalPanel.verdict.pass", tone: "success" },
+  PARTIAL: { label: "goalPanel.verdict.partial", tone: "warning" },
+  FAIL: { label: "goalPanel.verdict.fail", tone: "error" },
+} as const satisfies Record<string, { label: string; tone: GoalPanelTone }>
 
 function describe(state: GoalLoopState): { label: string; tone: GoalPanelTone } {
   switch (state.status) {
@@ -67,6 +79,15 @@ export function goalPanelView(input: {
     checkedAgo: running ? since(input.now, state.checkedAt) : null,
     promptedAgo: running ? since(input.now, state.promptedAt) : null,
     reason: state.reason,
+    verdict: state.lastVerdict
+      ? {
+          ...VERDICTS[state.lastVerdict.verdict],
+          unmet: [...state.lastVerdict.unmet],
+          ago: Math.max(0, input.now - state.lastVerdict.at),
+        }
+      : null,
+    verifications: state.verifications ?? 0,
+    pendingChecks: [...(state.pendingChecks ?? [])],
   }
 }
 

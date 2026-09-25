@@ -651,6 +651,10 @@ export function createGoalLoop(deps: GoalLoopDeps) {
         const proposals = (verify.proposals ?? []).filter((command) => !checks.includes(command))
         const approved = proposals.filter((command) => deps.checkApproved?.(directory, command) === true)
         const waiting = proposals.length - approved.length
+        // the commands awaiting approval, for the UI's prompt (PR 4)
+        const pending = proposals.filter((command) => !approved.includes(command))
+        const running = active
+        if (running) setState({ ...running, pendingChecks: pending, updatedAt: now() })
         if (waiting > 0) note(`${waiting} proposed check${waiting === 1 ? " awaits" : "s await"} approval`)
         return [...checks, ...approved]
       }

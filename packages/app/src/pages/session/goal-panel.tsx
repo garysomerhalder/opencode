@@ -1,4 +1,4 @@
-import { createMemo, createSignal, onCleanup, onMount, Show, type Component } from "solid-js"
+import { createMemo, createSignal, For, onCleanup, onMount, Show, type Component } from "solid-js"
 import { Button } from "@opencode-ai/ui/button"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { Icon } from "@opencode-ai/ui/icon"
@@ -52,6 +52,26 @@ export const GoalPanel: Component<{ sessionID: string | undefined; title?: strin
     void import("@/components/dialog-goal-manager").then((x) => {
       dialog.show(() => <x.DialogGoalManager sessionID={props.sessionID} directory={props.directory} />)
     })
+  }
+
+  // the user approves one proposed check command; the host checks it is one it asked about
+  const approve = async (command: string) => {
+    const api = platform.goalLoop
+    if (!api?.approveCheck || !props.sessionID) return
+    setBusy(true)
+    try {
+      const approved = await api.approveCheck(props.sessionID, command)
+      if (!approved)
+        showToast({ variant: "error", title: language.t("common.requestFailed"), description: command })
+    } catch (err) {
+      showToast({
+        variant: "error",
+        title: language.t("common.requestFailed"),
+        description: err instanceof Error ? err.message : String(err),
+      })
+    } finally {
+      setBusy(false)
+    }
   }
 
   const stop = async () => {
@@ -178,6 +198,49 @@ export const GoalPanel: Component<{ sessionID: string | undefined; title?: strin
                   <span class="min-w-0 max-w-64 truncate font-mono">{current().state.directory}</span>
                 </Tooltip>
               </div>
+              {/* accuracy E: the independent verifier's last verdict, from the host's record */}
+              <Show when={current().verdict}>
+                {(verdict) => (
+                  <div data-slot="goal-panel-verdict" class="flex min-w-0 flex-wrap items-center gap-x-3 text-12-regular">
+                    <Tag class={TONE[verdict().tone]}>{language.t(verdict().label)}</Tag>
+                    <Show when={ago(verdict().ago)}>
+                      {(value) => <span class="text-text-weak">{value()}</span>}
+                    </Show>
+                    <Show when={verdict().unmet.length > 0}>
+                      <span class="min-w-0 truncate text-text-weak">
+                        {language.t("goalPanel.verdict.unmet", { criteria: verdict().unmet.join("; ") })}
+                      </span>
+                    </Show>
+                    <Show when={current().verifications > 0}>
+                      <span class="text-text-weak">
+                        {language.t("goalPanel.verifications", { count: current().verifications })}
+                      </span>
+                    </Show>
+                  </div>
+                )}
+              </Show>
+              {/* proposed checks run only once the user approves each, for this project */}
+              <Show when={current().pendingChecks.length > 0}>
+                <div data-slot="goal-panel-pending-checks" class="flex min-w-0 flex-col gap-1 text-12-regular">
+                  <span class="text-text-weak">{language.t("goalPanel.pendingChecks")}</span>
+                  <For each={current().pendingChecks}>
+                    {(command) => (
+                      <div class="flex min-w-0 items-center gap-2">
+                        <code class="min-w-0 truncate font-mono">{command}</code>
+                        <button
+                          type="button"
+                          data-action="goal-panel-approve-check"
+                          class="shrink-0 text-text-interactive-base hover:underline"
+                          disabled={busy()}
+                          onClick={() => void approve(command)}
+                        >
+                          {language.t("goalPanel.pendingChecks.approve")}
+                        </button>
+                      </div>
+                    )}
+                  </For>
+                </div>
+              </Show>
             </>
           )}
         </Show>

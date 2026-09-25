@@ -135,6 +135,13 @@ export function registerIpcHandlers(deps: Deps) {
     deps.goalLoops.status(sessionArg(sessionID)),
   )
   ipcMain.handle("goal-loop-list", () => deps.goalLoops.list())
+  // the user's approval of a proposed check: main approves only a command the session's
+  // loop reported as pending (accuracy E §11.9)
+  ipcMain.handle("goal-loop-approve-check", (_event: IpcMainInvokeEvent, sessionID: unknown, command: unknown) =>
+    typeof sessionID === "string" && typeof command === "string"
+      ? deps.goalLoops.approveCheck(sessionID, command)
+      : false,
+  )
   ipcMain.handle("goal-loop-dismiss", (_event: IpcMainInvokeEvent, sessionID: unknown) => {
     const id = sessionArg(sessionID)
     if (id) deps.goalLoops.dismiss(id)

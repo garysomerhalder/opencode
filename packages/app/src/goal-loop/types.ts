@@ -76,6 +76,8 @@ export type GoalLoopState = {
   /** The verifier session of the verification in flight, if one is. */
   verifierSessionID?: string | null
   lastVerdict?: GoalLoopVerdict | null
+  /** Proposed check commands awaiting the user's approval for this project (not run until approved). */
+  pendingChecks?: string[]
 }
 
 export type GoalLoopEvent =
@@ -98,6 +100,11 @@ export type GoalLoopPlatform = {
    * loop, and refuses when several are running.
    */
   stop(sessionID?: string): Promise<GoalLoopState | null>
+  /**
+   * The user approves a proposed check command for the session's project (accuracy E
+   * §11.9). The host approves only a command its loop reported as pending; false otherwise.
+   */
+  approveCheck?(sessionID: string, command: string): Promise<boolean>
   /** The loop of `sessionID` (running or recently ended); without one, the newest running loop. */
   status(sessionID?: string): Promise<GoalLoopState | null>
   /** Every running loop, and every ended one not yet dismissed. */

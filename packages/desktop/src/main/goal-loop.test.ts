@@ -1685,6 +1685,8 @@ describe("goal loop: verify before completing (accuracy E Phase 4)", () => {
     expect(events.at(-1)?.type).toBe("completed")
     expect(env.shellCommands).toEqual(["bun test"])
     expect(events.some((e) => (e.state.reason ?? "").includes("1 proposed check awaits approval"))).toBe(true)
+    // PR 4: the loop reports which commands await approval, for the UI's prompt
+    expect(events.some((e) => e.state.pendingChecks?.includes(planted))).toBe(true)
 
     // approved once, for this project and this exact command: now it runs
     const approvedEvents: GoalLoopEvent[] = []
