@@ -4,7 +4,7 @@ import { NodeHttpServer, NodeServices } from "@effect/platform-node"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { mkdir } from "node:fs/promises"
 import path from "node:path"
-import { Cause, Config, Effect, Exit, Layer } from "effect"
+import { Cause, Config, Deferred, Effect, Exit, Fiber, Layer } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse, HttpRouter, HttpServer } from "effect/unstable/http"
 import { layerWebSocketConstructorGlobal } from "effect/unstable/socket/Socket"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
@@ -22,6 +22,8 @@ import { Project } from "../../src/project/project"
 import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
 import * as HttpSessionError from "../../src/server/routes/instance/httpapi/handlers/session-errors"
 import { ExperimentalPaths } from "../../src/server/routes/instance/httpapi/groups/experimental"
+import { HostToken } from "../../src/server/host-token"
+import { SessionMetadataLock } from "../../src/session/metadata-lock"
 import { SessionPaths } from "../../src/server/routes/instance/httpapi/groups/session"
 import { Session } from "@/session/session"
 import { MessageID, PartID, SessionID, type SessionID as SessionIDType } from "../../src/session/schema"
@@ -903,9 +905,82 @@ describe("session HttpApi", () => {
             body: JSON.stringify({ metadata }),
           })
         expect((yield* update({ goal: { ...goal, lastVerdict: { verdict: "PASS" } } })).status).toBe(400)
+        expect((yield* update({ lastVerdict: { verdict: "PASS" } })).status).toBe(400)
         const other = yield* update({ note: "hello" })
         expect(other.status).toBe(200)
         expect((yield* json<Session.Info>(other)).metadata).toEqual({ note: "hello", goal })
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+  )
+
+  // Security review of Phase 3, 1: a metadata update reads the session, then writes
+  // the whole object. Run beside a goal change, outside its lock, it could write back
+  // the metadata it read before the change, and lose the goal and its history. It
+  // runs under the session's metadata lock: while that is held, it waits.
+  it.instance(
+    "a metadata update waits for the session's metadata lock, and keeps what was written under it",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const headers = { "x-opencode-directory": test.directory, "content-type": "application/json" }
+        const sessions = yield* Session.Service
+        const session = yield* createSession({ title: "worker" })
+        const goal = { id: "goal_1", text: "cap the output", startedAt: 1, history: [] }
+        const held = yield* Deferred.make<void>()
+        const release = yield* Deferred.make<void>()
+        const holder = yield* SessionMetadataLock.withLock(
+          session.id,
+          Effect.gen(function* () {
+            yield* Deferred.succeed(held, undefined)
+            yield* Deferred.await(release)
+            yield* sessions.setMetadata({ sessionID: session.id, metadata: { goal } })
+          }),
+        ).pipe(Effect.forkChild)
+        yield* Deferred.await(held)
+        const update = yield* request(pathFor(SessionPaths.update, { sessionID: session.id }), {
+          method: "PATCH",
+          headers,
+          body: JSON.stringify({ metadata: { note: "hello" } }),
+        }).pipe(Effect.forkChild)
+        yield* Effect.sleep("300 millis")
+        expect(update.pollUnsafe()).toBeUndefined()
+        yield* Deferred.succeed(release, undefined)
+        yield* Fiber.join(holder)
+        expect((yield* Fiber.join(update)).status).toBe(200)
+        expect((yield* sessions.get(session.id)).metadata).toEqual({ note: "hello", goal })
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+  )
+
+  it.instance(
+    "a metadata update racing goal changes cannot roll the goal back",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const headers = { "x-opencode-directory": test.directory, "content-type": "application/json" }
+        const sessions = yield* Session.Service
+        for (let round = 0; round < 3; round++) {
+          const session = yield* createSession({ title: "worker" })
+          const patch = (i: number) =>
+            request(pathFor(SessionPaths.update, { sessionID: session.id }), {
+              method: "PATCH",
+              headers,
+              body: JSON.stringify({ metadata: { note: i } }),
+            })
+          const post = (i: number) =>
+            request(ExperimentalPaths.sessionGoal.replace(":sessionID", session.id), {
+              method: "POST",
+              headers: { ...headers, [HostToken.HEADER]: HostToken.issue() },
+              body: JSON.stringify({ text: `goal ${i}` }),
+            })
+          const results = yield* Effect.all(
+            Array.from({ length: 9 }, (_, i) => (i % 3 === 0 ? post(i) : patch(i))),
+            { concurrency: "unbounded" },
+          )
+          expect(results.map((response) => response.status)).toEqual(Array(9).fill(200))
+          const goal = (yield* sessions.get(session.id)).metadata?.goal as { history: unknown[] } | undefined
+          expect([round, goal?.history.length]).toEqual([round, 3])
+        }
       }),
     { git: true, config: { formatter: false, lsp: false } },
   )

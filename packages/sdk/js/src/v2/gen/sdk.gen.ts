@@ -830,7 +830,7 @@ export class Goal extends HeyApiClient {
   /**
    * End a session's goal
    *
-   * End the session's active goal, keeping its record and appending the change to its history. Not found when no goal is active.
+   * End the session's active goal, keeping its record and appending the change to its history. Requires the host token (403 without it). Not found when no goal is active.
    */
   public end<ThrowOnError extends boolean = false>(
     parameters: {
@@ -902,7 +902,7 @@ export class Goal extends HeyApiClient {
   /**
    * Set or replace a session's goal
    *
-   * Set the goal a goal loop drives the session with, replacing the active one. The server takes the snapshot the goal starts from (base is null when it could not) and appends the change to the goal's history, flagged as made via the API.
+   * Set the goal a goal loop drives the session with, replacing the active one. The server takes the snapshot the goal starts from (base is null when it could not) and appends the change to the goal's history. Requires the host token (x-opencode-host-token; 403 without it). At most 10 goal changes a minute per session (429 after that); the history keeps the latest 200 changes and counts the rest.
    */
   public start<ThrowOnError extends boolean = false>(
     parameters: {

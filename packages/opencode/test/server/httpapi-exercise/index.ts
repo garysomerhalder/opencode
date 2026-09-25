@@ -755,9 +755,8 @@ const scenarios: Scenario[] = [
       headers: ctx.headers(),
       body: { text: "cap the output" },
     }))
-    .json(200, (body) => {
-      check(typeof body === "object" && body !== null && "id" in body && "base" in body, "goal start returns id and base")
-    }),
+    // goal writes take the host token, which the server password does not give
+    .status(403),
   http.protected
     .get("/experimental/session/{sessionID}/goal", "experimental.session.goal.get")
     .seeded((ctx) => ctx.session({ title: "Goal route reader" }))
@@ -774,7 +773,7 @@ const scenarios: Scenario[] = [
       path: route("/experimental/session/{sessionID}/goal", { sessionID: ctx.state.id }),
       headers: ctx.headers(),
     }))
-    .status(404),
+    .status(403),
   http.protected.get("/experimental/resource", "experimental.resource.list").json(),
   http.protected
     .post("/sync/history", "sync.history.list")

@@ -38,6 +38,15 @@ export function shouldAttachShareAuthHeaders(shareUrl: string, accountBaseUrl: s
   }
 }
 
+/**
+ * An imported session's metadata (a file or a share): without the keys only the
+ * host writes (Session.HOST_METADATA), as a fork. An import is not the verification
+ * or the goal loop it came from, and must not bring in a forged one.
+ */
+export function importedMetadata(metadata: Record<string, unknown> | undefined) {
+  return metadata === undefined ? undefined : Session.withoutHostMetadata(metadata)
+}
+
 export function formatImportFileError(file: string, error: FSUtil.Error) {
   if (error._tag === "PlatformError") {
     if (error.reason._tag === "NotFound") return `File not found: ${file}`
@@ -178,6 +187,7 @@ const runImport = Effect.fn("Cli.import.body")(function* (file: string, ctx: Ins
 
   const info = Schema.decodeUnknownSync(Session.Info)({
     ...exportData.info,
+    metadata: importedMetadata((exportData.info as { metadata?: Record<string, unknown> }).metadata),
     projectID: ctx.project.id,
     directory: ctx.directory,
     path: path.relative(path.resolve(ctx.worktree), ctx.directory).replaceAll("\\", "/"),

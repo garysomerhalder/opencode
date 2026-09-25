@@ -273,7 +273,14 @@ export const ClientRuleset = PermissionV1.Ruleset.check(
  * rewrite what its verdict is checked against. A client's metadata update keeps
  * them, and a fork drops them: a fork is neither the verification nor the loop.
  */
-export const HOST_METADATA = ["verify", "goal"] as const
+export const HOST_METADATA = ["verify", "goal", "lastVerdict"] as const
+
+/** `metadata` without the host-written keys: for a session that is a copy (a fork, an import). */
+export function withoutHostMetadata(metadata: Record<string, unknown>) {
+  return Object.fromEntries(
+    Object.entries(metadata).filter(([key]) => !(HOST_METADATA as readonly string[]).includes(key)),
+  )
+}
 
 export const ClientMetadata = Metadata.check(
   Schema.makeFilter((metadata) => {
@@ -755,13 +762,7 @@ const layer: Layer.Layer<
         // not the host's verify or goal: a fork is not the verification or the goal
         // loop it came from, and its copied parts have new ids, so its checks would
         // not match anyway
-        metadata: original.metadata
-          ? Object.fromEntries(
-              Object.entries(structuredClone(original.metadata)).filter(
-                ([key]) => !(HOST_METADATA as readonly string[]).includes(key),
-              ),
-            )
-          : undefined,
+        metadata: original.metadata ? withoutHostMetadata(structuredClone(original.metadata)) : undefined,
         // a fork keeps the session's rules: forking must not shed a deny
         permission: original.permission ? [...original.permission] : undefined,
       })

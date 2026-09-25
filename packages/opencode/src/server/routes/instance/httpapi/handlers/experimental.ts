@@ -8,6 +8,7 @@ import { MCP } from "@/mcp"
 import { Project } from "@/project/project"
 import { Session } from "@/session/session"
 import { SessionGoal } from "@/session/goal"
+import { HostToken } from "@/server/host-token"
 import type { SessionID } from "@/session/schema"
 import { ToolJsonSchema } from "@/tool/json-schema"
 import { ToolRegistry } from "@/tool/registry"
@@ -15,6 +16,7 @@ import { ShellTasks } from "@/tool/shell/tasks"
 import { Worktree } from "@/worktree"
 import { Effect, Option } from "effect"
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse"
+import type * as HttpServerRequest from "effect/unstable/http/HttpServerRequest"
 import { HttpApiBuilder, HttpApiError } from "effect/unstable/httpapi"
 import { InstanceHttpApi } from "../api"
 import { ConsoleSwitchPayload, SessionListQuery, ToolListQuery, WorktreeApiError } from "../groups/experimental"
@@ -166,10 +168,16 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
     const changeErrors = Effect.mapError((error: Session.NotFound | SessionGoal.RateLimited) =>
       error instanceof SessionGoal.RateLimited ? error : new HttpApiError.NotFound({}),
     )
+    // Goal writes are the host's: they take the host token, which an agent's shell
+    // does not have (it has at most the server password). Reads do not.
+    const requireHost = (request: HttpServerRequest.HttpServerRequest) =>
+      HostToken.verify(request.headers[HostToken.HEADER]) ? Effect.void : Effect.fail(new HttpApiError.Forbidden({}))
     const sessionGoalStart = Effect.fn("ExperimentalHttpApi.sessionGoalStart")(function* (ctx: {
       params: { sessionID: SessionID }
       payload: SessionGoal.Input
+      request: HttpServerRequest.HttpServerRequest
     }) {
+      yield* requireHost(ctx.request)
       return yield* goals.start(ctx.params.sessionID, ctx.payload).pipe(changeErrors)
     })
     const sessionGoal = Effect.fn("ExperimentalHttpApi.sessionGoal")(function* (ctx: {
@@ -181,7 +189,9 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
     })
     const sessionGoalEnd = Effect.fn("ExperimentalHttpApi.sessionGoalEnd")(function* (ctx: {
       params: { sessionID: SessionID }
+      request: HttpServerRequest.HttpServerRequest
     }) {
+      yield* requireHost(ctx.request)
       const goal = yield* goals.end(ctx.params.sessionID).pipe(changeErrors)
       if (!goal) return yield* new HttpApiError.NotFound({})
       return goal

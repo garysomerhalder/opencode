@@ -271,13 +271,13 @@ export const ExperimentalApi = HttpApi.make("experimental")
           query: WorkspaceRoutingQuery,
           payload: SessionGoal.Input,
           success: described(SessionGoal.Started, "The goal, and the snapshot it starts from"),
-          error: [HttpApiError.NotFound, SessionGoal.RateLimited],
+          error: [HttpApiError.NotFound, HttpApiError.Forbidden, SessionGoal.RateLimited],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "experimental.session.goal.start",
             summary: "Set or replace a session's goal",
             description:
-              "Set the goal a goal loop drives the session with, replacing the active one. The server takes the snapshot the goal starts from (base is null when it could not) and appends the change to the goal's history, flagged as made via the API. At most 10 goal changes a minute per session (429 after that); the history keeps the latest 200 changes and counts the rest.",
+              "Set the goal a goal loop drives the session with, replacing the active one. The server takes the snapshot the goal starts from (base is null when it could not) and appends the change to the goal's history. Requires the host token (x-opencode-host-token; 403 without it). At most 10 goal changes a minute per session (429 after that); the history keeps the latest 200 changes and counts the rest.",
           }),
         ),
         HttpApiEndpoint.get("sessionGoal", ExperimentalPaths.sessionGoal, {
@@ -296,13 +296,13 @@ export const ExperimentalApi = HttpApi.make("experimental")
           params: { sessionID: SessionID },
           query: WorkspaceRoutingQuery,
           success: described(SessionGoal.Record, "The ended goal record"),
-          error: [HttpApiError.NotFound, SessionGoal.RateLimited],
+          error: [HttpApiError.NotFound, HttpApiError.Forbidden, SessionGoal.RateLimited],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "experimental.session.goal.end",
             summary: "End a session's goal",
             description:
-              "End the session's active goal, keeping its record and appending the change to its history. Not found when no goal is active.",
+              "End the session's active goal, keeping its record and appending the change to its history. Requires the host token (403 without it). Not found when no goal is active.",
           }),
         ),
         HttpApiEndpoint.get("shellTasks", ExperimentalPaths.shellTasks, {
