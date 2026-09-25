@@ -175,15 +175,16 @@ export const VerdictTool = Tool.define<
           // resolves it differently (another model, provider, endpoint or provider config),
           // the one answering may not be the verifier, and nothing is recorded. The step's
           // own model must be the pinned one too.
+          // Fail closed: a verification is created pinned (Session.createVerifier), so one
+          // without a pin was not made by the host, and records nothing.
           const pinned = decodePin(verify?.pin)
-          if (pinned) {
-            const live = yield* VerifierPin.resolve.pipe(
-              Effect.provideService(Agent.Service, agents),
-              Effect.provideService(Provider.Service, provider),
-            )
-            const reason = VerifierPin.differs(pinned, live) ?? stepModel(messages, ctx.messageID, pinned)
-            if (reason) throw new Error(VerifierPin.refused(reason))
-          }
+          if (!pinned) throw new Error(VerifierPin.UNPINNED)
+          const live = yield* VerifierPin.resolve.pipe(
+            Effect.provideService(Agent.Service, agents),
+            Effect.provideService(Provider.Service, provider),
+          )
+          const reason = VerifierPin.differs(pinned, live) ?? stepModel(messages, ctx.messageID, pinned)
+          if (reason) throw new Error(VerifierPin.refused(reason))
           // The worker's goal this verification is for (§11.8). A verdict for a goal
           // the worker no longer has is refused before anything is checked.
           const target = typeof verify?.goal === "string" ? verify.goal : undefined

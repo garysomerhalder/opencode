@@ -66,6 +66,10 @@ export function differs(pinned: Pin, live: Pin | undefined) {
   return changed.length ? `its ${changed.join(", ")} changed` : undefined
 }
 
+/** The error for a verification without a pin: fail closed, nothing is recorded. */
+export const UNPINNED =
+  "verification has no pinned verifier model: it was not created by the host (Session.createVerifier); the verdict is not recorded"
+
 /** The error the verdict tool refuses with. */
 export function refused(reason: string) {
   return `the verifier's model or provider changed since this verification was created (${reason}); the verdict is not recorded`
