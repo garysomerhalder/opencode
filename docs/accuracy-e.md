@@ -532,6 +532,17 @@ and the loop's settings UI should tell the user.
   binary again: 20-60 s here, and the usual cause of a 30 s timeout on a file's first grep, glob or
   listing test. Share one cache for the binary across test processes (or seed it from the
   developer's cache), keeping the rest of the data directory per process.
+- **Known machine-specific failures (E: drive; left as is, ruled 2026-09-25).** On this machine,
+  git fails to write loose objects under `E:\build` ("unable to write file .../objects/..:
+  Permission denied") in about 1 of 10 runs, even with the Norton exclusion. Three snapshot tests
+  that stage many files fail here for that reason, on dev and before any Phase 3 change:
+  `diffFull with a large interleaved mixed diff`, `diffFull preserves git diff order across batch
+  boundaries`, and `revert handles large mixed batches across chunk boundaries`
+  (`test/snapshot/snapshot.test.ts`). With the Phase 3 fix, such a failure is "no snapshot"
+  (`track()` returns undefined), never a wrong one.
+- **The route script's `effect` mode hangs** at the first instance load ("app.skills: shared
+  instance load start"), on C: as on E:, before any scenario runs. The `coverage` and `auth` modes
+  pass. Not investigated.
 
 ### 11.7 Security notes: accepted risks
 
@@ -775,3 +786,85 @@ wrote unless the worker went around the API.
 
 Implemented as three PRs, each red-first: the goal record and its endpoints; the verdict records
 and `todo_evidence`; the checkpoint.
+
+### 11.9 Phase 4 (the loop): design note (2026-09-25, for review)
+
+Phase 4 makes the goal loop verify before it stops. It builds on the Phase 3 records and the
+§11.5 contract. Sections 2 (the loop's branch, FAIL/PARTIAL, bounds) and 6 still hold; this note
+says only how the loop drives them.
+
+**Where the loop runs.** The loop is `createGoalLoop` in the desktop main process
+(`desktop/src/main/goal-loop.ts`). That is the only place that holds the host token
+(`hostToken()`), so verification runs there. The renderer's goal-loop views only show state. A
+loop without the token (a remote server, the CLI) cannot verify: it says so, and stops at
+`unverified` instead of `completed`.
+
+**One verification, step by step.** It starts when the worker's turn ends with the completion
+marker (or the loop's own done check), and no background task is running (bounded by
+`goal_verifier_task_wait_ms`; after that the running tasks are listed in the prompt).
+
+1. **Create, sealed from birth.** A new route, `POST /experimental/session/:id/verify` (host
+   token), reads the worker's active goal on the server. It calls `Session.createVerifier` with
+   `verify = { goal: goal.id, base: goal.base, criteria: goal.criteria }` and returns
+   `{ verifierSessionID }`. The base and criteria never go through the client. No goal, or an
+   ended one: 409.
+2. **Run the checks.** For each configured check command, `POST /session/:child/shell` with the
+   token; the host records each (`verifyRecord`). The commands come from the loop's settings
+   (`goal_verifier_checks`, per project). A negative check is written to succeed with exit 0.
+3. **Prompt the verifier.** `POST /session/:child/prompt_async` with the token and the verifier
+   agent. The prompt holds:
+   - the goal text and its criteria;
+   - the checks it may cite, as call ids with their commands;
+   - the worker's todo list;
+   - what `missing` asked for last time.
+
+   It holds no worker transcript.
+4. **Wait for the verdict.** The loop waits for the verifier session to go idle, then reads the
+   worker's `goal.lastVerdict` (`GET …/goal`) where `verifierSessionID` is this child. If the
+   verifier stopped without recording a verdict, it gets one nudge
+   (`prompt_async`: "submit your verdict"); after that, the attempt counts as unverified.
+5. **Act on it.**
+   - PASS: the loop ends `completed`.
+   - FAIL or PARTIAL: the loop sends the worker a continue prompt built from the host records
+     (the unmet criteria, the verdict's `missing`, the failed checks), never from the verifier's
+     prose. The worker's next turn ends, and step 1 runs again.
+   - After `goal_verifier_max_verifications`: the loop ends `unverified`.
+
+**Stale goals.** If the goal is replaced or ended during steps 1-4, the tool refuses the verdict
+(Phase 3). The loop sees no matching `lastVerdict`, drops the attempt without counting it, and
+starts over on the new goal (or stops, if it was ended).
+
+**State and UI.** `GoalLoopState` gains `phase` (`turn`, `waiting`, `verifying`), `verifications`
+and `lastVerdict`, as in section 2. The loop stores the verifier session id so a restart can
+resume the wait or drop the attempt. `unverified` is a new terminal status. The default stays off
+(`goal_verifier: false`) until the UI shows verdicts and the goal history (section 7).
+
+**What Phase 4 does not solve: the worker sandbox.** The records stop what goes through the API,
+not a same-user worker writing the database or signaling the server (§11.8, threat model). The
+sandbox (deny the OpenCode data directory, no access to other processes) is a separate phase.
+Until it ships, a PASS says the checks and citations held against the host's records, not that
+the worker could not have forged them.
+
+**Red-first tests (Phase 4).**
+
+- The verify route:
+  - 403 without the token;
+  - 409 without an active goal;
+  - the child is sealed from birth, and its `verify` comes from the goal record.
+- The loop (desktop, with a fake server):
+  - PASS ends `completed`;
+  - FAIL sends a continue built from `missing` and the unmet criteria;
+  - the bound ends `unverified`;
+  - a stale goal drops the attempt;
+  - no token means `unverified`, never `completed`;
+  - no verification while background tasks run.
+- Restart: an in-flight verification resumes or is dropped, and never counts twice.
+
+**Open questions.**
+
+1. Check commands: per project in settings, or proposed by the worker and approved by the user
+   once?
+2. The verifier's model and budget: a separate `goal_verifier_model`, as section 2 says, and a
+   cap on its steps?
+3. Should a PARTIAL with only `unknown` criteria (nothing checkable) end the loop `unverified` at
+   once, rather than spend an attempt?
