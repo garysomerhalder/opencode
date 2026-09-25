@@ -4,7 +4,7 @@
 // comes back as a tool error with the reasons, and after the third submission
 // what survives the check is stored. A recorded verdict is final.
 
-import { Effect, Schema, Semaphore } from "effect"
+import { Effect, Option, Schema, Semaphore } from "effect"
 import path from "path"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Database } from "@opencode-ai/core/database/database"
@@ -19,6 +19,9 @@ import { SessionGoal } from "@/session/goal"
 import type { SessionID } from "@/session/schema"
 import { Todo } from "@/session/todo"
 import { VerifyRecord } from "@/session/verify-record"
+import { VerifierPin } from "@/session/verifier-pin"
+import { Agent } from "@/agent/agent"
+import { Provider } from "@/provider/provider"
 import { CanonicalPath } from "@/util/canonical-path"
 import { Snapshot } from "@/snapshot"
 import { Verdict } from "@/session/verdict"
@@ -100,7 +103,14 @@ const DESCRIPTION = [
 export const VerdictTool = Tool.define<
   typeof Parameters,
   Metadata,
-  FSUtil.Service | Session.Service | Snapshot.Service | Database.Service | SessionGoal.Service | Todo.Service
+  | FSUtil.Service
+  | Session.Service
+  | Snapshot.Service
+  | Database.Service
+  | SessionGoal.Service
+  | Todo.Service
+  | Agent.Service
+  | Provider.Service
 >(
   ID,
   Effect.gen(function* () {
@@ -110,6 +120,8 @@ export const VerdictTool = Tool.define<
     const database = yield* Database.Service
     const goals = yield* SessionGoal.Service
     const todo = yield* Todo.Service
+    const agents = yield* Agent.Service
+    const provider = yield* Provider.Service
 
     /** Whether `goal` is the active goal of the worker session (none: not). */
     const activeGoal = (worker: SessionID | undefined, goal: string) =>
@@ -139,9 +151,11 @@ export const VerdictTool = Tool.define<
           // The session's whole history, from storage: the model's context is
           // filtered after a compaction, and must not hide a failed check or an
           // earlier submission.
-          const history = (
-            yield* MessageV2.stream(ctx.sessionID).pipe(Effect.provideService(Database.Service, database), Effect.orDie)
-          ).flatMap((message) => message.parts)
+          const messages = yield* MessageV2.stream(ctx.sessionID).pipe(
+            Effect.provideService(Database.Service, database),
+            Effect.orDie,
+          )
+          const history = messages.flatMap((message) => message.parts)
           const earlier = history.filter(
             (part): part is SessionV1.ToolPart => part.type === "tool" && part.tool === ID && part.callID !== ctx.callID,
           )
@@ -157,6 +171,19 @@ export const VerdictTool = Tool.define<
           const hostRecord = VerifyRecord.read(verifying.metadata) ?? VerifyRecord.EMPTY
           if (step.recorded || hostRecord.recorded || earlier.some((part) => part.state.status === "completed"))
             throw new Error("A verdict is already recorded for this verification. Stop here.")
+          // The model this verifier was pinned to at creation (§11.8): if config now
+          // resolves it differently (another model, provider, endpoint or provider config),
+          // the one answering may not be the verifier, and nothing is recorded. The step's
+          // own model must be the pinned one too.
+          const pinned = decodePin(verify?.pin)
+          if (pinned) {
+            const live = yield* VerifierPin.resolve.pipe(
+              Effect.provideService(Agent.Service, agents),
+              Effect.provideService(Provider.Service, provider),
+            )
+            const reason = VerifierPin.differs(pinned, live) ?? stepModel(messages, ctx.messageID, pinned)
+            if (reason) throw new Error(VerifierPin.refused(reason))
+          }
           // The worker's goal this verification is for (§11.8). A verdict for a goal
           // the worker no longer has is refused before anything is checked.
           const target = typeof verify?.goal === "string" ? verify.goal : undefined
@@ -297,6 +324,16 @@ function current(sessionID: string, messageID: string) {
     steps.delete(key)
   }
   return next
+}
+
+const decodePin = (value: unknown) => Option.getOrUndefined(Schema.decodeUnknownOption(VerifierPin.Pin)(value))
+
+/** Why the step answering is not on the pinned model; undefined when it is (or its message is not stored yet). */
+function stepModel(messages: ReadonlyArray<SessionV1.WithParts>, messageID: string, pinned: VerifierPin.Pin) {
+  const step = messages.find((message) => message.info.id === messageID)?.info
+  if (!step || step.role !== "assistant") return undefined
+  if (String(step.providerID) === pinned.providerID && String(step.modelID) === pinned.modelID) return undefined
+  return `this step ran on ${step.providerID}/${step.modelID}, not ${pinned.providerID}/${pinned.modelID}`
 }
 
 const UNMET_MAX = 20

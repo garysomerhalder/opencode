@@ -12,6 +12,8 @@ import { HttpApiBuilder } from "effect/unstable/httpapi"
 import * as Sse from "effect/unstable/encoding/Sse"
 import { RootHttpApi } from "../api"
 import { GlobalUpgradeInput } from "../groups/global"
+import { Session } from "@/session/session"
+import { requireHostWhileActive } from "../host-guard"
 
 function eventData(data: unknown): Sse.Event {
   return {
@@ -76,6 +78,9 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
     })
 
     const configUpdate = Effect.fn("GlobalHttpApi.configUpdate")(function* (ctx) {
+      // global config reaches every project's verifier: while any goal or verification is
+      // active, only the host changes it (accuracy E §11.8)
+      yield* requireHostWhileActive(yield* Session.Service, ctx.request)
       const result = yield* config.updateGlobal(ctx.payload)
       if (result.changed) bridge.fork(disposeAllInstancesAndEmitGlobalDisposed({ swallowErrors: true }))
       return result.info
