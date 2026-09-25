@@ -201,6 +201,10 @@ describe("SessionGoal", () => {
       expect(Exit.isSuccess(decode({ text: "goal", criteria: ["capped at 4 KB"] }))).toBe(true)
       for (const bad of ["a\nb", "a\rb", "a\u0000b", "a\u001bb", "a\u007fb"])
         expect([bad, Exit.isFailure(decode({ text: "goal", criteria: [bad] }))]).toEqual([bad, true])
+      // re-review of branch 1, 3: the goal text may span lines, but holds no other control character
+      expect(Exit.isSuccess(decode({ text: "cap the output\nand document it" }))).toBe(true)
+      for (const bad of ["a\rb", "a\u0000b", "a\u001bb", "a\u007fb", "a\u0085b"])
+        expect([bad, Exit.isFailure(decode({ text: bad }))]).toEqual([bad, true])
     }),
   )
 

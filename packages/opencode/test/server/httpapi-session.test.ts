@@ -952,6 +952,31 @@ describe("session HttpApi", () => {
     { git: true, config: { formatter: false, lsp: false } },
   )
 
+  // Re-review of branch 1, 1: deleting the session removes the host's records with
+  // it, so a session with a goal or a verification is deleted by the host only.
+  it.instance(
+    "deleting a session with a goal or a verification takes the host token",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const headers = { "x-opencode-directory": test.directory }
+        const sessions = yield* Session.Service
+        const remove = (id: string, extra: Record<string, string> = {}) =>
+          request(pathFor(SessionPaths.remove, { sessionID: id }), { method: "DELETE", headers: { ...headers, ...extra } })
+        const host = { [HostToken.HEADER]: HostToken.issue() }
+        for (const key of ["goal", "verify"]) {
+          const session = yield* createSession({ title: key })
+          yield* sessions.setMetadata({ sessionID: session.id, metadata: { [key]: { id: "goal_1" } } })
+          expect([key, (yield* remove(session.id)).status]).toEqual([key, 403])
+          expect([key, (yield* remove(session.id, { [HostToken.HEADER]: "wrong" })).status]).toEqual([key, 403])
+          expect([key, (yield* remove(session.id, host)).status]).toEqual([key, 200])
+        }
+        const plain = yield* createSession({ title: "plain" })
+        expect((yield* remove(plain.id)).status).toBe(200)
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+  )
+
   it.instance(
     "a metadata update racing goal changes cannot roll the goal back",
     () =>

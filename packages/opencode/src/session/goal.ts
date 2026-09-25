@@ -37,8 +37,15 @@ const Criterion = Schema.String.check(
   Schema.isPattern(/^[^\u0000-\u001f\u007f]*$/),
 )
 
+// The goal text may span lines (\n), but holds no other control character (C0, DEL, C1).
+const Text = Schema.String.check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(TEXT_MAX),
+  Schema.isPattern(/^[^\u0000-\u0009\u000b-\u001f\u007f-\u009f]*$/),
+)
+
 export const Input = Schema.Struct({
-  text: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(TEXT_MAX)),
+  text: Text,
   criteria: Schema.optional(Schema.Array(Criterion).check(Schema.isMaxLength(CRITERIA_MAX))),
 })
 export type Input = Schema.Schema.Type<typeof Input>
