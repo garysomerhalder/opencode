@@ -1321,9 +1321,11 @@ describe("session HttpApi", () => {
         const sessions = yield* Session.Service
         const worker = yield* createSession({ title: "worker" })
         const verify = { goal: "goal_1", criteria: ["the output is capped"] }
-        const verifier = yield* sessions.createVerifier({ parentID: worker.id, verify })
+        const pin = { providerID: "p", modelID: "m", baseURL: "http://127.0.0.1:1", configHash: "h" }
+        const verifier = yield* sessions.createVerifier({ parentID: worker.id, verify, pin })
         expect(verifier.parentID).toBe(worker.id)
-        expect(verifier.metadata?.verify).toEqual(verify)
+        // the model it must run on is pinned in the same write (final check, HIGH)
+        expect(verifier.metadata?.verify).toEqual({ ...verify, pin })
         const prompt = yield* request(pathFor(SessionPaths.prompt, { sessionID: verifier.id }), {
           method: "POST",
           headers,
@@ -1331,6 +1333,53 @@ describe("session HttpApi", () => {
         })
         expect(prompt.status).toBe(403)
         expect(yield* sessions.messages({ sessionID: verifier.id })).toHaveLength(0)
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+  )
+
+  // Final check of branch 2 (HIGH): config decides which model the verifier runs on
+  // and which plugins load. While a goal or a verification is active, a config write
+  // or an instance reload takes the host token, so the worker cannot swap the verifier.
+  it.instance(
+    "config writes and instance disposal take the host token while a goal or verification is active",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const headers = { "x-opencode-directory": test.directory, "content-type": "application/json" }
+        const sessions = yield* Session.Service
+        const call = (path: string, method: string, extra: Record<string, string> = {}) =>
+          request(path, {
+            method,
+            headers: { ...headers, ...extra },
+            ...(method === "PATCH" ? { body: "{}" } : {}),
+          })
+        // nothing active: as before
+        expect((yield* call("/config", "PATCH")).status).toBe(200)
+        const session = yield* createSession({ title: "worker" })
+        const goal = { id: "goal_1", text: "cap the output", startedAt: 1, origin: { goal: "goal_1" }, history: [] }
+        yield* sessions.setMetadata({ sessionID: session.id, metadata: { goal } })
+        for (const [path, method] of [
+          ["/config", "PATCH"],
+          ["/global/config", "PATCH"],
+          ["/instance/dispose", "POST"],
+        ])
+          expect([path, (yield* call(path, method)).status]).toEqual([path, 403])
+        expect((yield* call("/config", "PATCH", { [HostToken.HEADER]: HostToken.issue() })).status).toBe(200)
+        // an ended goal holds nothing
+        yield* sessions.setMetadata({ sessionID: session.id, metadata: { goal: { ...goal, endedAt: 2 } } })
+        expect((yield* call("/config", "PATCH")).status).toBe(200)
+        // a verification not yet recorded holds it too
+        const verifier = yield* sessions.createVerifier({
+          parentID: session.id,
+          verify: { goal: "goal_1" },
+          pin: { providerID: "p", modelID: "m", configHash: "h" },
+        })
+        expect((yield* call("/config", "PATCH")).status).toBe(403)
+        yield* sessions.setMetadata({
+          sessionID: verifier.id,
+          metadata: { ...(yield* sessions.get(verifier.id)).metadata, verifyRecord: { checks: {}, submissions: 1, recorded: true } },
+        })
+        expect((yield* call("/config", "PATCH")).status).toBe(200)
       }),
     { git: true, config: { formatter: false, lsp: false } },
   )

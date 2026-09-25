@@ -12,6 +12,9 @@ import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { InstanceHttpApi } from "../api"
 import { ApiVcsApplyError } from "../groups/instance"
 import { markInstanceForDisposal } from "../lifecycle"
+import { Session } from "@/session/session"
+import { requireHostWhileActive } from "../host-guard"
+import type { HttpServerRequest } from "effect/unstable/http"
 
 export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance", (handlers) =>
   Effect.gen(function* () {
@@ -22,8 +25,14 @@ export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance"
     const skill = yield* Skill.Service
     const vcs = yield* Vcs.Service
 
-    const dispose = Effect.fn("InstanceHttpApi.dispose")(function* () {
-      yield* markInstanceForDisposal(yield* InstanceState.context)
+    const dispose = Effect.fn("InstanceHttpApi.dispose")(function* (ctx: {
+      request: HttpServerRequest.HttpServerRequest
+    }) {
+      // a reload re-reads config and plugins, and so what the verifier runs on: while
+      // a goal or a verification is active, only the host reloads (accuracy E §11.8)
+      const instance = yield* InstanceState.context
+      yield* requireHostWhileActive(yield* Session.Service, ctx.request, instance.project.id)
+      yield* markInstanceForDisposal(instance)
       return true
     })
 

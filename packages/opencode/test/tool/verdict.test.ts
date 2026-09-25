@@ -25,6 +25,8 @@ import { SessionGoal } from "../../src/session/goal"
 import { Todo } from "../../src/session/todo"
 import { contentKey } from "../../src/session/checkpoint"
 import { VerifyRecord } from "../../src/session/verify-record"
+import { VerifierPin } from "../../src/session/verifier-pin"
+import { Provider } from "../../src/provider/provider"
 import { ShellID } from "../../src/tool/shell/id"
 import type * as Tool from "../../src/tool/tool"
 import { VerdictTool } from "../../src/tool/verdict"
@@ -43,6 +45,7 @@ const nodes = [
   Agent.node,
   SessionGoal.node,
   Todo.node,
+  Provider.node,
 ]
 const it = testEffect(LayerNode.compile(LayerNode.group(nodes)))
 
@@ -80,6 +83,39 @@ const withDiff = testEffect(
     [
       Snapshot.node,
       Layer.mock(Snapshot.Service, { diff: (base) => Effect.succeed(base === "gone" ? undefined : DIFF) }),
+    ],
+  ]),
+)
+
+// Final check of branch 2 (HIGH): a provider whose config the test can change, as a
+// worker with a config write could, to see the pinned verifier refuse.
+let providerOptions: Record<string, unknown> = { baseURL: "http://127.0.0.1:9/v1" }
+const withPinnedProvider = testEffect(
+  LayerNode.compile(LayerNode.group(nodes), [
+    [
+      Provider.node,
+      Layer.mock(Provider.Service, {
+        defaultModel: () =>
+          Effect.succeed({ providerID: ProviderV2.ID.make("pinned"), modelID: ModelV2.ID.make("judge") }),
+        getProvider: () =>
+          Effect.sync(
+            () =>
+              ({
+                id: ProviderV2.ID.make("pinned"),
+                name: "Pinned",
+                source: "config",
+                env: [],
+                options: providerOptions,
+                models: {},
+              }) as unknown as Provider.Info,
+          ),
+        getModel: () =>
+          Effect.succeed({
+            id: ModelV2.ID.make("judge"),
+            providerID: ProviderV2.ID.make("pinned"),
+            api: { id: "judge", url: "http://127.0.0.1:9/v1", npm: "@ai-sdk/openai-compatible" },
+          } as unknown as Provider.Model),
+      }),
     ],
   ]),
 )
@@ -330,6 +366,22 @@ describe("tool.verdict: checks are the host's records, bound to the loop", () =>
       )
       expect(cited.error).toContain("did not finish")
       expect(cited.error).not.toContain("Verdict recorded")
+    }),
+  )
+
+  // final check (HIGH): the verifier runs on the model it was pinned to at creation
+  withPinnedProvider.instance("a verdict is refused once the verifier's model or provider changed", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      providerOptions = { baseURL: "http://127.0.0.1:9/v1" }
+      const pin = yield* VerifierPin.resolve
+      expect(pin).toMatchObject({ providerID: "pinned", modelID: "judge", baseURL: "http://127.0.0.1:9/v1" })
+      expect((yield* submit(yield* another({ pin }), passWith([capped]))).error).toBe("")
+      // the worker points the provider at an endpoint of its own
+      providerOptions = { baseURL: "http://127.0.0.1:6666/v1" }
+      const refused = yield* submit(yield* another({ pin }), passWith([capped]))
+      expect(refused.error).toContain("the verifier's model or provider changed since this verification was created")
+      expect(refused.error).toContain("endpoint")
     }),
   )
 

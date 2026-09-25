@@ -27,7 +27,7 @@ export const ConfigApi = HttpApi.make("config")
           query: WorkspaceRoutingQuery,
           payload: ConfigV1.Info,
           success: described(ConfigV1.Info, "Successfully updated config"),
-          error: HttpApiError.BadRequest,
+          error: [HttpApiError.BadRequest, HttpApiError.Forbidden],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "config.update",

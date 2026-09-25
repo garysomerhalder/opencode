@@ -106,7 +106,7 @@ export const GlobalApi = HttpApi.make("global").add(
       HttpApiEndpoint.patch("configUpdate", GlobalPaths.config, {
         payload: ConfigV1.Info,
         success: described(ConfigV1.Info, "Successfully updated global config"),
-        error: HttpApiError.BadRequest,
+        error: [HttpApiError.BadRequest, HttpApiError.Forbidden],
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "global.config.update",
