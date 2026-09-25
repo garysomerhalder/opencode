@@ -65,6 +65,8 @@ export interface Input {
    * compaction (the session's own first message was compacted away).
    */
   readonly taskSince?: "session" | "compaction"
+  /** The task is the one recorded when the goal started, and the first message now differs from it. */
+  readonly taskChanged?: boolean
   /** The todo table's rows, in position order. */
   readonly todos: ReadonlyArray<Todo>
   /** When the list was last written (every row is rewritten on each write). */
@@ -151,6 +153,11 @@ function render(
       ...(cut
         ? [
             `  [task statement cut at ${shown.taskBytes >= 1024 ? `${shown.taskBytes / 1024} KB` : `${shown.taskBytes} bytes`}]`,
+          ]
+        : []),
+      ...(input.taskChanged
+        ? [
+            "The session's first message no longer matches the task recorded when the goal started; the task above is the recorded one.",
           ]
         : []),
       "",

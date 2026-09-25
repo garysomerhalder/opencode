@@ -732,6 +732,10 @@ in the verifier session's message storage, which clients could write without a t
 - **Sealed from birth (B2-2).** Phase 4 creates verifier sessions with `Session.createVerifier`
   only (§11.5).
 - **A recorded check whose part is gone (B2-3)** blocks a PASS like one that did not finish.
+- **The task is recorded when the goal starts (B3-1).** The first goal records the session's task
+  (its first user message) as `goal.task = { text, sha256 }`. The checkpoint's task line comes
+  from there, not from the message, and says so when the message no longer matches. In a session
+  with host records, only the host edits a user message's parts (403).
 
 **Threat model: what the API checks do not stop.** Everything above is enforced at the API layer
 of a server that runs as the same OS user as the worker's shell. That worker can still:

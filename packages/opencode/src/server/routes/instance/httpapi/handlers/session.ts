@@ -474,7 +474,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       payload: typeof SessionV1.Part.Type
       request: HttpServerRequest.HttpServerRequest
     }) {
-      yield* writable(ctx.params.sessionID, ctx.request)
+      const info = yield* writable(ctx.params.sessionID, ctx.request)
       const payload = ctx.payload as SessionV1.Part
       if (
         payload.id !== ctx.params.partID ||
@@ -485,6 +485,14 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
         payload.type === "tool"
       ) {
         return yield* new HttpApiError.BadRequest({})
+      }
+      // In a session with host records (a goal), the user's messages are the task
+      // the checkpoint and the verifier go by (§11.8, B3-1): only the host edits them.
+      if (hostOwned(info) && !isHost(ctx.request)) {
+        const target = yield* SessionError.mapStorageNotFound(
+          MessageV2.get({ sessionID: ctx.params.sessionID, messageID: ctx.params.messageID }),
+        )
+        if (target.info.role === "user") return yield* new HttpApiError.Forbidden({})
       }
       return yield* session.updatePart(payload)
     })

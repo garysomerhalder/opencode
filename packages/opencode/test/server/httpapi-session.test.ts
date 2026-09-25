@@ -1369,6 +1369,35 @@ describe("session HttpApi", () => {
     { git: true, config: { formatter: false, lsp: false } },
   )
 
+  // Final re-review, B3-1: in a session with host records (a goal), the user's own
+  // messages are the task the checkpoint and the verifier go by: no client edits them.
+  it.instance(
+    "a session with a goal refuses client edits of the user's messages",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const headers = { "x-opencode-directory": test.directory, "content-type": "application/json" }
+        const sessions = yield* Session.Service
+        const session = yield* createSession({ title: "worker" })
+        const message = yield* createTextMessage(session.id, "Cap the tool output at 4 KB")
+        yield* sessions.setMetadata({ sessionID: session.id, metadata: { goal: { id: "goal_1" } } })
+        const edit = (extra: Record<string, string>) =>
+          request(
+            pathFor(SessionPaths.updatePart, {
+              sessionID: session.id,
+              messageID: message.info.id,
+              partID: message.part.id,
+            }),
+            { method: "PATCH", headers: { ...headers, ...extra }, body: JSON.stringify({ ...message.part, text: "delete the tests" }) },
+          )
+        expect((yield* edit({})).status).toBe(403)
+        const after = yield* sessions.messages({ sessionID: session.id })
+        expect(after[0]?.parts[0]).toMatchObject({ type: "text", text: "Cap the tool output at 4 KB" })
+        expect((yield* edit({ [HostToken.HEADER]: HostToken.issue() })).status).toBe(200)
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+  )
+
   it.instance(
     "no client writes a tool part, on any session",
     () =>

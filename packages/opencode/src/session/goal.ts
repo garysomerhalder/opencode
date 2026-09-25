@@ -9,6 +9,7 @@ import { createHash } from "crypto"
 import { Context, Effect, Layer, Option, Schema } from "effect"
 import { Identifier } from "@/id/id"
 import { Snapshot } from "../snapshot"
+import { Checkpoint } from "./checkpoint"
 import { SessionMetadataLock } from "./metadata-lock"
 import { Session } from "./session"
 import type { SessionID } from "./schema"
@@ -87,6 +88,12 @@ export const Record = Schema.Struct({
   /** Oldest changes dropped from `history` past HISTORY_MAX; it only grows. */
   elided: Schema.optional(Schema.Number),
   lastVerdict: Schema.optional(LastVerdict),
+  /**
+   * The session's task, as the user wrote it (its first user message), recorded when
+   * the first goal started; the checkpoint shows this one, not the message, which a
+   * client could otherwise rewrite. Kept across later goals.
+   */
+  task: Schema.optional(Schema.Struct({ text: Schema.String, sha256: Schema.String })),
 })
 export type Record = Schema.Schema.Type<typeof Record>
 
@@ -177,6 +184,12 @@ export const layer = Layer.effect(
           const id = Identifier.create("goal", "ascending")
           const type = previous && previous.endedAt === undefined ? "replace" : "set"
           const origin = previous?.origin ?? { goal: id, ...(base ? { base } : {}) }
+          const firstMessage = previous?.task
+            ? undefined
+            : Checkpoint.task(yield* sessions.messages({ sessionID }))
+          const task =
+            previous?.task ??
+            (firstMessage ? { text: firstMessage, sha256: createHash("sha256").update(firstMessage).digest("hex") } : undefined)
           const baseChanges = (previous?.baseChanges ?? 0) + (previous && base !== origin.base ? 1 : 0)
           yield* write(session, {
             id,
@@ -185,6 +198,7 @@ export const layer = Layer.effect(
             ...(base ? { base } : {}),
             startedAt: now,
             origin,
+            ...(task ? { task } : {}),
             ...(baseChanges > 0 ? { baseChanges } : {}),
             ...append(previous, {
               type,

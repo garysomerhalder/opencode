@@ -18,6 +18,7 @@ import { Cause, Effect, Exit, Layer, Context } from "effect"
 import { Checkpoint } from "./checkpoint"
 import { Todo } from "./todo"
 import { SessionGoal } from "./goal"
+import { createHash } from "crypto"
 import { ShellTasks } from "@/tool/shell/tasks"
 import { Truncate } from "@/tool/truncate"
 import { Receipt } from "@/tool/receipt"
@@ -265,13 +266,6 @@ const layer = Layer.effect(
       )
       const written = yield* todos.written(input.sessionID)
       const n = (previous?.metadata.n ?? 0) + 1
-      const task = previous?.metadata.task ?? Checkpoint.task(input.messages)
-      // A session that compacted before checkpoints existed has no carried
-      // task: its own first message is gone, and the one found is only the
-      // first since that compaction.
-      const taskSince =
-        previous?.metadata.taskSince ??
-        (previous === undefined && completedCompactions(input.messages).length > 0 ? "compaction" : "session")
       // Accuracy E (docs/accuracy-e.md §11.8): the goal record and the verified
       // todos, both written in-process only. Each fails open on its own: one that
       // cannot be read is left out, and the rest of the record still stands.
@@ -293,11 +287,29 @@ const layer = Layer.effect(
       )
       const active = goal && goal.endedAt === undefined ? goal : undefined
       const verified = yield* optional("todo evidence", todos.verified(input.sessionID), new Map<string, number>())
+      // With a goal, the task is the one the host recorded when the goal started
+      // (§11.8, B3-1), not the message, which may have been rewritten since; say so
+      // when it was. Without one, the carried task or the first message, as before.
+      const fromMessages = Checkpoint.task(input.messages)
+      const task = goal?.task?.text ?? previous?.metadata.task ?? fromMessages
+      const taskChanged =
+        goal?.task !== undefined &&
+        fromMessages !== undefined &&
+        createHash("sha256").update(fromMessages).digest("hex") !== goal.task.sha256
+      // A session that compacted before checkpoints existed has no carried
+      // task: its own first message is gone, and the one found is only the
+      // first since that compaction.
+      const taskSince =
+        goal?.task !== undefined
+          ? "session"
+          : (previous?.metadata.taskSince ??
+            (previous === undefined && completedCompactions(input.messages).length > 0 ? "compaction" : "session"))
       const text = Checkpoint.build({
         n,
         now: Date.now(),
         task,
         taskSince,
+        taskChanged,
         todos: yield* todos.get(input.sessionID),
         todosWrittenAt: written,
         stepsSince: Checkpoint.stepsSince(input.messages, written),

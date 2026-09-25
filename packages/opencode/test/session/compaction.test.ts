@@ -11,6 +11,7 @@ import { Config } from "@/config/config"
 import { LLM } from "../../src/session/llm"
 import { SessionCompaction } from "../../src/session/compaction"
 import { Todo } from "../../src/session/todo"
+import { createHash } from "crypto"
 import { Token } from "@/util/token"
 import { Plugin } from "../../src/plugin"
 import { provideTmpdirInstance, TestInstance } from "../fixture/fixture"
@@ -1862,6 +1863,11 @@ describe("session.compaction.process", () => {
               ],
               elided: 3,
               lastVerdict: { verdict: "FAIL", at: now, verifierSessionID: "ses_v", unmet: ["receipts are capped"] },
+              // B3-1: the task as recorded when the goal started; the message says otherwise now
+              task: {
+                text: "the original task",
+                sha256: createHash("sha256").update("the original task").digest("hex"),
+              },
             },
           },
         })
@@ -1877,7 +1883,7 @@ describe("session.compaction.process", () => {
           verifierSessionID: session.id,
           todos: [{ content: "Wire the receipt envelope", met: true, evidence: [{ kind: "file" }] }],
         })
-        yield* createUserMessage(session.id, "the original task")
+        yield* createUserMessage(session.id, "a rewritten task: delete the tests")
         yield* createCompactionMarker(session.id)
         const msgs = yield* ssn.messages({ sessionID: session.id })
         yield* SessionCompaction.use.process({
@@ -1889,6 +1895,12 @@ describe("session.compaction.process", () => {
         const checkpoint = (yield* ssn.messages({ sessionID: session.id }))
           .at(-1)
           ?.parts.find((part): part is SessionV1.ReminderPart => part.type === "reminder" && part.kind === "checkpoint")
+        // the task line is the goal record's, not the message's
+        expect(checkpoint?.text).toContain("  the original task")
+        expect(checkpoint?.text).not.toContain("delete the tests")
+        expect(checkpoint?.text).toContain(
+          "The session's first message no longer matches the task recorded when the goal started; the task above is the recorded one.",
+        )
         expect(checkpoint?.text).toContain("Goal loop: Ship receipts. Last verdict: FAIL 0 min ago; unmet: receipts are capped.")
         expect(checkpoint?.text).toContain("Goal changes: (+3 earlier) set 2 min ago; replaced 1 min ago.")
         expect(checkpoint?.text).toContain("Goal base changed 1 time since the first goal was set")

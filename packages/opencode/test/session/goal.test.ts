@@ -13,6 +13,9 @@ import { Session } from "@/session/session"
 import { SessionGoal } from "../../src/session/goal"
 import { SessionMetadataLock } from "../../src/session/metadata-lock"
 import { Snapshot } from "../../src/snapshot"
+import { MessageID, PartID } from "../../src/session/schema"
+import { ProviderV2 } from "@opencode-ai/core/provider"
+import { ModelV2 } from "@opencode-ai/core/model"
 import { TestInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 
@@ -117,6 +120,39 @@ describe("SessionGoal", () => {
         expect(after.history.slice(0, 3)).toEqual([...ended!.history])
         expect(after.history[3]).toMatchObject({ type: "set", goal: third.id, sha256: sha256("third") })
         expect(after.origin).toEqual({ goal: first.id, base: first.base! })
+      }),
+    { git: true },
+  )
+
+  // Final re-review, B3-1: the task, as the user wrote it, is recorded host-side when
+  // the goal starts, so a later rewrite of the message cannot change it.
+  it.instance(
+    "start records the session's task (its first user message) and its hash",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* Session.Service
+        const goals = yield* SessionGoal.Service
+        const session = yield* sessions.create({})
+        const message = yield* sessions.updateMessage({
+          id: MessageID.ascending(),
+          role: "user",
+          sessionID: session.id,
+          agent: "build",
+          model: { providerID: ProviderV2.ID.make("test"), modelID: ModelV2.ID.make("test-model") },
+          time: { created: Date.now() },
+        })
+        yield* sessions.updatePart({
+          id: PartID.ascending(),
+          messageID: message.id,
+          sessionID: session.id,
+          type: "text",
+          text: "Cap the tool output at 4 KB",
+        })
+        yield* goals.start(session.id, { text: "cap the output" })
+        expect((yield* goals.get(session.id))?.task).toEqual({
+          text: "Cap the tool output at 4 KB",
+          sha256: sha256("Cap the tool output at 4 KB"),
+        })
       }),
     { git: true },
   )
