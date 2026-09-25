@@ -744,6 +744,8 @@ in the verifier session's message storage, which clients could write without a t
   - The verdict tool resolves it again at every submission, and refuses to record anything when
     anything differs, or when the step answering ran on another model: "the verifier's model or
     provider changed since this verification was created (…)".
+  - It fails closed: a session without `verify.pin` (not created by `Session.createVerifier`)
+    records nothing ("verification has no pinned verifier model").
   - While a session of the project has an active goal, or a verification not yet recorded,
     `PATCH /config`, `PATCH /global/config` (any project) and `POST /instance/dispose` take the
     host token (403).
