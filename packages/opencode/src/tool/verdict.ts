@@ -160,7 +160,10 @@ export const VerdictTool = Tool.define<
           // user declared, and the part ids of the checks it ran.
           const verify = (yield* sessions.get(ctx.sessionID).pipe(Effect.orDie)).metadata?.verify
           const base = verify?.base
-          const diff = typeof base === "string" ? yield* readableDiff(ctx, yield* snapshot.diff(base)) : undefined
+          // undefined: no base recorded (Snapshot.track() could not write one) or git
+          // cannot diff against it. Citations are then unavailable, not "not in the diff".
+          const raw = typeof base === "string" && base ? yield* snapshot.diff(base) : undefined
+          const diff = raw === undefined ? undefined : yield* readableDiff(ctx, raw)
           const declared: unknown = verify?.criteria
           const listed: unknown = verify?.checks
           const runs = checks(history, Array.isArray(listed) ? listed.filter((id) => typeof id === "string") : [])
@@ -168,7 +171,7 @@ export const VerdictTool = Tool.define<
             file: (file) => files.get(file),
             checks: runs.listed,
             unlisted: runs.unlisted,
-            diff: diff || undefined,
+            diff,
             criteria: Array.isArray(declared) ? declared.filter((item) => typeof item === "string") : undefined,
           }
 

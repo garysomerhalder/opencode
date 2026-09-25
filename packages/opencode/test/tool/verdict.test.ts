@@ -43,8 +43,8 @@ const it = testEffect(LayerNode.compile(LayerNode.group(nodes)))
 const SECRET = "sk-live-4f9a2c"
 
 // The host's diff, as `git diff --cached <base>` writes it (captured from the
-// snapshot service). Snapshot's own timing is not what these tests are about: on
-// this machine its diff can stay empty for a while after files change (reported).
+// snapshot service). Snapshot's own git failures are covered in the snapshot tests;
+// a base of "gone" stands for one git cannot read, where diff() returns undefined.
 const DIFF = [
   "diff --git a/.env b/.env",
   "index 1111111..9bbcedd 100644",
@@ -71,7 +71,10 @@ const DIFF = [
 ].join("\n")
 const withDiff = testEffect(
   LayerNode.compile(LayerNode.group(nodes), [
-    [Snapshot.node, Layer.mock(Snapshot.Service, { diff: () => Effect.succeed(DIFF) })],
+    [
+      Snapshot.node,
+      Layer.mock(Snapshot.Service, { diff: (base) => Effect.succeed(base === "gone" ? undefined : DIFF) }),
+    ],
   ]),
 )
 
@@ -322,6 +325,24 @@ describe("tool.verdict: diff citations", () => {
         const planWrong = yield* submit(yield* at(), diff("Plan b/secret.txt", "+KEY sk-dead-000"))
         expect(planRight.error).toEqual(planWrong.error)
         expect(planRight.error).toContain("the diff does not touch Plan b/secret.txt")
+      }),
+    { git: true },
+  )
+
+  // Snapshot.track() returns undefined when git cannot write a snapshot, so the loop
+  // records no base; Snapshot.diff() returns undefined when git cannot read one.
+  // Either way nothing can be said about the diff: not "does not touch X".
+  withDiff.instance(
+    "with no host snapshot a diff citation is unavailable, not absent from the diff",
+    () =>
+      Effect.gen(function* () {
+        yield* setup()
+        const cited = passWith([{ kind: "diff", path: "src/budget.ts", excerpt: "+export const LIMIT = 81920" }])
+        const unavailable = "no host snapshot for this verification; diff citations are unavailable"
+        expect((yield* submit(yield* another(), cited)).error).toContain(unavailable)
+        const gone = yield* submit(yield* another({ base: "gone" }), cited)
+        expect(gone.error).toContain(unavailable)
+        expect(gone.error).not.toContain("does not touch")
       }),
     { git: true },
   )

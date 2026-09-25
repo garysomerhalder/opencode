@@ -72,9 +72,15 @@ const layer = Layer.effect(
       if (!rev) return session
 
       rev.snapshot = session.revert?.snapshot ?? (yield* snap.track())
+      // Without a snapshot of the current state, unrevert could not bring it back:
+      // leave the files and the session as they are rather than lose work.
+      if (!rev.snapshot) {
+        yield* Effect.logWarning("not reverting: no snapshot of the current state", { sessionID: input.sessionID })
+        return session
+      }
       if (session.revert?.snapshot) yield* snap.restore(session.revert.snapshot)
       yield* snap.revert(patches)
-      if (rev.snapshot) rev.diff = yield* snap.diff(rev.snapshot)
+      rev.diff = yield* snap.diff(rev.snapshot)
       const index = all.findIndex((msg) => msg.info.id === rev.messageID)
       const range = index < 0 ? [] : all.slice(index)
       const diffs = yield* summary.computeDiff({ messages: range })

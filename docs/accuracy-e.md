@@ -456,7 +456,9 @@ restate or drop it. Phase 4 writes it in exactly this shape:
 type VerifierSessionMetadata = {
   verify: {
     /** Snapshot hash from Snapshot.track() at the loop's start. The tool diffs the workspace
-     *  against it (Snapshot.diff(base)) for `diff` citations. Absent: no diff citation can check out. */
+     *  against it (Snapshot.diff(base)) for `diff` citations. Absent (track() returns undefined
+     *  when git cannot write a snapshot), or a base git cannot diff against: every diff citation
+     *  fails with "no host snapshot for this verification; diff citations are unavailable". */
     base?: string
     /** The acceptance criteria the user declared, verbatim. Each must be judged with its text as
      *  written (case and spacing aside), or a PASS is stored as PARTIAL. Absent or []: the

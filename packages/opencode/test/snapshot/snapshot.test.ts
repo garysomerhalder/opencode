@@ -1277,6 +1277,22 @@ flakyIt.instance(
   { git: true },
 )
 
+it.instance(
+  "a diff git cannot compute is no diff (undefined), not an empty one",
+  () =>
+    Effect.gen(function* () {
+      const tmp = yield* bootstrap()
+      const snapshot = yield* Snapshot.Service
+      const before = yield* snapshot.track()
+      expect(before).toBeTruthy()
+      expect(yield* snapshot.diff(before!)).toBe("")
+      yield* write(`${tmp.path}/a.txt`, "changed")
+      expect(yield* snapshot.diff("0123456789abcdef0123456789abcdef01234567")).toBeUndefined()
+      expect(yield* snapshot.diff("")).toBeUndefined()
+    }),
+  { git: true },
+)
+
 flakyIt.instance(
   "a snapshot git cannot write is no snapshot, not an empty or partial one",
   () =>

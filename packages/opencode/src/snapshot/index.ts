@@ -42,7 +42,8 @@ export interface Interface {
   readonly patch: (hash: string) => Effect.Effect<Patch>
   readonly restore: (snapshot: string) => Effect.Effect<void>
   readonly revert: (patches: Patch[]) => Effect.Effect<void>
-  readonly diff: (hash: string) => Effect.Effect<string>
+  /** The worktree's changes since `hash`; undefined when git cannot compute them. */
+  readonly diff: (hash: string) => Effect.Effect<string | undefined>
   readonly diffFull: (from: string, to: string) => Effect.Effect<FileDiff[]>
 }
 
@@ -548,10 +549,13 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
           )
         })
 
+        // undefined, not "", when there is no diff to give: an empty diff means "nothing
+        // changed", which a missing base or an index missing files cannot say.
         const diff = Effect.fnUntraced(function* (hash: string) {
           return yield* locked(
             Effect.gen(function* () {
-              yield* add()
+              if (!hash) return undefined
+              if (!(yield* add())) return undefined
               const result = yield* git([...quote, ...args(["diff", "--cached", "--no-ext-diff", hash, "--", "."])], {
                 cwd: state.worktree,
               })
@@ -561,7 +565,7 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
                   exitCode: result.code,
                   stderr: result.stderr,
                 })
-                return ""
+                return undefined
               }
               return result.text.trim()
             }),

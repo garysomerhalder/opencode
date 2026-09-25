@@ -64,7 +64,10 @@ export interface World {
    * a PASS.
    */
   readonly unlisted?: ReadonlyArray<Check>
-  /** The host's diff since the loop started; undefined when there is none. */
+  /**
+   * The host's diff since the loop started: "" when nothing changed, undefined when
+   * there is no snapshot to diff against (none recorded, or git cannot read it).
+   */
   readonly diff: string | undefined
   /** The acceptance criteria the user declared; the verifier must judge each, as written. */
   readonly criteria?: ReadonlyArray<string>
@@ -234,7 +237,7 @@ function citation(evidence: Evidence, world: World): string | undefined {
     if (!whole) return `the excerpt must contain at least one whole line of the output of check ${evidence.callID}`
     return undefined
   }
-  if (!world.diff) return "there is no host diff for this verification"
+  if (world.diff === undefined) return "no host snapshot for this verification; diff citations are unavailable"
   const file = evidence.path.replaceAll("\\", "/")
   const section = sections(world.diff).find((item) => item.paths.includes(file))
   if (!section) return `the diff does not touch ${evidence.path}`

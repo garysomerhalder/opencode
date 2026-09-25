@@ -5,7 +5,7 @@ import { SessionProjector } from "@opencode-ai/core/session/projector"
 import fs from "fs/promises"
 import path from "path"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
-import { Effect } from "effect"
+import { Effect, Layer } from "effect"
 import { Session } from "@/session/session"
 
 import { SessionRevert } from "../../src/session/revert"
@@ -714,6 +714,66 @@ describe("revert + compact workflow", () => {
           yield* revert.revert({ sessionID: sid, messageID: second.id })
 
           expect((yield* session.get(sid)).revert?.messageID).toBe(real.id)
+        }),
+      { git: true },
+    ),
+  )
+})
+
+// Snapshot.track() returns undefined when git cannot write a snapshot (see the
+// snapshot tests). Revert records the current state first so unrevert can bring it
+// back; with no snapshot of it, reverting would change files unrecoverably.
+let snapshotFails = false
+const failingTrack = Layer.effect(
+  Snapshot.Service,
+  Effect.gen(function* () {
+    const real = yield* Snapshot.Service
+    return Snapshot.Service.of({
+      ...real,
+      track: () => (snapshotFails ? Effect.succeed(undefined) : real.track()),
+    })
+  }),
+).pipe(Layer.provide(LayerNode.compile(Snapshot.node)))
+const withFailingTrack = testEffect(
+  LayerNode.compile(
+    LayerNode.group([Session.node, SessionRevert.node, Snapshot.node, SessionProjector.node, CrossSpawnSpawner.node]),
+    [[Snapshot.node, failingTrack]],
+  ),
+)
+
+describe("revert without a snapshot of the current state", () => {
+  withFailingTrack.live(
+    "leaves the files and the session as they are",
+    provideTmpdirInstance(
+      (dir) =>
+        Effect.gen(function* () {
+          const session = yield* Session.Service
+          const revert = yield* SessionRevert.Service
+          const snapshot = yield* Snapshot.Service
+          snapshotFails = false
+          yield* write(path.join(dir, "a.txt"), "a0")
+          const sid = (yield* session.create({})).id
+          const u = yield* user(sid)
+          yield* text(sid, u.id, "a.txt:a1")
+          const a = yield* assistant(sid, u.id, dir)
+          const before = yield* snapshot.track()
+          if (!before) throw new Error("expected snapshot")
+          yield* write(path.join(dir, "a.txt"), "a1")
+          const patch = yield* snapshot.patch(before)
+          yield* session.updatePart({
+            id: PartID.ascending(),
+            messageID: a.id,
+            sessionID: sid,
+            type: "patch",
+            hash: patch.hash,
+            files: patch.files,
+          })
+
+          snapshotFails = true
+          yield* revert.revert({ sessionID: sid, messageID: u.id })
+          snapshotFails = false
+          expect((yield* session.get(sid)).revert).toBeUndefined()
+          expect(yield* read(path.join(dir, "a.txt"))).toBe("a1")
         }),
       { git: true },
     ),

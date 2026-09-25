@@ -176,7 +176,11 @@ describe("Verdict.validate: citations", () => {
     expect(
       Verdict.validate(pass([cite("src/budget.ts", "return cut")]), { ...passing, diff: undefined }, { final: false })
         .errors,
-    ).toEqual(["C1: there is no host diff for this verification"])
+    ).toEqual(["C1: no host snapshot for this verification; diff citations are unavailable"])
+    // a snapshot with no changes since it is a diff that touches nothing
+    expect(
+      Verdict.validate(pass([cite("src/budget.ts", "return cut")]), { ...passing, diff: "" }, { final: false }).errors,
+    ).toEqual(["C1: the diff does not touch src/budget.ts"])
   })
 })
 
