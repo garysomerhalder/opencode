@@ -15,12 +15,21 @@ import { ToolJsonSchema } from "@/tool/json-schema"
 import { ToolRegistry } from "@/tool/registry"
 import { ShellTasks } from "@/tool/shell/tasks"
 import { Worktree } from "@/worktree"
-import { Effect, Option } from "effect"
+import { Effect, Option, Scope } from "effect"
+import { Provider } from "@/provider/provider"
+import { SessionPrompt } from "@/session/prompt"
+import { VerifierPin } from "@/session/verifier-pin"
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse"
 import type * as HttpServerRequest from "effect/unstable/http/HttpServerRequest"
 import { HttpApiBuilder, HttpApiError } from "effect/unstable/httpapi"
 import { InstanceHttpApi } from "../api"
-import { ConsoleSwitchPayload, SessionListQuery, ToolListQuery, WorktreeApiError } from "../groups/experimental"
+import {
+  ConsoleSwitchPayload,
+  type GoalStartPayload,
+  SessionListQuery,
+  ToolListQuery,
+  WorktreeApiError,
+} from "../groups/experimental"
 
 function mapWorktreeError<A, R>(self: Effect.Effect<A, Worktree.Error, R>) {
   return self.pipe(
@@ -42,6 +51,9 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
     const tasks = yield* ShellTasks.Service
     const flags = yield* RuntimeFlags.Service
     const goals = yield* SessionGoal.Service
+    const providers = yield* Provider.Service
+    const promptSvc = yield* SessionPrompt.Service
+    const scope = yield* Scope.Scope
     const todos = yield* Todo.Service
 
     const capabilities = Effect.fn("ExperimentalHttpApi.capabilities")(function* () {
@@ -176,11 +188,56 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
       HostToken.verify(request.headers[HostToken.HEADER]) ? Effect.void : Effect.fail(new HttpApiError.Forbidden({}))
     const sessionGoalStart = Effect.fn("ExperimentalHttpApi.sessionGoalStart")(function* (ctx: {
       params: { sessionID: SessionID }
-      payload: SessionGoal.Input
+      payload: GoalStartPayload
       request: HttpServerRequest.HttpServerRequest
     }) {
       yield* requireHost(ctx.request)
-      return yield* goals.start(ctx.params.sessionID, ctx.payload).pipe(changeErrors)
+      const { prompt, ...input } = ctx.payload
+      // With a first prompt (§11.9): the goal is started first, recording the prompt as
+      // the task, so the session holds a goal (and refuses client edits of its user
+      // messages) before the message exists; then the prompt is sent, as prompt_async.
+      const task = prompt?.parts
+        .flatMap((part) => (part.type === "text" ? [part.text] : []))
+        .join("\n")
+        .trim()
+      const started = yield* goals
+        .start(ctx.params.sessionID, input, task ? { task } : undefined)
+        .pipe(changeErrors)
+      if (prompt)
+        yield* promptSvc.prompt({ ...prompt, sessionID: ctx.params.sessionID }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logError("goal first prompt failed", { sessionID: ctx.params.sessionID, cause }),
+          ),
+          Effect.forkIn(scope, { startImmediately: true }),
+        )
+      return started
+    })
+
+    // Phase 4 (§11.9): the verifier session for the worker's active goal. Its verify is
+    // read from the goal record here, never taken from the request, and its model is
+    // pinned; Session.createVerifier writes both at birth, so it is sealed from the start.
+    const sessionVerify = Effect.fn("ExperimentalHttpApi.sessionVerify")(function* (ctx: {
+      params: { sessionID: SessionID }
+      request: HttpServerRequest.HttpServerRequest
+    }) {
+      yield* requireHost(ctx.request)
+      const goal = yield* goals.get(ctx.params.sessionID).pipe(notFound)
+      if (!goal || goal.endedAt !== undefined) return yield* new HttpApiError.Conflict({})
+      const pin = yield* VerifierPin.resolve.pipe(
+        Effect.provideService(Agent.Service, agents),
+        Effect.provideService(Provider.Service, providers),
+      )
+      if (!pin) return yield* new HttpApiError.ServiceUnavailable({})
+      const child = yield* sessions.createVerifier({
+        parentID: ctx.params.sessionID,
+        verify: {
+          goal: goal.id,
+          ...(goal.base ? { base: goal.base } : {}),
+          ...(goal.criteria ? { criteria: [...goal.criteria] } : {}),
+        },
+        pin,
+      })
+      return { verifierSessionID: child.id, pin }
     })
     const sessionGoal = Effect.fn("ExperimentalHttpApi.sessionGoal")(function* (ctx: {
       params: { sessionID: SessionID }
@@ -263,6 +320,7 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
       .handle("session", session)
       .handle("sessionBackground", sessionBackground)
       .handle("sessionGoalStart", sessionGoalStart)
+      .handle("sessionVerify", sessionVerify)
       .handle("sessionGoal", sessionGoal)
       .handle("sessionGoalEnd", sessionGoalEnd)
       .handle("sessionTodoEvidence", sessionTodoEvidence)

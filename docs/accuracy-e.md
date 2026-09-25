@@ -905,3 +905,14 @@ Added tests for the rulings:
   another;
 - the step and time caps end the attempt;
 - an all-unknown PARTIAL ends `unverified` with that reason.
+
+**Implementation, one reviewed PR at a time.**
+
+1. **Server routes.**
+   - `POST /experimental/session/:id/verify` (host token; 409 without an active goal; 503 when the
+     verifier's model cannot be resolved) creates the pinned verifier from the goal record.
+   - `POST /experimental/session/:id/goal` takes an optional `prompt`. The goal starts first and
+     records the prompt as the task, then the prompt is sent.
+2. **The desktop loop's verify branch:** checks, prompt, verdict, and continue.
+3. **Settings and trusted check commands,** with the approval of proposed commands.
+4. **UI:** verdicts and the goal history.

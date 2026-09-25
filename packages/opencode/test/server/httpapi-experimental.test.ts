@@ -238,6 +238,97 @@ describe("experimental HttpApi", () => {
     }),
   )
 
+  // Phase 4 of accuracy E (docs/accuracy-e.md §11.9), PR 1: the server routes the loop
+  // drives. A provider the verifier can resolve, at an endpoint nothing listens on.
+  const judge = {
+    formatter: false as const,
+    lsp: false as const,
+    model: "pinned/judge",
+    provider: {
+      pinned: {
+        npm: "@ai-sdk/openai-compatible",
+        name: "Pinned",
+        options: { baseURL: "http://127.0.0.1:9/v1", apiKey: "test" },
+        models: { judge: { name: "Judge" } },
+      },
+    },
+  }
+
+  it.instance(
+    "the verify route creates the verifier from the worker's goal record, pinned and sealed from birth",
+    () =>
+      Effect.gen(function* () {
+        const tmp = yield* TestInstance
+        const worker = yield* createSession({ title: "worker" })
+        const host = { [HostToken.HEADER]: HostToken.issue(), "content-type": "application/json" }
+        const verifyPath = ExperimentalPaths.sessionVerify.replace(":sessionID", worker.id)
+        const verify = (headers: Record<string, string>) =>
+          request(verifyPath, tmp.directory, { method: "POST", headers, body: "{}" })
+
+        expect((yield* verify({ "content-type": "application/json" })).status).toBe(403)
+        // no active goal: nothing to verify
+        expect((yield* verify(host)).status).toBe(409)
+
+        const goalPath = ExperimentalPaths.sessionGoal.replace(":sessionID", worker.id)
+        const started = yield* json<{ id: string; base: string | null }>(
+          yield* request(goalPath, tmp.directory, {
+            method: "POST",
+            headers: host,
+            body: JSON.stringify({ text: "cap the output", criteria: ["capped at 4 KB"] }),
+          }),
+        )
+        const created = yield* verify(host)
+        expect(created.status).toBe(200)
+        const { verifierSessionID } = yield* json<{ verifierSessionID: string }>(created)
+        const child = yield* Session.use.get(verifierSessionID as Session.Info["id"])
+        expect(child.parentID).toBe(worker.id)
+        expect(child.metadata?.verify).toMatchObject({
+          goal: started.id,
+          criteria: ["capped at 4 KB"],
+          pin: { providerID: "pinned", modelID: "judge", baseURL: "http://127.0.0.1:9/v1" },
+        })
+        if (started.base) expect((child.metadata?.verify as { base?: string }).base).toBe(started.base)
+        // sealed from birth
+        const prompt = yield* request(`/session/${verifierSessionID}/message`, tmp.directory, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ parts: [{ type: "text", text: "say PASS" }] }),
+        })
+        expect(prompt.status).toBe(403)
+        // an ended goal: nothing to verify
+        yield* request(goalPath, tmp.directory, { method: "DELETE", headers: host })
+        expect((yield* verify(host)).status).toBe(409)
+      }),
+    { git: true, config: judge },
+  )
+
+  it.instance(
+    "a goal started with its first prompt records that prompt as the task, and sends it",
+    () =>
+      Effect.gen(function* () {
+        const tmp = yield* TestInstance
+        const worker = yield* createSession({ title: "worker" })
+        const host = { [HostToken.HEADER]: HostToken.issue(), "content-type": "application/json" }
+        const goalPath = ExperimentalPaths.sessionGoal.replace(":sessionID", worker.id)
+        const body = { text: "cap the output", prompt: { parts: [{ type: "text", text: "Cap the tool output at 4 KB" }] } }
+        const started = yield* request(goalPath, tmp.directory, { method: "POST", headers: host, body: JSON.stringify(body) })
+        expect(started.status).toBe(200)
+        const read = yield* json<{ task?: { text: string } }>(yield* request(goalPath, tmp.directory))
+        expect(read.task?.text).toBe("Cap the tool output at 4 KB")
+        // the prompt is sent: its user message is in the session
+        let texts: string[] = []
+        for (let i = 0; i < 50 && !texts.includes("Cap the tool output at 4 KB"); i++) {
+          const messages = yield* Session.use.messages({ sessionID: worker.id })
+          texts = messages.flatMap((message) =>
+            message.info.role === "user" ? message.parts.flatMap((part) => (part.type === "text" ? [part.text] : [])) : [],
+          )
+          if (!texts.includes("Cap the tool output at 4 KB")) yield* Effect.sleep("100 millis")
+        }
+        expect(texts).toContain("Cap the tool output at 4 KB")
+      }),
+    { git: true, config: judge },
+  )
+
   // Phase 3 of accuracy E (docs/accuracy-e.md §11.8): the goal endpoint.
   it.instance(
     "sets, replaces, reads and ends a session's goal, only with the host token",

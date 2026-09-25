@@ -758,6 +758,17 @@ const scenarios: Scenario[] = [
     // goal writes take the host token, which the server password does not give
     .status(403),
   http.protected
+    .post("/experimental/session/{sessionID}/verify", "experimental.session.verify")
+    .mutating()
+    .seeded((ctx) => ctx.session({ title: "Verify route owner" }))
+    .at((ctx) => ({
+      path: route("/experimental/session/{sessionID}/verify", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+      body: {},
+    }))
+    // a verification is the host's to start, with its token
+    .status(403),
+  http.protected
     .get("/experimental/session/{sessionID}/goal", "experimental.session.goal.get")
     .seeded((ctx) => ctx.session({ title: "Goal route reader" }))
     .at((ctx) => ({

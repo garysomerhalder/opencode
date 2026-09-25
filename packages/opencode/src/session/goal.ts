@@ -135,7 +135,12 @@ function limit(record: Record | undefined, now: number) {
 export interface Interface {
   readonly get: (sessionID: SessionID) => Effect.Effect<Record | undefined, Session.NotFound>
   /** Sets the goal, or replaces the active one; takes the snapshot it starts from. */
-  readonly start: (sessionID: SessionID, input: Input) => Effect.Effect<Started, Session.NotFound | RateLimited>
+  readonly start: (
+    sessionID: SessionID,
+    input: Input,
+    /** task: the first prompt the host sends with the goal (Phase 4); recorded as the task. */
+    options?: { task?: string },
+  ) => Effect.Effect<Started, Session.NotFound | RateLimited>
   /** Ends the active goal; undefined when there is none. */
   readonly end: (sessionID: SessionID) => Effect.Effect<Record | undefined, Session.NotFound | RateLimited>
   /**
@@ -171,7 +176,11 @@ export const layer = Layer.effect(
       return read((yield* sessions.get(sessionID)).metadata)
     })
 
-    const start = Effect.fn("SessionGoal.start")(function* (sessionID: SessionID, input: Input) {
+    const start = Effect.fn("SessionGoal.start")(function* (
+      sessionID: SessionID,
+      input: Input,
+      options?: { task?: string },
+    ) {
       return yield* SessionMetadataLock.withLock(
         sessionID,
         Effect.gen(function* () {
@@ -184,9 +193,11 @@ export const layer = Layer.effect(
           const id = Identifier.create("goal", "ascending")
           const type = previous && previous.endedAt === undefined ? "replace" : "set"
           const origin = previous?.origin ?? { goal: id, ...(base ? { base } : {}) }
+          // the host's own first prompt when it starts the goal with one (Phase 4), else
+          // the session's first user message
           const firstMessage = previous?.task
             ? undefined
-            : Checkpoint.task(yield* sessions.messages({ sessionID }))
+            : (options?.task ?? Checkpoint.task(yield* sessions.messages({ sessionID })))
           const task =
             previous?.task ??
             (firstMessage ? { text: firstMessage, sha256: createHash("sha256").update(firstMessage).digest("hex") } : undefined)

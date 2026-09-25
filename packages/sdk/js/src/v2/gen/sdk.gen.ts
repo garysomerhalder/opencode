@@ -54,6 +54,8 @@ import type {
   ExperimentalSessionListResponses,
   ExperimentalSessionTodoEvidenceErrors,
   ExperimentalSessionTodoEvidenceResponses,
+  ExperimentalSessionVerifyErrors,
+  ExperimentalSessionVerifyResponses,
   ExperimentalShellTaskListErrors,
   ExperimentalShellTaskListResponses,
   ExperimentalShellTaskStopAllErrors,
@@ -913,6 +915,23 @@ export class Goal extends HeyApiClient {
       workspace?: string
       text?: string
       criteria?: Array<string>
+      prompt?: {
+        messageID?: string
+        model?: {
+          providerID: string
+          modelID: string
+        }
+        agent?: string
+        noReply?: boolean
+        tools?: {
+          [key: string]: boolean
+        }
+        format?: OutputFormat
+        system?: string
+        variant?: string
+        autonomous?: boolean
+        parts: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
+      }
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -926,6 +945,7 @@ export class Goal extends HeyApiClient {
             { in: "query", key: "workspace" },
             { in: "body", key: "text" },
             { in: "body", key: "criteria" },
+            { in: "body", key: "prompt" },
           ],
         },
       ],
@@ -1065,6 +1085,51 @@ export class Session extends HeyApiClient {
       url: "/experimental/session/{sessionID}/background",
       ...options,
       ...params,
+    })
+  }
+
+  /**
+   * Start a verification of a session's goal
+   *
+   * Create the verifier session for the session's active goal: its verify (goal, base, criteria) is read from the goal record on the server, and the verifier's model is pinned. The session is sealed from birth. Requires the host token. 409 when no goal is active; 503 when the verifier's model cannot be resolved.
+   */
+  public verify<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+      body?: {
+        [key: string]: unknown
+      }
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "body", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      ExperimentalSessionVerifyResponses,
+      ExperimentalSessionVerifyErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/session/{sessionID}/verify",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
     })
   }
 

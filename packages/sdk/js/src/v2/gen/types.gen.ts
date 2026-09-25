@@ -2106,6 +2106,10 @@ export type Config = {
   }
 }
 
+export type EffectHttpApiErrorForbidden = {
+  _tag: "Forbidden"
+}
+
 export type Model = {
   id: string
   providerID: string
@@ -2323,8 +2327,60 @@ export type GlobalSession = {
   project: ProjectSummary | null
 }
 
-export type EffectHttpApiErrorForbidden = {
-  _tag: "Forbidden"
+export type EffectHttpApiErrorConflict = {
+  _tag: "Conflict"
+}
+
+export type EffectHttpApiErrorServiceUnavailable = {
+  _tag: "ServiceUnavailable"
+}
+
+export type TextPartInput = {
+  id?: string
+  type: "text"
+  text: string
+  synthetic?: boolean
+  ignored?: boolean
+  time?: {
+    start: number
+    end?: number
+  }
+  metadata?: {
+    [key: string]: unknown
+  }
+}
+
+export type FilePartInput = {
+  id?: string
+  type: "file"
+  mime: string
+  filename?: string
+  url: string
+  source?: FilePartSource
+}
+
+export type AgentPartInput = {
+  id?: string
+  type: "agent"
+  name: string
+  source?: {
+    value: string
+    start: number
+    end: number
+  }
+}
+
+export type SubtaskPartInput = {
+  id?: string
+  type: "subtask"
+  prompt: string
+  description: string
+  agent: string
+  model?: {
+    providerID: string
+    modelID: string
+  }
+  command?: string
 }
 
 export type GoalRateLimited = {
@@ -2654,54 +2710,6 @@ export type NotFoundError = {
   data: {
     message: string
   }
-}
-
-export type TextPartInput = {
-  id?: string
-  type: "text"
-  text: string
-  synthetic?: boolean
-  ignored?: boolean
-  time?: {
-    start: number
-    end?: number
-  }
-  metadata?: {
-    [key: string]: unknown
-  }
-}
-
-export type FilePartInput = {
-  id?: string
-  type: "file"
-  mime: string
-  filename?: string
-  url: string
-  source?: FilePartSource
-}
-
-export type AgentPartInput = {
-  id?: string
-  type: "agent"
-  name: string
-  source?: {
-    value: string
-    start: number
-    end: number
-  }
-}
-
-export type SubtaskPartInput = {
-  id?: string
-  type: "subtask"
-  prompt: string
-  description: string
-  agent: string
-  model?: {
-    providerID: string
-    modelID: string
-  }
-  command?: string
 }
 
 export type SessionBusyError = {
@@ -7463,6 +7471,10 @@ export type GlobalConfigUpdateErrors = {
    * BadRequest | InvalidRequestError
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * Forbidden
+   */
+  403: EffectHttpApiErrorForbidden
 }
 
 export type GlobalConfigUpdateError = GlobalConfigUpdateErrors[keyof GlobalConfigUpdateErrors]
@@ -7598,6 +7610,10 @@ export type ConfigUpdateErrors = {
    * BadRequest | InvalidRequestError
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * Forbidden
+   */
+  403: EffectHttpApiErrorForbidden
 }
 
 export type ConfigUpdateError = ConfigUpdateErrors[keyof ConfigUpdateErrors]
@@ -8008,6 +8024,63 @@ export type ExperimentalSessionBackgroundResponses = {
 export type ExperimentalSessionBackgroundResponse =
   ExperimentalSessionBackgroundResponses[keyof ExperimentalSessionBackgroundResponses]
 
+export type ExperimentalSessionVerifyData = {
+  body?: {
+    [key: string]: unknown
+  }
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/session/{sessionID}/verify"
+}
+
+export type ExperimentalSessionVerifyErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Forbidden
+   */
+  403: EffectHttpApiErrorForbidden
+  /**
+   * Not found
+   */
+  404: NotFoundError
+  /**
+   * Conflict
+   */
+  409: EffectHttpApiErrorConflict
+  /**
+   * ServiceUnavailable
+   */
+  503: EffectHttpApiErrorServiceUnavailable
+}
+
+export type ExperimentalSessionVerifyError = ExperimentalSessionVerifyErrors[keyof ExperimentalSessionVerifyErrors]
+
+export type ExperimentalSessionVerifyResponses = {
+  /**
+   * The verifier session, created pinned and sealed
+   */
+  200: {
+    verifierSessionID: string
+    pin: {
+      providerID: string
+      modelID: string
+      baseURL?: string
+      configHash: string
+    }
+  }
+}
+
+export type ExperimentalSessionVerifyResponse =
+  ExperimentalSessionVerifyResponses[keyof ExperimentalSessionVerifyResponses]
+
 export type ExperimentalSessionGoalEndData = {
   body?: never
   path: {
@@ -8073,6 +8146,10 @@ export type ExperimentalSessionGoalEndResponses = {
       verifierSessionID: string
       unmet: Array<string>
     }
+    task?: {
+      text: string
+      sha256: string
+    }
   }
 }
 
@@ -8136,6 +8213,10 @@ export type ExperimentalSessionGoalGetResponses = {
       verifierSessionID: string
       unmet: Array<string>
     }
+    task?: {
+      text: string
+      sha256: string
+    }
   }
 }
 
@@ -8146,6 +8227,23 @@ export type ExperimentalSessionGoalStartData = {
   body?: {
     text: string
     criteria?: Array<string>
+    prompt?: {
+      messageID?: string
+      model?: {
+        providerID: string
+        modelID: string
+      }
+      agent?: string
+      noReply?: boolean
+      tools?: {
+        [key: string]: boolean
+      }
+      format?: OutputFormat
+      system?: string
+      variant?: string
+      autonomous?: boolean
+      parts: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
+    }
   }
   path: {
     sessionID: string
@@ -8570,6 +8668,10 @@ export type InstanceDisposeErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * Forbidden
+   */
+  403: EffectHttpApiErrorForbidden
 }
 
 export type InstanceDisposeError = InstanceDisposeErrors[keyof InstanceDisposeErrors]
@@ -10346,6 +10448,10 @@ export type SessionUpdateErrors = {
    * BadRequest | InvalidRequestError
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * Forbidden
+   */
+  403: EffectHttpApiErrorForbidden
   /**
    * NotFoundError
    */

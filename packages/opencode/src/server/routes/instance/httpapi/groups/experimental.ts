@@ -5,7 +5,9 @@ import { Session } from "@/session/session"
 import { SessionID } from "@/session/schema"
 import { SessionGoal } from "@/session/goal"
 import { Todo } from "@/session/todo"
+import { VerifierPin } from "@/session/verifier-pin"
 import { Worktree } from "@/worktree"
+import { PromptPayload } from "./session"
 import { NonNegativeInt } from "@opencode-ai/core/schema"
 import { Schema } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiError, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
@@ -40,6 +42,22 @@ const ShellTaskList = Schema.Array(ShellTaskInfo).annotate({ identifier: "ShellT
 export const ShellTaskStopQuery = Schema.Struct({
   ...WorkspaceRoutingQueryFields,
   sessionID: SessionID,
+})
+
+/**
+ * Starting a goal, optionally with the session's first prompt (docs/accuracy-e.md §11.9):
+ * one host step, so the task is recorded from the host's own prompt, with no window in
+ * which the first message could be edited before the goal records it.
+ */
+export const GoalStartPayload = Schema.Struct({
+  ...SessionGoal.Input.fields,
+  prompt: Schema.optional(PromptPayload),
+})
+export type GoalStartPayload = Schema.Schema.Type<typeof GoalStartPayload>
+
+export const VerifyStarted = Schema.Struct({
+  verifierSessionID: SessionID,
+  pin: VerifierPin.Pin,
 })
 
 export const ShellTaskQuery = Schema.Struct({
@@ -117,6 +135,7 @@ export const ExperimentalPaths = {
   session: "/experimental/session",
   sessionBackground: "/experimental/session/:sessionID/background",
   sessionGoal: "/experimental/session/:sessionID/goal",
+  sessionVerify: "/experimental/session/:sessionID/verify",
   sessionTodoEvidence: "/experimental/session/:sessionID/todo/evidence",
   shellTasks: "/experimental/shell/task",
   shellTasksStop: "/experimental/shell/task/stop",
@@ -268,10 +287,24 @@ export const ExperimentalApi = HttpApi.make("experimental")
               "Detach any synchronous subagents currently blocking the session and continue them in the background.",
           }),
         ),
+        HttpApiEndpoint.post("sessionVerify", ExperimentalPaths.sessionVerify, {
+          params: { sessionID: SessionID },
+          query: WorkspaceRoutingQuery,
+          payload: Schema.Struct({}),
+          success: described(VerifyStarted, "The verifier session, created pinned and sealed"),
+          error: [HttpApiError.Forbidden, HttpApiError.NotFound, HttpApiError.Conflict, HttpApiError.ServiceUnavailable],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "experimental.session.verify",
+            summary: "Start a verification of a session's goal",
+            description:
+              "Create the verifier session for the session's active goal: its verify (goal, base, criteria) is read from the goal record on the server, and the verifier's model is pinned. The session is sealed from birth. Requires the host token. 409 when no goal is active; 503 when the verifier's model cannot be resolved.",
+          }),
+        ),
         HttpApiEndpoint.post("sessionGoalStart", ExperimentalPaths.sessionGoal, {
           params: { sessionID: SessionID },
           query: WorkspaceRoutingQuery,
-          payload: SessionGoal.Input,
+          payload: GoalStartPayload,
           success: described(SessionGoal.Started, "The goal, and the snapshot it starts from"),
           error: [HttpApiError.NotFound, HttpApiError.Forbidden, SessionGoal.RateLimited],
         }).annotateMerge(
