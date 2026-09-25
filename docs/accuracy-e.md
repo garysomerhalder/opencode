@@ -481,8 +481,9 @@ the local HTTP API, so the API refuses any `metadata.verify` on session create a
 and an update of other metadata keeps the existing `verify`.
 
 **Phase 4 MUST create the verifier session with `verify` in its metadata, in-process, in one step
-(final re-review of Phase 3).** Use `Session.createVerifier({ parentID, verify })`: it creates
-the session with `verify` in the same write, so the session is sealed from birth (§11.8). Never
+(final re-review of Phase 3).** Use `Session.createVerifier({ parentID, verify, pin })`, with
+`pin` from `VerifierPin.resolve`. It creates the session with `verify` (and `verify.pin`) in the
+same write, so the session is sealed from birth, and its model is pinned (§11.8). Never
 create a session and set `verify` afterwards: in between, it exists unsealed, and a client could
 steer it or write parts into it. Then:
 
@@ -736,6 +737,22 @@ in the verifier session's message storage, which clients could write without a t
   (its first user message) as `goal.task = { text, sha256 }`. The checkpoint's task line comes
   from there, not from the message, and says so when the message no longer matches. In a session
   with host records, only the host edits a user message's parts (403).
+- **The verifier's model is pinned (final check, HIGH).** `Session.createVerifier` requires a pin
+  and stores it as `verify.pin`. The pin is from `VerifierPin.resolve`: the provider and model the
+  verifier agent resolves to, the endpoint (the provider's `baseURL`, else the model's API URL),
+  and a hash of the provider's effective config.
+  - The verdict tool resolves it again at every submission, and refuses to record anything when
+    anything differs, or when the step answering ran on another model: "the verifier's model or
+    provider changed since this verification was created (…)".
+  - While a session of the project has an active goal, or a verification not yet recorded,
+    `PATCH /config`, `PATCH /global/config` (any project) and `POST /instance/dispose` take the
+    host token (403).
+- **Assumption: config and plugins on disk.** A worker with bash can still write config and
+  plugins to disk: `opencode.json` and `.opencode/` in the worktree, and the global config
+  directories. The API checks above do not stop that. The pin catches a change made after the
+  verifier was created, but not one made before, and a plugin can run code in the server. Only the
+  Phase 4 worker sandbox contains this: it denies the worker writes to those files and
+  directories. It is a stated assumption until then.
 
 **Threat model: what the API checks do not stop.** Everything above is enforced at the API layer
 of a server that runs as the same OS user as the worker's shell. That worker can still:

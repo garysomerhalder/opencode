@@ -469,8 +469,20 @@ export interface Interface {
   readonly createVerifier: (input: {
     parentID: SessionID
     verify: Record<string, unknown>
+    /**
+     * The model the verifier resolved to (VerifierPin.resolve), stored as verify.pin:
+     * the verdict tool refuses once the live resolution differs. Required, so no
+     * verifier session exists unpinned.
+     */
+    pin: { providerID: string; modelID: string; baseURL?: string; configHash: string }
     title?: string
   }) => Effect.Effect<Info>
+  /**
+   * Whether a session of the project has an active goal, or a verification whose
+   * verdict is not recorded yet: then config writes and instance reloads take the
+   * host token (they decide which model the verifier runs on, and which plugins load).
+   */
+  readonly hostActive: (projectID?: ProjectV2.ID) => Effect.Effect<boolean>
   readonly fork: (input: { sessionID: SessionID; messageID?: MessageID }) => Effect.Effect<Info, NotFound>
   readonly touch: (sessionID: SessionID) => Effect.Effect<void>
   readonly get: (id: SessionID) => Effect.Effect<Info, NotFound>
@@ -984,14 +996,32 @@ const layer: Layer.Layer<
     const createVerifier = Effect.fn("Session.createVerifier")(function* (input: {
       parentID: SessionID
       verify: Record<string, unknown>
+      pin: { providerID: string; modelID: string; baseURL?: string; configHash: string }
       title?: string
     }) {
       return yield* create({
         parentID: input.parentID,
         title: input.title ?? "Verify",
         agent: Permission.VERIFIER,
-        metadata: { verify: structuredClone(input.verify) },
+        metadata: { verify: { ...structuredClone(input.verify), pin: structuredClone(input.pin) } },
       })
+    })
+
+    const hostActive = Effect.fn("Session.hostActive")(function* (projectID?: ProjectV2.ID) {
+      const active = sql`(
+        (json_extract(${SessionTable.metadata}, '$.goal.id') IS NOT NULL
+          AND json_extract(${SessionTable.metadata}, '$.goal.endedAt') IS NULL)
+        OR (json_extract(${SessionTable.metadata}, '$.verify') IS NOT NULL
+          AND coalesce(json_extract(${SessionTable.metadata}, '$.verifyRecord.recorded'), 0) = 0)
+      )`
+      const row = yield* db
+        .select({ id: SessionTable.id })
+        .from(SessionTable)
+        .where(projectID === undefined ? active : and(eq(SessionTable.project_id, projectID), active))
+        .limit(1)
+        .get()
+        .pipe(Effect.orDie)
+      return row !== undefined
     })
 
     return Service.of({
@@ -999,6 +1029,7 @@ const layer: Layer.Layer<
       listGlobal,
       create,
       createVerifier,
+      hostActive,
       fork,
       touch,
       get,

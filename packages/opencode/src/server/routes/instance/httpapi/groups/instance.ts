@@ -5,7 +5,7 @@ import { LSP } from "@/lsp/lsp"
 import { Vcs } from "@/project/vcs"
 import { Skill } from "@/skill"
 import { Schema } from "effect"
-import { HttpApi, HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
+import { HttpApi, HttpApiEndpoint, HttpApiError, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
 import { Authorization } from "../middleware/authorization"
 import { InstanceContextMiddleware } from "../middleware/instance-context"
 import {
@@ -62,6 +62,7 @@ export const InstanceApi = HttpApi.make("instance")
         HttpApiEndpoint.post("dispose", InstancePaths.dispose, {
           query: WorkspaceRoutingQuery,
           success: described(Schema.Boolean, "Instance disposed"),
+          error: HttpApiError.Forbidden,
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "instance.dispose",
