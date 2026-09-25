@@ -7,6 +7,7 @@ import { Permission } from "@/permission"
 import { SessionShare } from "@/share/session"
 import { Session } from "@/session/session"
 import { SessionMetadataLock } from "@/session/metadata-lock"
+import { HostToken } from "@/server/host-token"
 import { SessionCompaction } from "@/session/compaction"
 import { MessageV2 } from "@/session/message-v2"
 import { SessionPrompt } from "@/session/prompt"
@@ -82,6 +83,9 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const requireSession = Effect.fn("SessionHttpApi.requireSession")(function* (sessionID: SessionID) {
       return yield* SessionError.mapStorageNotFound(session.get(sessionID))
     })
+
+    /** A session holding host records (a goal loop's goal, or a verification). */
+    const hostOwned = (info: Session.Info) => info.metadata?.goal !== undefined || info.metadata?.verify !== undefined
 
     const get = Effect.fn("SessionHttpApi.get")(function* (ctx: { params: { sessionID: SessionID } }) {
       return yield* requireSession(ctx.params.sessionID)
@@ -176,7 +180,15 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       return yield* create({ payload })
     })
 
-    const remove = Effect.fn("SessionHttpApi.remove")(function* (ctx: { params: { sessionID: SessionID } }) {
+    const remove = Effect.fn("SessionHttpApi.remove")(function* (ctx: {
+      params: { sessionID: SessionID }
+      request: HttpServerRequest.HttpServerRequest
+    }) {
+      // Deleting a session deletes the host's records with it (its goal, or the
+      // verification it is): only the host may, with its token (accuracy E §11.8).
+      const current = yield* requireSession(ctx.params.sessionID)
+      if (hostOwned(current) && !HostToken.verify(ctx.request.headers[HostToken.HEADER]))
+        return yield* new HttpApiError.Forbidden({})
       yield* SessionError.mapStorageNotFound(session.remove(ctx.params.sessionID))
       return true
     })
