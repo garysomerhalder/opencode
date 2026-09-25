@@ -2323,6 +2323,16 @@ export type GlobalSession = {
   project: ProjectSummary | null
 }
 
+export type EffectHttpApiErrorForbidden = {
+  _tag: "Forbidden"
+}
+
+export type GoalRateLimited = {
+  _tag: "GoalRateLimited"
+  message: string
+  retryAfterMs: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
 export type ShellTasks = Array<ShellTask>
 
 export type McpResource = {
@@ -3072,10 +3082,6 @@ export type ProjectCopyError = {
     message: string
     forceRequired?: boolean
   }
-}
-
-export type EffectHttpApiErrorForbidden = {
-  _tag: "Forbidden"
 }
 
 export type EventTuiPromptAppend2 = {
@@ -8020,9 +8026,17 @@ export type ExperimentalSessionGoalEndErrors = {
    */
   400: BadRequestError
   /**
+   * Forbidden
+   */
+  403: EffectHttpApiErrorForbidden
+  /**
    * Not found
    */
   404: NotFoundError
+  /**
+   * GoalRateLimited
+   */
+  429: GoalRateLimited
 }
 
 export type ExperimentalSessionGoalEndError = ExperimentalSessionGoalEndErrors[keyof ExperimentalSessionGoalEndErrors]
@@ -8038,13 +8052,21 @@ export type ExperimentalSessionGoalEndResponses = {
     base?: string
     startedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
     endedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    origin: {
+      goal: string
+      base?: string
+    }
+    baseChanges?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
     history: Array<{
       type: "set" | "replace" | "end"
       at: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-      via: "api"
+      via: "host"
       goal: string
-      text?: string
+      base?: string
+      sha256?: string
+      length?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
     }>
+    elided?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
     lastVerdict?: {
       verdict: "PASS" | "PARTIAL" | "FAIL"
       at: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
@@ -8093,13 +8115,21 @@ export type ExperimentalSessionGoalGetResponses = {
     base?: string
     startedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
     endedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    origin: {
+      goal: string
+      base?: string
+    }
+    baseChanges?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
     history: Array<{
       type: "set" | "replace" | "end"
       at: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-      via: "api"
+      via: "host"
       goal: string
-      text?: string
+      base?: string
+      sha256?: string
+      length?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
     }>
+    elided?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
     lastVerdict?: {
       verdict: "PASS" | "PARTIAL" | "FAIL"
       at: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
@@ -8133,9 +8163,17 @@ export type ExperimentalSessionGoalStartErrors = {
    */
   400: BadRequestError
   /**
+   * Forbidden
+   */
+  403: EffectHttpApiErrorForbidden
+  /**
    * Not found
    */
   404: NotFoundError
+  /**
+   * GoalRateLimited
+   */
+  429: GoalRateLimited
 }
 
 export type ExperimentalSessionGoalStartError =

@@ -13,6 +13,7 @@ import { WebSocketTracker } from "./routes/instance/httpapi/websocket-tracker"
 import { PublicApi } from "./routes/instance/httpapi/public"
 import type { CorsOptions } from "@opencode-ai/server/cors"
 import { lazy } from "@/util/lazy"
+import { HostToken } from "./host-token"
 
 // @ts-ignore This global is needed to prevent ai-sdk from logging warnings to stdout https://github.com/vercel/ai/blob/2dc67e0ef538307f21368db32d5a12345d98831b/packages/ai/src/logger/log-warnings.ts#L85
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -21,6 +22,12 @@ export type Listener = {
   hostname: string
   port: number
   url: URL
+  /**
+   * The process's host token (server/host-token.ts), for the process that started
+   * the server only: pass it over a private channel, never through the environment
+   * or a file, since the agents' shells can read both.
+   */
+  hostToken: string
   stop: (close?: boolean) => Promise<void>
 }
 
@@ -41,7 +48,7 @@ type ListenerState = {
   http: ListenerServer
   websockets: WebSocketTracker.Interface
 }
-type EffectListener = Omit<Listener, "stop"> & {
+type EffectListener = Omit<Listener, "stop" | "hostToken"> & {
   stop: (close?: boolean) => Effect.Effect<void>
 }
 
@@ -76,6 +83,7 @@ export async function listen(opts: ListenOptions): Promise<Listener> {
     hostname: listener.hostname,
     port: listener.port,
     url: listener.url,
+    hostToken: HostToken.issue(),
     stop: (close?: boolean) => Effect.runPromiseExit(listener.stop(close)).then(() => undefined),
   }
 }

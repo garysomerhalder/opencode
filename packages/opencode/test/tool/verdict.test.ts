@@ -567,6 +567,28 @@ describe("tool.verdict: the records on the worker session", () => {
     }),
   )
 
+  // Security review of Phase 3, ruling 1: otherwise a worker could use up the
+  // verifier's submissions by replacing the goal while it verifies.
+  it.instance("a stale-goal refusal does not use up a submission", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const { goal, verifier } = yield* loop()
+      const child = yield* verifier()
+      // three refusals as the session stores them: tool parts in error
+      for (let i = 0; i < 3; i++)
+        yield* record(child, "verdict", `call_stale_${i}`, {
+          status: "error",
+          input: {},
+          error: `Error: ${SessionGoal.stale(goal)}`,
+          time: { start: 1, end: 2 },
+        })
+      const wrong = { ...capped, quote: "LIMIT = 9999" }
+      const result = yield* submit(child, passWith([wrong]))
+      expect(result.error).toContain("The verdict was not accepted")
+      expect(result.error).toContain(`(2 of 3 submissions left)`)
+    }),
+  )
+
   it.instance("the latest verification wins: a later not-met clears the mark", () =>
     Effect.gen(function* () {
       yield* setup()

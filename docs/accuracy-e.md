@@ -563,20 +563,38 @@ swapped on the way back, so instead the server takes the snapshot and keeps it:
     base?: string         // Snapshot.track(); absent when git could not write a snapshot
     startedAt: number
     endedAt?: number
-    history: GoalChange[] // every change, oldest first; appended, never rewritten
+    origin: { goal: string; base?: string }  // the first goal ever set here, and its base
+    baseChanges?: number  // goals set or replaced on a base other than origin.base
+    history: GoalChange[] // the latest 200 changes, oldest first; appended, never rewritten
+    elided?: number       // older changes dropped past 200; it only grows
     lastVerdict?: LastVerdict                 // item 2
   }
   type GoalChange = {
     type: "set" | "replace" | "end"
     at: number
-    via: "api"            // every change so far comes through the endpoint (ruling 5)
+    via: "host"           // made with the host token (below)
     goal: string          // the goal id the change set or ended
-    text?: string         // for set and replace
+    base?: string         // set and replace: the snapshot that goal starts from
+    sha256?: string       // set and replace: the text's hash and length; the full text is
+    length?: number       //   kept for the current goal only
   }
   ```
 
   The response is `{ id, base: string | null, startedAt }`, so the loop can warn when `base` is
   null. Its diff citations will then be unavailable (the error ruled in 80acc1bdab).
+- **The host token (security review).** The goal's write routes (`POST` and `DELETE`) require
+  `x-opencode-host-token`, and return 403 without it. The token is generated once per server
+  process and held only in its memory (`server/host-token.ts`), never in the environment (which
+  the agents' shells inherit) or on disk. `Server.listen` returns it, the desktop sidecar posts it
+  to the Electron main process with its `ready` message over the utility process's private
+  channel, and the main process keeps it in memory (`hostToken()` in `desktop/src/main/server.ts`)
+  for the goal loop. A worker's shell has at most the server password, so it cannot change the
+  goal. Reads (`GET`) do not need the token. At most 10 goal changes a minute per session (429).
+- Every read-modify-write of a session's metadata (the goal service, and a client's
+  `PATCH /session/:id`) runs under one per-session lock (`session/metadata-lock.ts`, module state,
+  so it is one per process however many times the services are built). A client's update can no
+  longer write back metadata it read before a goal change. An import strips `goal`, `verify` and
+  `lastVerdict`, as a fork does. Criteria may not hold line breaks or control characters.
 - `DELETE /experimental/session/:id/goal` ends the goal: it sets `endedAt`, appends an `end` change
   and keeps the record.
 - The client-metadata filter that refuses `verify` (11.5) refuses `goal` too, on session create and
@@ -660,12 +678,20 @@ It fails open like the rest of the checkpoint: a record that cannot be read is l
   and verified marks from the table; a missing record leaves its line out.
 - The migration test that the existing tables use.
 
-**Accepted risk.** The worker can still call the goal endpoint itself: it can replace the goal or
-end it. That cannot be told apart from the app over the local API. It stays visible, because every
-change is kept and the checkpoint shows it. It cannot forge a verdict, a verified todo or a
-snapshot. Removing the risk needs a credential the app has and the worker's shell does not (the
-server password is read from the server's environment, which shells may inherit). That is outside
-Phase 3.
+**Accepted risk (superseded by the host token).** The note first accepted that the worker could
+call the goal endpoint itself. The security review replaced that with the host token above: the
+worker's shell cannot write the goal through the API. Every change is still kept and shown.
+
+**Threat model: what the API checks do not stop.** Everything above is enforced at the API layer
+of a server that runs as the same OS user as the worker's shell. That worker can still:
+
+- write the SQLite database in the OpenCode data directory directly, forging any record;
+- read the server process's memory, or kill and restart the server.
+
+So the records are tamper-evident against the API, not unforgeable. Only the Phase 4 worker
+sandbox makes them unforgeable: it denies the worker the OpenCode data directory and access to
+other processes (no ptrace, no signals to the server). Until then, a record says what the host
+wrote unless the worker went around the API.
 
 **Rulings (2026-09-24).**
 
@@ -677,8 +703,20 @@ Phase 3.
    accepted. A verdict for a stale goal is refused with a clear error.
 4. `todo_evidence`: the latest verification wins, and a later "not met" clears the mark: accepted.
 5. The accepted risk, on condition that every goal change made through the endpoint is flagged
-   "changed via API" in the checkpoint and in the UI's goal history (`via: "api"` on each change),
-   so a person sees it.
+   "changed via API" in the checkpoint and in the UI's goal history, so a person sees it.
+
+**Security review (2026-09-24).**
+
+1. A client's metadata `PATCH` runs under the goal's per-session lock.
+2. Import strips `goal`, `verify` and `lastVerdict`.
+3. The history keeps 200 entries with a monotonic `elided` count, and stores each entry's text as
+   a hash and length. The 429 is declared on the route.
+4. Each history entry records its base. The checkpoint compares against the first goal's base and
+   flags any change of it. Goal writes require the host token, so each change is `via: "host"`,
+   and a request without the token is refused (403). This supersedes the "via: api" flag of
+   ruling 5: every change is still listed in the checkpoint and the history.
+5. Criteria are refused with line breaks or control characters.
+6. There is one lock map per process, and a lock is dropped when it is free.
 
 Implemented as three PRs, each red-first: the goal record and its endpoints; the verdict records
 and `todo_evidence`; the checkpoint.

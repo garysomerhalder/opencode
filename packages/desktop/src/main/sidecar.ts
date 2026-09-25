@@ -22,7 +22,7 @@ type StopCommand = { type: "stop" }
 type SidecarCommand = StartCommand | StopCommand
 
 type SidecarMessage =
-  | { type: "ready" }
+  | { type: "ready"; hostToken: string }
   | { type: "stopped" }
   | { type: "error"; error: { message: string; stack?: string } }
 
@@ -56,14 +56,19 @@ async function start(command: StartCommand) {
     useEnvProxy()
     const { Server } = await import("virtual:opencode-server")
 
-    listener = await Server.listen({
+    // Server.Listener carries hostToken since accuracy E Phase 3; the type comes
+    // from the built server (dist/types), which may predate it
+    const started: Listener & { hostToken?: string } = await Server.listen({
       port: command.port,
       hostname: command.hostname,
       username: "opencode",
       password: command.password,
       cors: ["oc://renderer"],
     })
-    parentPort.postMessage({ type: "ready" })
+    listener = started
+    // the host token goes to the main process over this private channel only:
+    // never into the environment or a file, which the agents' shells can read
+    parentPort.postMessage({ type: "ready", hostToken: started.hostToken ?? "" })
   } catch (error) {
     parentPort.postMessage({ type: "error", error: serializeError(error) })
     setImmediate(() => process.exit(1))

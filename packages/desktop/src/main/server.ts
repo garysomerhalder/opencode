@@ -11,9 +11,20 @@ import { DEFAULT_SERVER_URL_KEY } from "./store-keys"
 export type HealthCheck = { wait: Promise<void> }
 
 type SidecarMessage =
-  | { type: "ready" }
+  | { type: "ready"; hostToken?: string }
   | { type: "stopped" }
   | { type: "error"; error: { message: string; stack?: string } }
+
+// The local server's host token (accuracy E §11.8): the goal routes take it. It
+// arrives with the sidecar's "ready" message, over the utility process's private
+// channel, and is kept in this process's memory only: never logged, stored or
+// put in an environment the agents' shells inherit.
+let localHostToken: string | undefined
+
+/** The host token of the local server this process started, once it is ready. */
+export function hostToken() {
+  return localHostToken
+}
 
 export type SidecarListener = { stop: () => Promise<void> }
 
@@ -107,6 +118,7 @@ export async function spawnLocalServer(
     const onMessage = (message: SidecarMessage) => {
       if (message.type === "ready") {
         if (done) return
+        localHostToken = message.hostToken
         done = true
         cleanup()
         resolve()
