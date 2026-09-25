@@ -284,6 +284,12 @@ describe("experimental HttpApi", () => {
 
         const missing = ExperimentalPaths.sessionGoal.replace(":sessionID", "ses_missing")
         expect((yield* request(missing, tmp.directory)).status).toBe(404)
+
+        // at most 10 changes a minute per session (3 made above), then 429
+        for (let i = 0; i < 7; i++) expect((yield* post({ text: `goal ${i}` })).status).toBe(200)
+        const limited = yield* post({ text: "one too many" })
+        expect(limited.status).toBe(429)
+        expect(yield* json(limited)).toMatchObject({ _tag: "GoalRateLimited" })
       }),
     { git: true, config: { formatter: false, lsp: false } },
   )

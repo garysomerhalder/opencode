@@ -13,6 +13,18 @@ import type { SessionID } from "./schema"
 /** Longest goal text and criterion kept verbatim; a longer one is refused, not cut. */
 export const TEXT_MAX = 4_000
 export const CRITERIA_MAX = 50
+/** Changes kept in the history; older ones are dropped and counted in `truncated`. */
+export const HISTORY_MAX = 200
+/** Goal changes allowed per session in RATE_WINDOW_MS; more are refused (429). */
+export const RATE_MAX = 10
+export const RATE_WINDOW_MS = 60_000
+
+/** A session changed its goal RATE_MAX times within RATE_WINDOW_MS. */
+export class RateLimited extends Schema.TaggedErrorClass<RateLimited>()(
+  "GoalRateLimited",
+  { message: Schema.String, retryAfterMs: Schema.Number },
+  { httpApiStatus: 429 },
+) {}
 
 export const Input = Schema.Struct({
   text: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(TEXT_MAX)),
@@ -50,6 +62,8 @@ export const Record = Schema.Struct({
   startedAt: Schema.Number,
   endedAt: Schema.optional(Schema.Number),
   history: Schema.Array(Change),
+  /** Oldest changes dropped from `history` past HISTORY_MAX. */
+  truncated: Schema.optional(Schema.Number),
   lastVerdict: Schema.optional(LastVerdict),
 })
 export type Record = Schema.Schema.Type<typeof Record>
@@ -63,6 +77,27 @@ export type Started = Schema.Schema.Type<typeof Started>
 
 const decode = Schema.decodeUnknownOption(Record)
 
+/** The history with `change` appended, the oldest dropped past HISTORY_MAX and counted. */
+function append(record: Record | undefined, change: Change): Pick<Record, "history" | "truncated"> {
+  const all = [...(record?.history ?? []), change]
+  const dropped = Math.max(0, all.length - HISTORY_MAX)
+  const truncated = (record?.truncated ?? 0) + dropped
+  return { history: all.slice(dropped), ...(truncated > 0 ? { truncated } : {}) }
+}
+
+/** Refuses a change when the session made RATE_MAX in the last RATE_WINDOW_MS (from its own history). */
+function limit(record: Record | undefined, now: number) {
+  const recent = (record?.history ?? []).filter((change) => change.at > now - RATE_WINDOW_MS)
+  if (recent.length < RATE_MAX) return Effect.void
+  const retryAfterMs = Math.max(0, recent[recent.length - RATE_MAX]!.at + RATE_WINDOW_MS - now)
+  return Effect.fail(
+    new RateLimited({
+      message: `the goal of this session changed ${RATE_MAX} times in the last minute; try again in ${Math.ceil(retryAfterMs / 1000)} s`,
+      retryAfterMs,
+    }),
+  )
+}
+
 /** The session's goal record, active or ended; undefined when it has none (or it is unreadable). */
 export function read(metadata: Session.Info["metadata"]): Record | undefined {
   return Option.getOrUndefined(decode(metadata?.goal))
@@ -71,9 +106,9 @@ export function read(metadata: Session.Info["metadata"]): Record | undefined {
 export interface Interface {
   readonly get: (sessionID: SessionID) => Effect.Effect<Record | undefined, Session.NotFound>
   /** Sets the goal, or replaces the active one; takes the snapshot it starts from. */
-  readonly start: (sessionID: SessionID, input: Input) => Effect.Effect<Started, Session.NotFound>
+  readonly start: (sessionID: SessionID, input: Input) => Effect.Effect<Started, Session.NotFound | RateLimited>
   /** Ends the active goal; undefined when there is none. */
-  readonly end: (sessionID: SessionID) => Effect.Effect<Record | undefined, Session.NotFound>
+  readonly end: (sessionID: SessionID) => Effect.Effect<Record | undefined, Session.NotFound | RateLimited>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SessionGoal") {}
@@ -104,6 +139,7 @@ export const layer = Layer.effect(
         Effect.gen(function* () {
           const session = yield* sessions.get(sessionID)
           const previous = read(session.metadata)
+          yield* limit(previous, Date.now())
           const base = yield* snapshot.track()
           const now = Date.now()
           const id = Identifier.create("goal", "ascending")
@@ -114,7 +150,7 @@ export const layer = Layer.effect(
             ...(input.criteria ? { criteria: [...input.criteria] } : {}),
             ...(base ? { base } : {}),
             startedAt: now,
-            history: [...(previous?.history ?? []), { type, at: now, via: "api", goal: id, text: input.text }],
+            ...append(previous, { type, at: now, via: "api", goal: id, text: input.text }),
           })
           return { id, base: base ?? null, startedAt: now }
         }),
@@ -129,10 +165,11 @@ export const layer = Layer.effect(
           const current = read(session.metadata)
           if (!current || current.endedAt !== undefined) return undefined
           const now = Date.now()
+          yield* limit(current, now)
           const ended: Record = {
             ...current,
             endedAt: now,
-            history: [...current.history, { type: "end", at: now, via: "api", goal: current.id }],
+            ...append(current, { type: "end", at: now, via: "api", goal: current.id }),
           }
           yield* write(session, ended)
           return ended

@@ -111,6 +111,55 @@ describe("SessionGoal", () => {
     { git: true },
   )
 
+  // Security review of Phase 3, ruling 3: a worker that loops on the endpoint can
+  // neither grow the record without limit nor change the goal faster than 10 a minute.
+  it.instance(
+    "changes are limited to 10 a minute per session, then refused",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* Session.Service
+        const goals = yield* SessionGoal.Service
+        const session = yield* sessions.create({})
+        const other = yield* sessions.create({})
+        for (let i = 0; i < 10; i++) yield* goals.start(session.id, { text: `goal ${i}` })
+        const refused = yield* goals.start(session.id, { text: "one too many" }).pipe(Effect.flip)
+        expect(refused).toBeInstanceOf(SessionGoal.RateLimited)
+        expect((yield* goals.end(session.id).pipe(Effect.flip))._tag).toBe("GoalRateLimited")
+        const goal = (yield* goals.get(session.id))!
+        expect(goal.text).toBe("goal 9")
+        expect(goal.history).toHaveLength(10)
+        // per session
+        yield* goals.start(other.id, { text: "fine" })
+      }),
+    { git: true },
+  )
+
+  it.instance(
+    "the history keeps the latest 200 changes and counts the rest",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* Session.Service
+        const goals = yield* SessionGoal.Service
+        const session = yield* sessions.create({})
+        const old = Array.from({ length: 200 }, (_, i) => ({
+          type: "replace" as const,
+          at: 1_000 + i,
+          via: "api" as const,
+          goal: `goal_${i}`,
+          text: `goal ${i}`,
+        }))
+        const seeded = { id: "goal_199", text: "goal 199", startedAt: 1_199, history: old, truncated: 5 }
+        yield* sessions.setMetadata({ sessionID: session.id, metadata: { goal: seeded } })
+        const next = yield* goals.start(session.id, { text: "goal 200" })
+        const goal = (yield* goals.get(session.id))!
+        expect(goal.history).toHaveLength(200)
+        expect(goal.truncated).toBe(6)
+        expect(goal.history[0]).toEqual(old[1]!)
+        expect(goal.history.at(-1)).toMatchObject({ type: "replace", goal: next.id, text: "goal 200" })
+      }),
+    { git: true },
+  )
+
   noSnapshot.instance(
     "with no snapshot the goal has no base, and start says so",
     () =>

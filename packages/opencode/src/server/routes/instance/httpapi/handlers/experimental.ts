@@ -161,13 +161,16 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
     })
 
     // The goal record (docs/accuracy-e.md §11.8). A session that does not exist,
-    // and a goal that is not there, are both not found.
+    // and a goal that is not there, are both not found; too many changes, 429.
     const notFound = Effect.mapError(() => new HttpApiError.NotFound({}))
+    const changeErrors = Effect.mapError((error: Session.NotFound | SessionGoal.RateLimited) =>
+      error instanceof SessionGoal.RateLimited ? error : new HttpApiError.NotFound({}),
+    )
     const sessionGoalStart = Effect.fn("ExperimentalHttpApi.sessionGoalStart")(function* (ctx: {
       params: { sessionID: SessionID }
       payload: SessionGoal.Input
     }) {
-      return yield* goals.start(ctx.params.sessionID, ctx.payload).pipe(notFound)
+      return yield* goals.start(ctx.params.sessionID, ctx.payload).pipe(changeErrors)
     })
     const sessionGoal = Effect.fn("ExperimentalHttpApi.sessionGoal")(function* (ctx: {
       params: { sessionID: SessionID }
@@ -179,7 +182,7 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
     const sessionGoalEnd = Effect.fn("ExperimentalHttpApi.sessionGoalEnd")(function* (ctx: {
       params: { sessionID: SessionID }
     }) {
-      const goal = yield* goals.end(ctx.params.sessionID).pipe(notFound)
+      const goal = yield* goals.end(ctx.params.sessionID).pipe(changeErrors)
       if (!goal) return yield* new HttpApiError.NotFound({})
       return goal
     })
