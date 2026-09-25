@@ -1,6 +1,6 @@
 # The worker sandbox: design note
 
-Status: **design only, for review (2026-09-25).** This is the boundary that every threat-model
+Status: **approved design (2026-09-25), with the rulings in §7.** This is the boundary that every threat-model
 note in `accuracy-e.md` (§11.8) defers to. Today the goal loop's records are tamper-evident
 against the API but not unforgeable: the worker's shell runs as the same OS user as the server
 and the desktop app.
@@ -162,3 +162,28 @@ The server builds the policy per session: `WorkspaceWrite` with the worktree roo
    launcher tries a denied write at start and fails closed if it succeeds.
 6. **DPAPI in an AppContainer:** confirm that the user's `safeStorage` key (check approvals) is
    unreachable from the container.
+
+## 7. Rulings (2026-09-25)
+
+1. **Loopback is allowed** for the worker: its localhost tests need it. The server stays
+   protected by its auth, by the password and host token being unreadable inside the
+   container, and by the Host/Origin guard. A port broker is a later option.
+2. **Egress** goes through a host-run proxy with a default-deny domain allowlist: package
+   registries and git hosts, from trusted config. The OS firewall is a backstop only.
+3. **One persistent AppContainer profile per worktree.** Its grants are made once, and removed
+   when the worktree is removed; they are not made per session.
+4. **MCP servers and plugins** are sandboxed too, as a phase-2 item. Today they come from trusted
+   config only.
+5. **A startup self-test is required** in every sandboxed session. It tries:
+   - a denied write;
+   - a denied read of the token;
+   - opening the server process.
+
+   Any success means the session is not sandboxed: it fails closed, and the goal loop cannot
+   report `completed`.
+6. **The AppContainer must not be able to unseal the approvals key.** This is a required
+   self-test case.
+
+**Implementation:** a new crate `harness-sandbox` in `legatus-harness`, with its small, signed
+launcher binary. Windows first, behind a setting that is off by default, in PR-sized units,
+each red-first. The harness's shell spawn reaches it only through a new port method.
