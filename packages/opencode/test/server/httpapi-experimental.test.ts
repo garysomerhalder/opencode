@@ -284,6 +284,14 @@ describe("experimental HttpApi", () => {
 
         const missing = ExperimentalPaths.sessionGoal.replace(":sessionID", "ses_missing")
         expect((yield* request(missing, tmp.directory)).status).toBe(404)
+
+        // verified todos: read-only here, written by the verdict tool only
+        const evidencePath = ExperimentalPaths.sessionTodoEvidence.replace(":sessionID", session.id)
+        const evidence = yield* request(evidencePath, tmp.directory)
+        expect(evidence.status).toBe(200)
+        expect(yield* json(evidence)).toEqual([])
+        const missingEvidence = ExperimentalPaths.sessionTodoEvidence.replace(":sessionID", "ses_missing")
+        expect((yield* request(missingEvidence, tmp.directory)).status).toBe(404)
       }),
     { git: true, config: { formatter: false, lsp: false } },
   )

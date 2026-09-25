@@ -15,6 +15,9 @@ import { Permission } from "@/permission"
 import { containsPath } from "@/project/instance-context"
 import { MessageV2 } from "@/session/message-v2"
 import { Session } from "@/session/session"
+import { SessionGoal } from "@/session/goal"
+import type { SessionID } from "@/session/schema"
+import { Todo } from "@/session/todo"
 import { CanonicalPath } from "@/util/canonical-path"
 import { Snapshot } from "@/snapshot"
 import { Verdict } from "@/session/verdict"
@@ -96,7 +99,7 @@ const DESCRIPTION = [
 export const VerdictTool = Tool.define<
   typeof Parameters,
   Metadata,
-  FSUtil.Service | Session.Service | Snapshot.Service | Database.Service
+  FSUtil.Service | Session.Service | Snapshot.Service | Database.Service | SessionGoal.Service | Todo.Service
 >(
   ID,
   Effect.gen(function* () {
@@ -104,6 +107,17 @@ export const VerdictTool = Tool.define<
     const sessions = yield* Session.Service
     const snapshot = yield* Snapshot.Service
     const database = yield* Database.Service
+    const goals = yield* SessionGoal.Service
+    const todo = yield* Todo.Service
+
+    /** Whether `goal` is the active goal of the worker session (none: not). */
+    const activeGoal = (worker: SessionID | undefined, goal: string) =>
+      worker === undefined
+        ? Effect.succeed(false)
+        : goals.get(worker).pipe(
+            Effect.map((record) => record?.id === goal && record.endedAt === undefined),
+            Effect.catchTag("NotFoundError", () => Effect.succeed(false)),
+          )
 
     return {
       description: DESCRIPTION,
@@ -158,7 +172,13 @@ export const VerdictTool = Tool.define<
           // The loop records the goal on the session it verifies in (phase 4,
           // docs/accuracy-e.md §11.5): the diff's base snapshot, the criteria the
           // user declared, and the part ids of the checks it ran.
-          const verify = (yield* sessions.get(ctx.sessionID).pipe(Effect.orDie)).metadata?.verify
+          const verifying = yield* sessions.get(ctx.sessionID).pipe(Effect.orDie)
+          const verify = verifying.metadata?.verify
+          // The worker's goal this verification is for (§11.8). A verdict for a goal
+          // the worker no longer has is refused before anything is checked.
+          const target = typeof verify?.goal === "string" ? verify.goal : undefined
+          const worker = verifying.parentID
+          if (target !== undefined && !(yield* activeGoal(worker, target))) throw new Error(SessionGoal.stale(target))
           const base = verify?.base
           // undefined: no base recorded (Snapshot.track() could not write one) or git
           // cannot diff against it. Citations are then unavailable, not "not in the diff".
@@ -176,7 +196,6 @@ export const VerdictTool = Tool.define<
           }
 
           const result = Verdict.validate(cited, world, { final })
-          if (result.verdict) step.recorded = true
           if (!result.verdict) step.rejected.add(ctx.callID ?? `call_${submission}`)
           if (!result.verdict) {
             const reasons = result.errors.map((error) => `- ${error}`).join("\n")
@@ -189,6 +208,31 @@ export const VerdictTool = Tool.define<
             )
           }
           const stored = result.verdict
+          // The worker's records, written in-process under the goal's lock: the last
+          // verdict and the todos this verification judged. Refused like above if the
+          // goal was replaced or ended while the citations were checked.
+          if (target !== undefined && worker !== undefined) {
+            const written = yield* goals
+              .verdict(
+                worker,
+                target,
+                Effect.gen(function* () {
+                  yield* todo.verify({
+                    sessionID: worker,
+                    verifierSessionID: ctx.sessionID,
+                    todos: (stored.todos ?? []).map((item) => ({
+                      content: item.content,
+                      met: item.status === "met",
+                      evidence: item.evidence ?? [],
+                    })),
+                  })
+                  return lastVerdict(stored, ctx.sessionID)
+                }),
+              )
+              .pipe(Effect.catchTag("NotFoundError", () => Effect.succeed(false)))
+            if (!written) throw new Error(SessionGoal.stale(target))
+          }
+          step.recorded = true
           const dropped = result.errors.length > 0 ? ` Citations that did not check out were dropped.` : ""
           return {
             title: stored.verdict,
@@ -226,6 +270,21 @@ function current(sessionID: string, messageID: string) {
     steps.delete(key)
   }
   return next
+}
+
+const UNMET_MAX = 20
+const UNMET_BYTES = 500
+
+/** The last verdict as the worker's goal record keeps it: the criteria not met, capped. */
+function lastVerdict(stored: Verdict.Verdict, verifierSessionID: string): SessionGoal.LastVerdict {
+  const unmet = stored.criteria.filter((criterion) => criterion.status !== "met").map((criterion) => criterion.text)
+  const kept = unmet.slice(0, UNMET_MAX).map((text) => (text.length > UNMET_BYTES ? `${text.slice(0, UNMET_BYTES)}…` : text))
+  return {
+    verdict: stored.verdict,
+    at: Date.now(),
+    verifierSessionID,
+    unmet: unmet.length > UNMET_MAX ? [...kept, `(+${unmet.length - UNMET_MAX} more)`] : kept,
+  }
 }
 
 /** The citations with each file path relative to the worktree, with forward slashes. */

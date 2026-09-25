@@ -116,6 +116,28 @@ export const TodoTable = sqliteTable(
   ],
 )
 
+/**
+ * Todo items an independent verification found met, with the evidence that checked
+ * out (accuracy E, docs/accuracy-e.md §11.8). Written by the verdict tool only; the
+ * latest verification of an item wins, and one that finds it not met removes it.
+ * An item is keyed by the hash of its text, so an edited item is not verified.
+ */
+export const TodoEvidenceTable = sqliteTable(
+  "todo_evidence",
+  {
+    session_id: text()
+      .$type<SessionSchema.ID>()
+      .notNull()
+      .references(() => SessionTable.id, { onDelete: "cascade" }),
+    content_key: text().notNull(),
+    content: text().notNull(),
+    verifier_session_id: text().notNull(),
+    evidence: text({ mode: "json" }).notNull().$type<unknown[]>(),
+    ...Timestamps,
+  },
+  (table) => [primaryKey({ columns: [table.session_id, table.content_key] })],
+)
+
 export const SessionMessageTable = sqliteTable(
   "session_message",
   {

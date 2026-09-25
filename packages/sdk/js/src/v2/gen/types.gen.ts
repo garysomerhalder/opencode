@@ -8155,6 +8155,48 @@ export type ExperimentalSessionGoalStartResponses = {
 export type ExperimentalSessionGoalStartResponse =
   ExperimentalSessionGoalStartResponses[keyof ExperimentalSessionGoalStartResponses]
 
+export type ExperimentalSessionTodoEvidenceData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/session/{sessionID}/todo/evidence"
+}
+
+export type ExperimentalSessionTodoEvidenceErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type ExperimentalSessionTodoEvidenceError =
+  ExperimentalSessionTodoEvidenceErrors[keyof ExperimentalSessionTodoEvidenceErrors]
+
+export type ExperimentalSessionTodoEvidenceResponses = {
+  /**
+   * The session's verified todo items
+   */
+  200: Array<{
+    content: string
+    contentKey: string
+    verifierSessionID: string
+    evidence: Array<unknown>
+    time: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }>
+}
+
+export type ExperimentalSessionTodoEvidenceResponse =
+  ExperimentalSessionTodoEvidenceResponses[keyof ExperimentalSessionTodoEvidenceResponses]
+
 export type ExperimentalShellTaskListData = {
   body?: never
   path?: never

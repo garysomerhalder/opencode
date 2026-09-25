@@ -8,6 +8,7 @@ import { MCP } from "@/mcp"
 import { Project } from "@/project/project"
 import { Session } from "@/session/session"
 import { SessionGoal } from "@/session/goal"
+import { Todo } from "@/session/todo"
 import type { SessionID } from "@/session/schema"
 import { ToolJsonSchema } from "@/tool/json-schema"
 import { ToolRegistry } from "@/tool/registry"
@@ -39,6 +40,7 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
     const tasks = yield* ShellTasks.Service
     const flags = yield* RuntimeFlags.Service
     const goals = yield* SessionGoal.Service
+    const todos = yield* Todo.Service
 
     const capabilities = Effect.fn("ExperimentalHttpApi.capabilities")(function* () {
       return { backgroundSubagents: flags.experimentalBackgroundSubagents }
@@ -184,6 +186,13 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
       return goal
     })
 
+    const sessionTodoEvidence = Effect.fn("ExperimentalHttpApi.sessionTodoEvidence")(function* (ctx: {
+      params: { sessionID: SessionID }
+    }) {
+      yield* sessions.get(ctx.params.sessionID).pipe(notFound)
+      return yield* todos.evidence(ctx.params.sessionID)
+    })
+
     const sessionBackground = Effect.fn("ExperimentalHttpApi.sessionBackground")(function* (ctx: {
       params: { sessionID: SessionID }
     }) {
@@ -243,6 +252,7 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
       .handle("sessionGoalStart", sessionGoalStart)
       .handle("sessionGoal", sessionGoal)
       .handle("sessionGoalEnd", sessionGoalEnd)
+      .handle("sessionTodoEvidence", sessionTodoEvidence)
       .handle("shellTasks", shellTasks)
       .handle("shellTasksStop", shellTasksStop)
       .handle("shellTaskStop", shellTaskStop)

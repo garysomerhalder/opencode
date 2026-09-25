@@ -4,6 +4,7 @@ import { MCP } from "@/mcp"
 import { Session } from "@/session/session"
 import { SessionID } from "@/session/schema"
 import { SessionGoal } from "@/session/goal"
+import { Todo } from "@/session/todo"
 import { Worktree } from "@/worktree"
 import { NonNegativeInt } from "@opencode-ai/core/schema"
 import { Schema } from "effect"
@@ -116,6 +117,7 @@ export const ExperimentalPaths = {
   session: "/experimental/session",
   sessionBackground: "/experimental/session/:sessionID/background",
   sessionGoal: "/experimental/session/:sessionID/goal",
+  sessionTodoEvidence: "/experimental/session/:sessionID/todo/evidence",
   shellTasks: "/experimental/shell/task",
   shellTasksStop: "/experimental/shell/task/stop",
   shellTaskStop: "/experimental/shell/task/:taskID/stop",
@@ -303,6 +305,19 @@ export const ExperimentalApi = HttpApi.make("experimental")
             summary: "End a session's goal",
             description:
               "End the session's active goal, keeping its record and appending the change to its history. Not found when no goal is active.",
+          }),
+        ),
+        HttpApiEndpoint.get("sessionTodoEvidence", ExperimentalPaths.sessionTodoEvidence, {
+          params: { sessionID: SessionID },
+          query: WorkspaceRoutingQuery,
+          success: described(Schema.Array(Todo.Evidence), "The session's verified todo items"),
+          error: HttpApiError.NotFound,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "experimental.session.todo.evidence",
+            summary: "List verified todo items",
+            description:
+              "The session's todo items an independent verification found met, with the evidence that checked out. Read-only: only the verdict tool writes them.",
           }),
         ),
         HttpApiEndpoint.get("shellTasks", ExperimentalPaths.shellTasks, {

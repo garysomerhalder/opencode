@@ -138,6 +138,13 @@ describe("DatabaseMigration", () => {
         expect(
           yield* db.get(sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_context_epoch'`),
         ).toEqual({ name: "session_context_epoch" })
+        // accuracy E, Phase 3: the todo items a verification found met
+        expect(
+          yield* db.all(sql`SELECT name, pk FROM pragma_table_info('todo_evidence') WHERE pk > 0 ORDER BY pk`),
+        ).toEqual([
+          { name: "session_id", pk: 1 },
+          { name: "content_key", pk: 2 },
+        ])
         expect(
           yield* db.get(
             sql`SELECT name FROM pragma_table_info('session_context_epoch') WHERE name IN ('agent', 'replacement_seq', 'revision')`,

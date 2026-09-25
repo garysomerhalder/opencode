@@ -767,6 +767,14 @@ const scenarios: Scenario[] = [
     }))
     .status(404),
   http.protected
+    .get("/experimental/session/{sessionID}/todo/evidence", "experimental.session.todo.evidence")
+    .seeded((ctx) => ctx.session({ title: "Todo evidence reader" }))
+    .at((ctx) => ({
+      path: route("/experimental/session/{sessionID}/todo/evidence", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+    }))
+    .json(200, array),
+  http.protected
     .delete("/experimental/session/{sessionID}/goal", "experimental.session.goal.end")
     .mutating()
     .seeded((ctx) => ctx.session({ title: "Goal route ender" }))

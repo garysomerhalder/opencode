@@ -52,6 +52,8 @@ import type {
   ExperimentalSessionGoalStartResponses,
   ExperimentalSessionListErrors,
   ExperimentalSessionListResponses,
+  ExperimentalSessionTodoEvidenceErrors,
+  ExperimentalSessionTodoEvidenceResponses,
   ExperimentalShellTaskListErrors,
   ExperimentalShellTaskListResponses,
   ExperimentalShellTaskStopAllErrors,
@@ -945,6 +947,44 @@ export class Goal extends HeyApiClient {
   }
 }
 
+export class Todo extends HeyApiClient {
+  /**
+   * List verified todo items
+   *
+   * The session's todo items an independent verification found met, with the evidence that checked out. Read-only: only the verdict tool writes them.
+   */
+  public evidence<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      ExperimentalSessionTodoEvidenceResponses,
+      ExperimentalSessionTodoEvidenceErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/session/{sessionID}/todo/evidence",
+      ...options,
+      ...params,
+    })
+  }
+}
+
 export class Session extends HeyApiClient {
   /**
    * List sessions
@@ -1031,6 +1071,11 @@ export class Session extends HeyApiClient {
   private _goal?: Goal
   get goal(): Goal {
     return (this._goal ??= new Goal({ client: this.client }))
+  }
+
+  private _todo?: Todo
+  get todo(): Todo {
+    return (this._todo ??= new Todo({ client: this.client }))
   }
 }
 

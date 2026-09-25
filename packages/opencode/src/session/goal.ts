@@ -74,6 +74,21 @@ export interface Interface {
   readonly start: (sessionID: SessionID, input: Input) => Effect.Effect<Started, Session.NotFound>
   /** Ends the active goal; undefined when there is none. */
   readonly end: (sessionID: SessionID) => Effect.Effect<Record | undefined, Session.NotFound>
+  /**
+   * Runs `record` and stores its verdict as the goal's last one, while `goal` is the
+   * session's active goal, under the goal's lock (so the goal cannot be replaced or
+   * ended in between). False, and `record` is not run, when it is not.
+   */
+  readonly verdict: <E, R>(
+    sessionID: SessionID,
+    goal: string,
+    record: Effect.Effect<LastVerdict, E, R>,
+  ) => Effect.Effect<boolean, E | Session.NotFound, R>
+}
+
+/** The error a verdict for a goal that is no longer the session's gets (§11.8). */
+export function stale(goal: string) {
+  return `this verification is for goal ${goal}, which is no longer the session's goal; the verdict is not recorded`
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SessionGoal") {}
@@ -140,7 +155,21 @@ export const layer = Layer.effect(
       )
     })
 
-    return Service.of({ get, start, end })
+    const verdict = <E, R>(sessionID: SessionID, goal: string, record: Effect.Effect<LastVerdict, E, R>) =>
+      locked(
+        sessionID,
+        Effect.gen(function* () {
+          const current = read((yield* sessions.get(sessionID)).metadata)
+          if (!current || current.id !== goal || current.endedAt !== undefined) return false
+          const last = yield* record
+          // read again: record may have taken a while, and metadata is replaced whole
+          const session = yield* sessions.get(sessionID)
+          yield* write(session, { ...(read(session.metadata) ?? current), lastVerdict: last })
+          return true
+        }),
+      ).pipe(Effect.withSpan("SessionGoal.verdict"))
+
+    return Service.of({ get, start, end, verdict })
   }),
 )
 

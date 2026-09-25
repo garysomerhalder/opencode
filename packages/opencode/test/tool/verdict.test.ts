@@ -21,6 +21,9 @@ import { Truncate } from "../../src/tool/truncate"
 import { Session } from "../../src/session/session"
 import { MessageID, PartID } from "../../src/session/schema"
 import { Snapshot } from "../../src/snapshot"
+import { SessionGoal } from "../../src/session/goal"
+import { Todo } from "../../src/session/todo"
+import { contentKey } from "../../src/session/checkpoint"
 import { ShellID } from "../../src/tool/shell/id"
 import type * as Tool from "../../src/tool/tool"
 import { VerdictTool } from "../../src/tool/verdict"
@@ -37,6 +40,8 @@ const nodes = [
   Snapshot.node,
   Truncate.node,
   Agent.node,
+  SessionGoal.node,
+  Todo.node,
 ]
 const it = testEffect(LayerNode.compile(LayerNode.group(nodes)))
 
@@ -460,6 +465,128 @@ describe("tool.verdict: submissions", () => {
       expect(forked.metadata?.note).toBe("kept")
       const cite = passWith([{ kind: "check", callID: "call_tests", exit: 0, excerpt: "15 pass" }])
       expect((yield* submit(forked.id, cite)).error).toContain("there is no check call_tests in this verification")
+    }),
+  )
+})
+
+// Phase 3 (docs/accuracy-e.md §11.8): a recorded verdict is written onto the worker
+// session the verifier checks, in-process: the last verdict and the todos it found
+// met, only while the verification's goal is still the worker's active goal.
+const loop = Effect.fn("VerdictTest.loop")(function* () {
+  const sessions = yield* Session.Service
+  const goals = yield* SessionGoal.Service
+  const worker = yield* sessions.create({ title: "worker" })
+  const started = yield* goals.start(worker.id, { text: "cap the output", criteria: ["the output is capped"] })
+  const verifier = () =>
+    Effect.gen(function* () {
+      const child = yield* sessions.create({ title: "verify", parentID: worker.id })
+      yield* sessions.setMetadata({
+        sessionID: child.id,
+        metadata: { verify: { goal: started.id, criteria: ["the output is capped"] } },
+      })
+      return child.id
+    })
+  return { worker: worker.id, goal: started.id, verifier }
+})
+
+describe("tool.verdict: the records on the worker session", () => {
+  const todos = (status: "met" | "unmet") => [
+    { content: "cap the output", status, ...(status === "met" ? { evidence: [capped] } : {}) },
+    { content: "write the docs", status: "unmet" },
+  ]
+
+  it.instance("a recorded verdict writes the last verdict and the met todos", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const { worker, verifier } = yield* loop()
+      const goals = yield* SessionGoal.Service
+      const todo = yield* Todo.Service
+      const child = yield* verifier()
+      const result = yield* submit(child, { ...passWith([capped]), todos: todos("met") })
+      expect(result.error).toBe("")
+      const last = (yield* goals.get(worker))?.lastVerdict
+      expect(last).toMatchObject({ verdict: "PASS", verifierSessionID: child, unmet: [] })
+      expect(last?.at).toBeNumber()
+      const verified = yield* todo.verified(worker)
+      expect([...verified.keys()]).toEqual([contentKey("cap the output")])
+      const [row] = yield* todo.evidence(worker)
+      expect(row).toMatchObject({ content: "cap the output", contentKey: contentKey("cap the output") })
+      expect(row?.verifierSessionID).toBe(child)
+      // the citations that checked out, as the verdict stored them
+      expect(row?.evidence).toEqual([expect.objectContaining({ kind: "file", quote: capped.quote })])
+    }),
+  )
+
+  it.instance("a FAIL lists the criteria it did not find met", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const { worker, verifier } = yield* loop()
+      const result = yield* submit(yield* verifier(), {
+        verdict: "FAIL",
+        criteria: [{ id: "C1", text: "the output is capped", status: "unmet", evidence: [] }],
+        missing: [{ criterion: "C1", need: "a test that caps the output" }],
+      })
+      expect(result.error).toBe("")
+      expect((yield* (yield* SessionGoal.Service).get(worker))?.lastVerdict).toMatchObject({
+        verdict: "FAIL",
+        unmet: ["the output is capped"],
+      })
+    }),
+  )
+
+  it.instance("a rejected submission writes nothing", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const { worker, verifier } = yield* loop()
+      const wrong = { ...capped, quote: "LIMIT = 9999" }
+      const result = yield* submit(yield* verifier(), { ...passWith([wrong]), todos: todos("met") })
+      expect(result.error).toContain("The verdict was not accepted")
+      expect((yield* (yield* SessionGoal.Service).get(worker))?.lastVerdict).toBeUndefined()
+      expect((yield* (yield* Todo.Service).verified(worker)).size).toBe(0)
+    }),
+  )
+
+  it.instance("a verdict for a goal that was replaced or ended is refused, and nothing is recorded", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const { worker, goal, verifier } = yield* loop()
+      const goals = yield* SessionGoal.Service
+      const stale = `this verification is for goal ${goal}, which is no longer the session's goal; the verdict is not recorded`
+      const child = yield* verifier()
+      yield* goals.start(worker, { text: "a different goal" })
+      expect((yield* submit(child, { ...passWith([capped]), todos: todos("met") })).error).toContain(stale)
+      expect((yield* goals.get(worker))?.lastVerdict).toBeUndefined()
+      expect((yield* (yield* Todo.Service).verified(worker)).size).toBe(0)
+
+      const again = yield* loop()
+      const ended = yield* again.verifier()
+      yield* goals.end(again.worker)
+      const refused = yield* submit(ended, passWith([capped]))
+      expect(refused.error).toContain(`this verification is for goal ${again.goal}`)
+      expect((yield* goals.get(again.worker))?.lastVerdict).toBeUndefined()
+    }),
+  )
+
+  it.instance("the latest verification wins: a later not-met clears the mark", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const { worker, verifier } = yield* loop()
+      const todo = yield* Todo.Service
+      expect((yield* submit(yield* verifier(), { ...passWith([capped]), todos: todos("met") })).error).toBe("")
+      expect((yield* todo.verified(worker)).has(contentKey("cap the output"))).toBe(true)
+      const later = yield* verifier()
+      const result = yield* submit(later, {
+        verdict: "FAIL",
+        criteria: [{ id: "C1", text: "the output is capped", status: "unmet", evidence: [] }],
+        missing: [{ criterion: "C1", need: "a test" }],
+        todos: todos("unmet"),
+      })
+      expect(result.error).toBe("")
+      expect((yield* todo.verified(worker)).size).toBe(0)
+      expect((yield* (yield* SessionGoal.Service).get(worker))?.lastVerdict).toMatchObject({
+        verdict: "FAIL",
+        verifierSessionID: later,
+      })
     }),
   )
 })

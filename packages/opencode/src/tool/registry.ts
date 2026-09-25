@@ -21,6 +21,7 @@ import { InvalidTool } from "./invalid"
 import { SkillTool } from "./skill"
 import { VerdictTool } from "./verdict"
 import { Snapshot } from "@/snapshot"
+import { SessionGoal } from "@/session/goal"
 import * as Tool from "./tool"
 import { Config } from "@/config/config"
 import { type ToolContext as PluginToolContext, type ToolDefinition } from "@opencode-ai/plugin"
@@ -489,6 +490,7 @@ export const node = LayerNode.make({
     Database.node,
     Ripgrep.node,
     Snapshot.node,
+    SessionGoal.node,
   ],
 })
 
