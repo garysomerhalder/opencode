@@ -26,6 +26,7 @@ import { desc } from "drizzle-orm"
 import { eq } from "drizzle-orm"
 import { inArray } from "drizzle-orm"
 import { lt } from "drizzle-orm"
+import { gte } from "drizzle-orm"
 import { or } from "drizzle-orm"
 import { MessageTable, PartTable, SessionTable } from "@opencode-ai/core/session/sql"
 import { ProviderError } from "@/provider/error"
@@ -492,6 +493,26 @@ export const page = Effect.fn("MessageV2.page")(function* (input: {
     more,
     cursor: more && tail ? cursor.encode({ id: tail.id, time: tail.time_created }) : undefined,
   }
+})
+
+/**
+ * A session's message infos, oldest first, without their parts: cheap enough
+ * to poll (token accounting reads only these).
+ */
+export const infos = Effect.fn("MessageV2.infos")(function* (input: { sessionID: SessionID; since?: number }) {
+  const { db } = yield* Database.Service
+  const where =
+    input.since === undefined
+      ? eq(MessageTable.session_id, input.sessionID)
+      : and(eq(MessageTable.session_id, input.sessionID), gte(MessageTable.time_created, input.since))
+  const rows = yield* db
+    .select()
+    .from(MessageTable)
+    .where(where)
+    .orderBy(MessageTable.time_created, MessageTable.id)
+    .all()
+    .pipe(Effect.orDie)
+  return rows.map(info)
 })
 
 export function stream(sessionID: SessionID) {

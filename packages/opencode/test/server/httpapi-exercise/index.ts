@@ -1497,6 +1497,19 @@ const scenarios: Scenario[] = [
       check(stable(body) === stable(ctx.state.todos), "todos should match seeded state")
     }),
   http.protected
+    .get("/session/{sessionID}/usage", "session.usage")
+    .seeded((ctx) => ctx.session({ title: "Usage session" }))
+    .at((ctx) => ({
+      path: route("/session/{sessionID}/usage", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+    }))
+    .json(200, (body, ctx) => {
+      const usage = body as { sessionID?: string; totals?: { calls?: number }; calls?: unknown[] }
+      check(usage.sessionID === ctx.state.id, "usage should name the session")
+      check(usage.totals?.calls === 0, "a new session has made no calls")
+      check(Array.isArray(usage.calls) && usage.calls.length === 0, "a new session has no call rows")
+    }),
+  http.protected
     .get("/session/{sessionID}/diff", "session.diff")
     .seeded((ctx) => ctx.session({ title: "Diff session" }))
     .at((ctx) => ({ path: route("/session/{sessionID}/diff", { sessionID: ctx.state.id }), headers: ctx.headers() }))
