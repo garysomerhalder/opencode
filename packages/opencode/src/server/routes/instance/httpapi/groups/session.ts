@@ -9,6 +9,7 @@ import { SessionRevert } from "@/session/revert"
 import { SessionStatus } from "@/session/status"
 import { SessionSummary } from "@/session/summary"
 import { Todo } from "@/session/todo"
+import { SessionUsage } from "@/session/usage"
 import { MessageID, PartID, SessionID } from "@/session/schema"
 import { Snapshot } from "@/snapshot"
 import { Schema, Struct } from "effect"
@@ -39,6 +40,12 @@ export const ListQuery = Schema.Struct({
 export const DiffQuery = Schema.Struct({
   ...WorkspaceRoutingQueryFields,
   ...Struct.omit(SessionSummary.DiffInput.fields, ["sessionID"]),
+})
+export const UsageQuery = Schema.Struct({
+  ...WorkspaceRoutingQueryFields,
+  window: Schema.optional(Schema.NumberFromString.check(Schema.isInt(), Schema.isGreaterThan(0))),
+  since: Schema.optional(Schema.NumberFromString.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0))),
+  calls: Schema.optional(QueryBoolean),
 })
 export const MessagesQuery = Schema.Struct({
   ...WorkspaceRoutingQueryFields,
@@ -81,6 +88,7 @@ export const SessionPaths = {
   get: `${root}/:sessionID`,
   children: `${root}/:sessionID/children`,
   todo: `${root}/:sessionID/todo`,
+  usage: `${root}/:sessionID/usage`,
   diff: `${root}/:sessionID/diff`,
   messages: `${root}/:sessionID/message`,
   message: `${root}/:sessionID/message/:messageID`,
@@ -163,6 +171,19 @@ export const SessionApi = HttpApi.make("session")
             identifier: "session.todo",
             summary: "Get session todos",
             description: "Retrieve the todo list associated with a specific session, showing tasks and action items.",
+          }),
+        ),
+        HttpApiEndpoint.get("usage", SessionPaths.usage, {
+          params: { sessionID: SessionID },
+          query: UsageQuery,
+          success: described(SessionUsage.Info, "Token usage"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.usage",
+            summary: "Get session token usage",
+            description:
+              "Tokens in, out and cached for every model call in a session, with totals and the burn rate over the session and over a recent window (`window` minutes, default 60). `since` limits the calls to those started at or after a time (ms since epoch); `calls=false` leaves out the per-call rows.",
           }),
         ),
         HttpApiEndpoint.get("diff", SessionPaths.diff, {

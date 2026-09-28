@@ -23,6 +23,7 @@ import { ShellTasks } from "@/tool/shell/tasks"
 import { Truncate } from "@/tool/truncate"
 import { Receipt } from "@/tool/receipt"
 import { Accuracy } from "./accuracy"
+import { TokenDiet } from "./token-diet"
 import { InstanceState } from "@/effect/instance-state"
 import { isOverflow as overflow, usable } from "./overflow"
 import { serviceUse } from "@opencode-ai/core/effect/service-use"
@@ -200,6 +201,11 @@ export interface Interface {
     model: Provider.Model
   }) => Effect.Effect<boolean>
   readonly prune: (input: { sessionID: SessionID }) => Effect.Effect<void>
+  /**
+   * Collapses the stale tool outputs of the messages about to be sent (see
+   * TokenDiet.staleToolParts), in place and in storage. Returns how many.
+   */
+  readonly pruneStale: (input: { messages: SessionV1.WithParts[] }) => Effect.Effect<number>
   readonly process: (input: {
     parentID: MessageID
     messages: SessionV1.WithParts[]
@@ -446,28 +452,53 @@ const layer = Layer.effect(
 
       yield* Effect.logInfo("found", { pruned, total })
       if (pruned > PRUNE_MINIMUM) {
-        // With receipts on, a pruned output keeps a way back: an archive the
-        // model's one-line receipt points at (accuracy C, part D). An output the
-        // per-call cap already archived keeps that archive; one cut to a file
-        // some other way (outputPath only) is left as before. `truncated` alone
-        // is not a cut: grep and glob set it for "more results exist". A failed
-        // write fails open: the part is pruned as before, without a receipt.
-        const receipts = Accuracy.settings(cfg).outputReceipts
-        for (const part of toPrune) {
-          if (part.state.status === "completed") {
-            const metadata = part.state.metadata
-            if (receipts && !metadata?.archive && typeof metadata?.outputPath !== "string") {
-              const text = part.state.output
-              const written = yield* Effect.exit(truncate.write(text, part.sessionID))
-              if (Exit.isSuccess(written))
-                part.state.metadata = { ...part.state.metadata, archive: Receipt.whole({ path: written.value, text }) }
-            }
-            part.state.time.compacted = Date.now()
-            yield* session.updatePart(part)
-          }
-        }
+        yield* collapse(toPrune, cfg)
         yield* Effect.logInfo("pruned", { count: toPrune.length })
       }
+    })
+
+    // With receipts on, a pruned output keeps a way back: an archive the
+    // model's one-line receipt points at (accuracy C, part D). An output the
+    // per-call cap already archived keeps that archive; one cut to a file
+    // some other way (outputPath only) is left as before. `truncated` alone
+    // is not a cut: grep and glob set it for "more results exist". A failed
+    // write fails open: the part is pruned as before, without a receipt.
+    // The parts are changed in place, so a caller holding them sees the change.
+    const collapse = Effect.fnUntraced(function* (parts: SessionV1.ToolPart[], cfg: ConfigV1.Info) {
+      const receipts = Accuracy.settings(cfg).outputReceipts
+      for (const part of parts) {
+        if (part.state.status !== "completed") continue
+        const metadata = part.state.metadata
+        if (receipts && !metadata?.archive && typeof metadata?.outputPath !== "string") {
+          const text = part.state.output
+          const written = yield* Effect.exit(truncate.write(text, part.sessionID))
+          if (Exit.isSuccess(written))
+            part.state.metadata = { ...part.state.metadata, archive: Receipt.whole({ path: written.value, text }) }
+        }
+        part.state.time.compacted = Date.now()
+        yield* session.updatePart(part)
+      }
+    })
+
+    // Token diet: inside a turn, collapse tool outputs older than the most
+    // recent few once enough has piled up. `prune` above only reaches turns
+    // before the last two user messages, which an autonomous turn never has.
+    const pruneStale = Effect.fn("SessionCompaction.pruneStale")(function* (input: {
+      messages: SessionV1.WithParts[]
+    }) {
+      const cfg = yield* config.get()
+      const diet = TokenDiet.settings(cfg)
+      if (!diet.prune) return 0
+      const stale = TokenDiet.staleToolParts({
+        messages: input.messages,
+        keep: diet.keep,
+        minTokens: diet.minTokens,
+        estimate: Token.estimate,
+      })
+      if (stale.length === 0) return 0
+      yield* collapse(stale, cfg)
+      yield* Effect.logInfo("pruned stale tool output", { count: stale.length })
+      return stale.length
     })
 
     const processCompaction = Effect.fn("SessionCompaction.process")(function* (input: {
@@ -755,6 +786,7 @@ const layer = Layer.effect(
     return Service.of({
       isOverflow,
       prune,
+      pruneStale,
       process: processCompaction,
       create,
     })

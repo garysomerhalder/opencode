@@ -65,6 +65,7 @@ import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
 import { LLMEvent } from "@opencode-ai/llm"
 import { compactionThreshold, floorAfterCompaction, overThreshold } from "./overflow"
+import { TokenDiet } from "./token-diet"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -1139,6 +1140,9 @@ const layer = Layer.effect(
       throw new Error("Impossible")
     })
 
+    // Token diet: one pinned system prompt per session (see TokenDiet.SystemPin).
+    const systemPin = new TokenDiet.SystemPin<readonly [string | undefined, string[], string[], string | undefined]>()
+
     const runLoop: (sessionID: SessionID) => Effect.Effect<SessionV1.WithParts> = Effect.fn("SessionPrompt.run")(
       function* (sessionID: SessionID) {
         const ctx = yield* InstanceState.context
@@ -1324,6 +1328,9 @@ const layer = Layer.effect(
             Effect.provideService(FSUtil.Service, fsys),
             Effect.provideService(Session.Service, sessions),
           )
+          // Collapse this turn's stale tool output before it is sent again
+          // (in place: `msgs` is what the request is built from).
+          yield* compaction.pruneStale({ messages: msgs }).pipe(Effect.ignore)
 
           const msg: SessionV1.Assistant = {
             id: MessageID.ascending(),
@@ -1402,11 +1409,17 @@ const layer = Layer.effect(
 
             yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
 
-            const [skills, env, instructions, mcpInstructions, modelMsgs] = yield* Effect.all([
+            const loadSystem = Effect.all([
               sys.skills(agent),
               sys.environment(model),
               instruction.system().pipe(Effect.orDie),
               sys.mcp(agent, session.permission),
+            ] as const)
+            const diet = TokenDiet.settings(yield* config.get())
+            const [[skills, env, instructions, mcpInstructions], modelMsgs] = yield* Effect.all([
+              diet.pinSystem
+                ? systemPin.get(sessionID, `${agent.name}|${model.id}|${TokenDiet.pinKey(msgs)}`, loadSystem)
+                : loadSystem,
               MessageV2.toModelMessagesEffect(msgs, model),
             ])
             // "Can this turn reach a human?" — the question tool has to be

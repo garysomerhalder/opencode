@@ -296,6 +296,7 @@ function backgroundSection(input: { yieldAfterMs: number; maxLifetimeMs: number 
     `- A command that is still running after ${seconds}s is NOT killed. The same process keeps running as a background task and you get a task id back with the output so far. Never rerun a command that yielded a task id.`,
     "- You are told automatically when a background task finishes, with its exit code and output tail. Do not sit in a polling loop waiting for it; do other useful work instead.",
     "- Read new output with `shell_output` (omit task_id to list this session's tasks) and stop a task with `shell_stop`.",
+    "- To block until a task finishes, a server prints a line, or a file or log line appears, call `wait`. Never `sleep` in the shell or re-run a status check to wait: every check is a full model turn.",
     "- Use `background: true` for servers and watchers you want running while you keep working.",
     `- A background task is terminated after ${minutes} minutes, or earlier by an explicit timeout, by shell_stop, or when its session sits idle with nobody reading it.`,
     "- Do not raise `timeout` to keep a long command in the foreground; let it yield.",

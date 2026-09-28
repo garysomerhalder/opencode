@@ -1009,6 +1009,115 @@ describe("session.compaction.prune", () => {
   )
 })
 
+describe("session.compaction.pruneStale (token diet)", () => {
+  // One autonomous turn: a single user message and `count` steps, each with one bash output.
+  const seedTurn = (dir: string, count: number, output: string) =>
+    Effect.gen(function* () {
+      const ssn = yield* SessionNs.Service
+      const info = yield* ssn.create({})
+      const first = yield* ssn.updateMessage({
+        id: MessageID.ascending(),
+        role: "user",
+        sessionID: info.id,
+        agent: "build",
+        model: ref,
+        time: { created: Date.now() },
+      })
+      yield* ssn.updatePart({
+        id: PartID.ascending(),
+        messageID: first.id,
+        sessionID: info.id,
+        type: "text",
+        text: "go",
+      })
+      for (let i = 0; i < count; i++) {
+        const assistant = yield* ssn.updateMessage({
+          id: MessageID.ascending(),
+          role: "assistant",
+          sessionID: info.id,
+          mode: "build",
+          agent: "build",
+          path: { cwd: dir, root: dir },
+          cost: 0,
+          tokens: { output: 0, input: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          modelID: ref.modelID,
+          providerID: ref.providerID,
+          parentID: first.id,
+          time: { created: Date.now() },
+          finish: "tool-calls",
+        })
+        yield* ssn.updatePart({
+          id: PartID.ascending(),
+          messageID: assistant.id,
+          sessionID: info.id,
+          type: "tool",
+          callID: crypto.randomUUID(),
+          tool: "bash",
+          state: {
+            status: "completed",
+            input: { command: `step ${i}` },
+            output: `${i}:${output}`,
+            title: "done",
+            metadata: {},
+            time: { start: Date.now(), end: Date.now() },
+          },
+        })
+      }
+      return info
+    })
+
+  it.live(
+    "collapses the current turn's old tool output to archived receipts, keeping the newest in full",
+    provideTmpdirInstance((dir) =>
+      Effect.gen(function* () {
+        const info = yield* seedTurn(dir, 12, "z".repeat(20_000))
+        const ssn = yield* SessionNs.Service
+        const messages = yield* ssn.messages({ sessionID: info.id })
+        const count = yield* (yield* SessionCompaction.Service).pruneStale({ messages })
+        expect(count).toBe(4)
+
+        // in place: the caller's messages are what the request is built from
+        const inPlace = messages.flatMap((msg) => msg.parts).filter((part) => part.type === "tool")
+        expect(inPlace.filter((part) => part.state.status === "completed" && part.state.time.compacted).length).toBe(4)
+
+        // and in storage, each with an archive the receipt points at
+        const stored = (yield* ssn.messages({ sessionID: info.id }))
+          .flatMap((msg) => msg.parts)
+          .filter((part): part is SessionV1.ToolPart => part.type === "tool")
+        const collapsed = stored.filter((part) => part.state.status === "completed" && part.state.time.compacted)
+        expect(
+          collapsed.map((part) => (part.state.status === "completed" ? part.state.output.split(":")[0] : "")),
+        ).toEqual(["0", "1", "2", "3"])
+        for (const part of collapsed) {
+          if (part.state.status !== "completed") continue
+          const archive = part.state.metadata.archive as { path: string }
+          expect(yield* Effect.promise(() => Bun.file(archive.path).text())).toBe(part.state.output)
+        }
+        const current = yield* ssn.messages({ sessionID: info.id })
+        const model = yield* Effect.promise(() =>
+          MessageV2.toModelMessages(current, createModel({ context: 1_000_000, output: 32_000 })),
+        )
+        const text = JSON.stringify(model)
+        expect(text).toContain("[Tool output archived: bash, ")
+        expect(text).toContain(`11:${"z".repeat(100)}`)
+      }),
+    ),
+  )
+
+  it.live(
+    "does nothing when turned off",
+    provideTmpdirInstance(
+      (dir) =>
+        Effect.gen(function* () {
+          const info = yield* seedTurn(dir, 12, "z".repeat(20_000))
+          const messages = yield* (yield* SessionNs.Service).messages({ sessionID: info.id })
+          expect(yield* (yield* SessionCompaction.Service).pruneStale({ messages })).toBe(0)
+        }),
+      { config: { experimental: { token_diet: { prune_tool_outputs: false } } } },
+    ),
+  )
+})
+
 describe("session.compaction.process", () => {
   it.instance(
     "throws when parent is not a user message",
@@ -1901,7 +2010,9 @@ describe("session.compaction.process", () => {
         expect(checkpoint?.text).toContain(
           "The session's first message no longer matches the task recorded when the goal started; the task above is the recorded one.",
         )
-        expect(checkpoint?.text).toContain("Goal loop: Ship receipts. Last verdict: FAIL 0 min ago; unmet: receipts are capped.")
+        expect(checkpoint?.text).toContain(
+          "Goal loop: Ship receipts. Last verdict: FAIL 0 min ago; unmet: receipts are capped.",
+        )
         expect(checkpoint?.text).toContain("Goal changes: (+3 earlier) set 2 min ago; replaced 1 min ago.")
         expect(checkpoint?.text).toContain("Goal base changed 1 time since the first goal was set")
         expect(checkpoint?.text).toContain("[completed] Wire the receipt envelope")

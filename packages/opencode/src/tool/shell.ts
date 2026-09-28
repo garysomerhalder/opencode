@@ -731,6 +731,7 @@ export const ShellTool = Tool.define(
               ? "Started in the background. The process keeps running while you continue."
               : "Still running, so it moved to a background task. The SAME process keeps running; it was not restarted and must not be rerun.",
             "You will be told automatically when it finishes, with the exit code and output tail. Do not poll in a loop; do other useful work.",
+            `If you have nothing else to do until it finishes, call wait({ task_id: "${info.id}" }): it blocks without spending turns.`,
             `Read new output with shell_output({ task_id: "${info.id}" }) and stop it with shell_stop({ task_id: "${info.id}" }).`,
             ...(info.file ? [`Output so far is also being written to: ${info.file}`] : []),
             "Output so far:",

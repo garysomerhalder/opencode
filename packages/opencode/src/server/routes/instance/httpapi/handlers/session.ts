@@ -17,6 +17,7 @@ import { SessionRunState } from "@/session/run-state"
 import { SessionStatus } from "@/session/status"
 import { SessionSummary } from "@/session/summary"
 import { Todo } from "@/session/todo"
+import { SessionUsage } from "@/session/usage"
 import { MessageID, PartID, SessionID } from "@/session/schema"
 import { NamedError } from "@opencode-ai/core/util/error"
 import { Cause, Effect, Option, Schema, Scope } from "effect"
@@ -38,6 +39,7 @@ import {
   ShellPayload,
   SummarizePayload,
   UpdatePayload,
+  UsageQuery,
 } from "../groups/session"
 import { PermissionNotFoundError } from "../errors"
 import * as SessionError from "./session-errors"
@@ -96,8 +98,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
      */
     const sealed = (info: Session.Info) =>
       info.metadata?.verify !== undefined || info.metadata?.verifyRecord !== undefined
-    const isHost = (request: HttpServerRequest.HttpServerRequest) =>
-      HostToken.verify(request.headers[HostToken.HEADER])
+    const isHost = (request: HttpServerRequest.HttpServerRequest) => HostToken.verify(request.headers[HostToken.HEADER])
     /** The session, when this request may write or steer it; 403 for a sealed one without the token. */
     const writable = Effect.fn("SessionHttpApi.writable")(function* (
       sessionID: SessionID,
@@ -120,6 +121,21 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const todo = Effect.fn("SessionHttpApi.todo")(function* (ctx: { params: { sessionID: SessionID } }) {
       yield* requireSession(ctx.params.sessionID)
       return yield* todoSvc.get(ctx.params.sessionID)
+    })
+
+    const usage = Effect.fn("SessionHttpApi.usage")(function* (ctx: {
+      params: { sessionID: SessionID }
+      query: typeof UsageQuery.Type
+    }) {
+      yield* requireSession(ctx.params.sessionID)
+      const infos = yield* MessageV2.infos({ sessionID: ctx.params.sessionID, since: ctx.query.since })
+      return SessionUsage.summarize({
+        sessionID: ctx.params.sessionID,
+        messages: infos,
+        now: Date.now(),
+        windowMinutes: ctx.query.window,
+        omitCalls: ctx.query.calls === false,
+      })
     })
 
     const diff = Effect.fn("SessionHttpApi.diff")(function* (ctx: {
@@ -430,7 +446,10 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
         const output = part.state.output
         yield* VerifyRecord.update(session, ctx.params.sessionID, (current) => ({
           ...current,
-          checks: { ...current.checks, [part.id]: { exit: typeof exit === "number" ? exit : null, ...VerifyRecord.digest(output) } },
+          checks: {
+            ...current.checks,
+            [part.id]: { exit: typeof exit === "number" ? exit : null, ...VerifyRecord.digest(output) },
+          },
         }))
       }
       return result
@@ -525,6 +544,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handle("get", get)
       .handle("children", children)
       .handle("todo", todo)
+      .handle("usage", usage)
       .handle("diff", diff)
       .handle("messages", messages)
       .handle("message", message)
