@@ -122,7 +122,7 @@ export const ShellOutputTool = Tool.define(
           if (info.status !== "running" && info.file) body.push(`Full output saved to: ${info.file}`)
           if (info.status === "running" && result.unchanged >= 2)
             body.push(
-              "This read returned nothing new and neither did the previous one. Stop polling: you are told automatically when the task finishes. Do other work, or read again with wait_ms=30000.",
+              `This read returned nothing new and neither did the previous one. Stop polling: you are told automatically when the task finishes. Do other work, or call wait({ task_id: "${info.id}" }) to block until it finishes.`,
             )
           const output = [header, ...body, "</shell_output>"].join("\n")
 

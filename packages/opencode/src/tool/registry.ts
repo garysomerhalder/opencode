@@ -6,6 +6,7 @@ import { Session } from "@/session/session"
 import { QuestionTool } from "./question"
 import { ShellTool } from "./shell"
 import { ShellOutputTool, ShellStopTool } from "./shell/tools"
+import { WaitTool } from "./wait"
 import { ShellTasks } from "./shell/tasks"
 import { ShellID } from "./shell/id"
 import { EditTool } from "./edit"
@@ -119,6 +120,7 @@ const layer = Layer.effect(
     const shell = yield* ShellTool
     const shellOutput = yield* ShellOutputTool
     const shellStop = yield* ShellStopTool
+    const waittool = yield* WaitTool
     const globtool = yield* GlobTool
     const writetool = yield* WriteTool
     const edit = yield* EditTool
@@ -238,6 +240,7 @@ const layer = Layer.effect(
           question: Tool.init(question),
           shellOutput: Tool.init(shellOutput),
           shellStop: Tool.init(shellStop),
+          wait: Tool.init(waittool),
           lsp: Tool.init(lsptool),
           plan: Tool.init(plan),
           verdict: Tool.init(verdicttool),
@@ -259,6 +262,7 @@ const layer = Layer.effect(
             ...(questionEnabled ? [tool.question] : []),
             tool.shell,
             ...(backgroundShell ? [tool.shellOutput, tool.shellStop] : []),
+            tool.wait,
             tool.read,
             tool.glob,
             tool.grep,

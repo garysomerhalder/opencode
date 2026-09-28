@@ -187,6 +187,12 @@ export interface Interface {
   readonly list: (sessionID?: SessionID) => Effect.Effect<Info[]>
   readonly read: (sessionID: SessionID, id: string, input?: ReadInput) => Effect.Effect<ReadResult | undefined>
   readonly stop: (sessionID: SessionID, id: string, reason?: Reason) => Effect.Effect<Info | undefined>
+  /**
+   * Waits up to `timeoutMs` for a task to finish, without reading its output.
+   * Returns the task as it is then (still running on a timeout), or undefined
+   * when this session has no such task.
+   */
+  readonly awaitExit: (sessionID: SessionID, id: string, timeoutMs: number) => Effect.Effect<Info | undefined>
   readonly stopAll: (input?: { sessionID?: SessionID; reason?: Reason }) => Effect.Effect<Info[]>
   /** Running background tasks, for the concurrency cap. */
   readonly running: (sessionID?: SessionID) => Effect.Effect<Info[]>
@@ -877,6 +883,21 @@ const layer = Layer.effect(
       return yield* terminate(entry, "stopped", reason)
     })
 
+    const awaitExit: Interface["awaitExit"] = Effect.fn("ShellTasks.awaitExit")(function* (sessionID, id, timeoutMs) {
+      const entry = yield* find(sessionID, id)
+      if (!entry) return undefined
+      if (entry.info.status === "running") {
+        // A waiting agent keeps the task from being reaped as idle.
+        entry.lastReadAt = Date.now()
+        yield* Effect.raceAll([
+          Deferred.await(entry.done).pipe(Effect.asVoid),
+          Effect.sleep(`${Math.max(0, timeoutMs)} millis`),
+        ])
+        entry.lastReadAt = Date.now()
+      }
+      return snapshot(entry)
+    })
+
     const stopAll: Interface["stopAll"] = Effect.fn("ShellTasks.stopAll")(function* (input = {}) {
       const data = yield* InstanceState.get(state)
       const targets = Array.from(data.tasks.values()).filter(
@@ -890,7 +911,7 @@ const layer = Layer.effect(
       })
     })
 
-    return Service.of({ start, get, list, read, stop, stopAll, running })
+    return Service.of({ start, get, list, read, stop, stopAll, running, awaitExit })
   }),
 )
 
