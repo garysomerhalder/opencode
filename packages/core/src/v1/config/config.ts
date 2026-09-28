@@ -246,6 +246,27 @@ export const Info = Schema.Struct({
         description:
           "Agent accuracy harness: autonomy prompt, runaway guard, todo completion reminders, tool-output receipts and the step budget",
       }),
+      token_diet: Schema.optional(
+        Schema.Struct({
+          pin_system_prompt: Schema.optional(Schema.Boolean).annotate({
+            description:
+              "Keep a turn's system prompt (instructions, skills, environment) fixed until the user sends a new message or the session compacts, so an instruction file rewritten on disk mid-turn does not change the prompt prefix and lose the provider's prompt cache (default true)",
+          }),
+          prune_tool_outputs: Schema.optional(Schema.Boolean).annotate({
+            description:
+              "During a turn, collapse tool outputs older than the prune_keep most recent to a one-line receipt pointing at the saved full output, once they add up to prune_min_tokens (default true; compaction.auto: false turns it off)",
+          }),
+          prune_keep: Schema.optional(NonNegativeInt).annotate({
+            description: "Most recent tool outputs of a turn kept in full (default 8)",
+          }),
+          prune_min_tokens: Schema.optional(NonNegativeInt).annotate({
+            description:
+              "Collapse stale tool outputs only once they add up to this many estimated tokens, so the prompt (and its cache) changes once per batch (default 20000)",
+          }),
+        }),
+      ).annotate({
+        description: "Per-request token savings: a pinned system prompt and in-turn pruning of old tool output",
+      }),
       policies: Schema.optional(Schema.mutable(Schema.Array(ConfigExperimental.Policy))).annotate({
         description: "Policy statements applied to supported resources, such as provider access",
       }),
